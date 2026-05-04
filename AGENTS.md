@@ -6,15 +6,15 @@ Workflow broker for design-agent review loops. Mercurius runs as a local MCP ser
 
 See `docs/design.md` for the product and architecture design. See `docs/work-order.md` for the milestone implementation plan.
 
-M1-M3 establish the Go scaffold, reviewer interface, structured review schema, Codex subprocess reviewer, broker/session orchestration, prompt assembly, snapshotting, log writing, and dummy reviewer test support. Later milestones add configuration loading and MCP tools.
+M1-M4 establish the Go scaffold, reviewer interface, structured review schema, Codex subprocess reviewer, broker/session orchestration, prompt assembly, snapshotting, log writing, dummy reviewer test support, configuration loading, and the MCP stdio tool surface.
 
 ## tech stack
 
 - **language**: Go 1.26+
-- **CLI**: github.com/spf13/cobra, starting in M4
-- **config**: github.com/michaelquigley/df/dd, starting in M4
+- **CLI**: github.com/spf13/cobra
+- **config**: github.com/michaelquigley/df/dd
 - **logging**: github.com/michaelquigley/df/dl
-- **MCP**: github.com/modelcontextprotocol/go-sdk/mcp, starting in M4
+- **MCP**: github.com/modelcontextprotocol/go-sdk/mcp
 - **schema validation**: github.com/santhosh-tekuri/jsonschema/v6
 - **build/test**: standard `go build`, `go vet`, and `go test`
 
@@ -22,6 +22,8 @@ M1-M3 establish the Go scaffold, reviewer interface, structured review schema, C
 
 - `cmd/mercurius/` - binary entrypoint
 - `internal/broker/` - in-memory session and round orchestration
+- `internal/config/` - `mercurius.yaml` loading, path resolution, and validation
+- `internal/mcpserver/` - MCP server construction, tool registration, and error mapping
 - `internal/prompt/` - standard review prompt assembly
 - `internal/reviewer/` - Reviewer interface and shared request/response types
 - `internal/reviewer/codex/` - Codex subprocess reviewer implementation
@@ -30,8 +32,6 @@ M1-M3 establish the Go scaffold, reviewer interface, structured review schema, C
 - `internal/schema/` - structured review output JSON Schema and validation
 - `docs/` - design and work-order documents
 - `README.md` - user-facing overview
-
-Planned packages for later milestones include `internal/config` and MCP server wiring under `cmd/mercurius/`.
 
 ## project rules
 

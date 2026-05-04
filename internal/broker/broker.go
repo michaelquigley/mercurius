@@ -386,18 +386,18 @@ func (b *Broker) session(id string) (*session, error) {
 func (b *Broker) resolveReviewer(names []string) (ReviewerSpec, error) {
 	if len(names) == 0 {
 		if len(b.reviewers) != 1 {
-			return ReviewerSpec{}, brokerError("panel_mode_unsupported", "exactly one reviewer must be selected", nil, nil)
+			return ReviewerSpec{}, brokerError(CodePanelModeUnsupported, "exactly one reviewer must be selected", nil, nil)
 		}
 		for _, spec := range b.reviewers {
 			return spec, nil
 		}
 	}
 	if len(names) != 1 {
-		return ReviewerSpec{}, brokerError("panel_mode_unsupported", "v1 supports exactly one reviewer", nil, map[string]any{"reviewers": names})
+		return ReviewerSpec{}, brokerError(CodePanelModeUnsupported, "v1 supports exactly one reviewer", nil, map[string]any{"reviewers": names})
 	}
 	spec, ok := b.reviewers[names[0]]
 	if !ok {
-		return ReviewerSpec{}, brokerError("unknown_reviewer", "reviewer is not configured", nil, map[string]any{"reviewer": names[0]})
+		return ReviewerSpec{}, brokerError(CodeUnknownReviewer, "reviewer is not configured", nil, map[string]any{"reviewer": names[0]})
 	}
 	if spec.Factory == nil {
 		return ReviewerSpec{}, brokerError(CodeInternalError, "reviewer factory is nil", nil, map[string]any{"reviewer": names[0]})

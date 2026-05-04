@@ -28,10 +28,71 @@ Mercurius is reviewer-agnostic by design. Codex is the first implementation; the
 
 ## Status
 
-Design phase. The repository contains the vision, the design, and the work order. No implementation yet.
+MVP implementation through M4 is in place: schema validation, Codex/dummy reviewers, session orchestration, round logs, config loading, and the MCP stdio server surface.
 
 - [`docs/design.md`](docs/design.md) — what Mercurius is and how it works
 - [`docs/work-order.md`](docs/work-order.md) — the implementation plan
+- [`examples/mercurius.yaml`](examples/mercurius.yaml) — starter project config
+
+## Install
+
+From this checkout:
+
+```sh
+go install ./cmd/mercurius
+```
+
+Then run the MCP server on stdio:
+
+```sh
+mercurius --config /absolute/path/to/mercurius.yaml
+```
+
+Logs go to stderr because stdout is reserved for MCP transport messages.
+
+## Configuration
+
+Minimal config:
+
+```yaml
+name: my-project
+log_destination: ./reviews
+default_budget: 4
+prompt_overrides: |
+  Add project-specific review guidance here.
+reviewers:
+  - name: codex
+    impl: codex
+    model: gpt-5-codex
+```
+
+Relative `log_destination` and `binary_path` values resolve relative to the config file, not the process working directory. Omit `binary_path` to use the reviewer's default executable lookup.
+
+## MCP Usage
+
+Example MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "mercurius": {
+      "command": "mercurius",
+      "args": ["--config", "/absolute/path/to/mercurius.yaml"]
+    }
+  }
+}
+```
+
+Tools exposed:
+
+- `open_session`
+- `review_round`
+- `record_round_notes`
+- `close_session`
+- `session_status`
+- `list_sessions`
+
+Manual smoke path: connect an MCP client, call `open_session` with absolute artifact paths for `docs/design.md` and `docs/work-order.md`, call `review_round`, record commentary with `record_round_notes`, then close with `close_session`.
 
 ## License
 

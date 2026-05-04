@@ -9,6 +9,8 @@ const (
 	CodeInvalidArtifacts      = "invalid_artifacts"
 	CodeInvalidBudget         = "invalid_budget"
 	CodeInvalidLogDestination = "invalid_log_destination"
+	CodePanelModeUnsupported  = "panel_mode_unsupported"
+	CodeUnknownReviewer       = "unknown_reviewer"
 	CodeUnknownSession        = "unknown_session"
 	CodeSessionClosed         = "session_closed"
 	CodeBudgetExhausted       = "budget_exhausted"
