@@ -37,7 +37,8 @@
           "severity",
           "location",
           "claim",
-          "rationale"
+          "rationale",
+          "suggestion"
         ],
         "properties": {
           "id": {
@@ -66,7 +67,7 @@
             "type": "string"
           },
           "suggestion": {
-            "description": "optional concrete fix; omit or use null when there is no suggestion",
+            "description": "nullable concrete fix; use null when there is no suggestion",
             "type": [
               "string",
               "null"

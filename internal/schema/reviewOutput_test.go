@@ -69,6 +69,7 @@ func TestValidateReviewOutputRejectsUnknownNestedField(t *testing.T) {
 				"location": "work-order:M1",
 				"claim": "missing test case",
 				"rationale": "definition of done is not covered",
+				"suggestion": null,
 				"extra": true
 			}
 		],
@@ -105,7 +106,8 @@ func TestValidateReviewOutputRejectsInvalidSeverity(t *testing.T) {
 				"severity": "critical",
 				"location": "design:section 5",
 				"claim": "bad severity",
-				"rationale": "severity enum is closed"
+				"rationale": "severity enum is closed",
+				"suggestion": null
 			}
 		],
 		"questions": [],
@@ -126,6 +128,7 @@ func TestValidateReviewOutputConcernSuggestionVariants(t *testing.T) {
 		{
 			name:       "omitted",
 			suggestion: "",
+			wantErr:    true,
 		},
 		{
 			name:       "null",
@@ -181,7 +184,8 @@ func TestParseReviewOutput(t *testing.T) {
 				"severity": "major",
 				"location": "design:section 5",
 				"claim": "missing decision",
-				"rationale": "two implementers would diverge"
+				"rationale": "two implementers would diverge",
+				"suggestion": null
 			}
 		],
 		"questions": [

@@ -149,7 +149,7 @@ The schema is strict at the broker's validation gate:
 
 - **Top-level fields required.** `verdict`, `summary`, `concerns`, `questions`, and `proposed_diffs` must all be present.
 - **Arrays must be present, even when empty.** `concerns: []`, `questions: []`, and `proposed_diffs: []` are required forms when the reviewer has nothing to report. This eliminates ambiguity between "no concerns" and "the reviewer didn't think about concerns."
-- **Per-entry fields required, with one exception.** Within a `concerns` entry, `id`, `severity`, `location`, `claim`, and `rationale` are required. `suggestion` is the sole optional field; the reviewer may omit it entirely or set it to `null`. An empty string is not equivalent — if there is no suggestion, the field should be omitted or null. Within `questions` and `proposed_diffs` entries, all documented fields are required.
+- **Per-entry fields required.** Within a `concerns` entry, `id`, `severity`, `location`, `claim`, `rationale`, and `suggestion` are required. `suggestion` is nullable; use `null` when there is no concrete suggestion. An empty string is not equivalent. Within `questions` and `proposed_diffs` entries, all documented fields are required.
 - **Enums are closed.** `verdict` must be one of the three documented values. `severity` must be one of `blocker | major | minor`. Unknown values are rejected.
 - **Unknown fields are rejected.** The schema sets `additionalProperties: false` at every object level, including the top level and within each array entry. This catches both reviewer drift (a model invents a new field) and version skew (the schema evolves but a reviewer hasn't been updated).
 

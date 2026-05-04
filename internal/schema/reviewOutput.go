@@ -26,7 +26,7 @@ type Concern struct {
 	Location   string  `json:"location"`
 	Claim      string  `json:"claim"`
 	Rationale  string  `json:"rationale"`
-	Suggestion *string `json:"suggestion,omitempty"`
+	Suggestion *string `json:"suggestion"`
 }
 
 // Question records a clarification needed before the reviewer can decide.

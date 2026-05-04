@@ -87,6 +87,13 @@ func (r *Reviewer) run(ctx context.Context, prompt string, schemaPath string, la
 	cmd := exec.CommandContext(ctx, r.options.BinaryPath, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 
+	codexHome, cleanup, err := r.prepareCodexHome()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer cleanup()
+	cmd.Env = append(os.Environ(), "CODEX_HOME="+codexHome)
+
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -98,11 +105,41 @@ func (r *Reviewer) run(ctx context.Context, prompt string, schemaPath string, la
 	return stdout.Bytes(), stderr.Bytes(), nil
 }
 
+func (r *Reviewer) prepareCodexHome() (string, func(), error) {
+	originalHome, err := codexHome()
+	if err != nil {
+		return "", func() {}, err
+	}
+
+	dir, err := os.MkdirTemp(r.options.WorkingDir, ".codex-home-*")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("create codex home: %w", err)
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(dir)
+	}
+
+	for _, entry := range []string{"auth.json", "config.toml"} {
+		if err := linkCodexHomeEntry(originalHome, dir, entry); err != nil {
+			cleanup()
+			return "", func() {}, err
+		}
+	}
+	for _, subdir := range []string{"sessions", "log", ".tmp", "tmp"} {
+		if err := os.MkdirAll(filepath.Join(dir, subdir), 0o700); err != nil {
+			cleanup()
+			return "", func() {}, fmt.Errorf("create codex home subdir '%s': %w", subdir, err)
+		}
+	}
+	return dir, cleanup, nil
+}
+
 func (r *Reviewer) args(schemaPath string, lastMessagePath string) []string {
 	args := []string{
 		"exec",
 		"-C", r.options.WorkingDir,
 		"--ephemeral",
+		"--skip-git-repo-check",
 		"--sandbox", "read-only",
 		"--output-schema", schemaPath,
 		"--output-last-message", lastMessagePath,
@@ -122,6 +159,29 @@ func (r *Reviewer) usageNotes(stdout []byte, stderr []byte) string {
 	parts = append(parts, fmt.Sprintf("stdout_bytes='%d'", len(stdout)))
 	parts = append(parts, fmt.Sprintf("stderr_bytes='%d'", len(stderr)))
 	return strings.Join(parts, ", ")
+}
+
+func codexHome() (string, error) {
+	if path := os.Getenv("CODEX_HOME"); path != "" {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve codex home: %w", err)
+	}
+	return filepath.Join(home, ".codex"), nil
+}
+
+func linkCodexHomeEntry(sourceHome string, targetHome string, name string) error {
+	source := filepath.Join(sourceHome, name)
+	target := filepath.Join(targetHome, name)
+	if _, err := os.Stat(source); err != nil {
+		return fmt.Errorf("codex home entry '%s' is not available: %w", source, err)
+	}
+	if err := os.Symlink(source, target); err != nil {
+		return fmt.Errorf("link codex home entry '%s': %w", name, err)
+	}
+	return nil
 }
 
 func commandOutputSuffix(stdout []byte, stderr []byte) string {
