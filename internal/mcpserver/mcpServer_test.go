@@ -78,6 +78,9 @@ func TestDummyReviewFlow(t *testing.T) {
 	if len(round1.Manifest) != 1 || round1.Manifest[0].Name != "design.md" {
 		t.Fatalf("manifest = %+v", round1.Manifest)
 	}
+	if !strings.Contains(round1.NextAction, "pause") {
+		t.Fatalf("round next action = %q", round1.NextAction)
+	}
 
 	notesResult, err := client.CallTool(ctx, &mcp.CallToolParams{
 		Name: "record_round_notes",
@@ -93,6 +96,9 @@ func TestDummyReviewFlow(t *testing.T) {
 	notesOutput := decodeStructured[RecordRoundNotesOutput](t, notesResult)
 	if !notesOutput.CommentaryRecorded || notesOutput.DecisionsRecorded != 0 {
 		t.Fatalf("notes output = %+v", notesOutput)
+	}
+	if !strings.Contains(notesOutput.NextAction, "pause") {
+		t.Fatalf("notes next action = %q", notesOutput.NextAction)
 	}
 
 	round2 := callRound(t, ctx, client, openOutput.SessionID)

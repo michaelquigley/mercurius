@@ -47,6 +47,7 @@ type ReviewRoundOutput struct {
 	LogPath     string                `json:"log_path"`
 	Manifest    []ManifestEntryOutput `json:"manifest"`
 	Reviewers   []ReviewerOutput      `json:"reviewers"`
+	NextAction  string                `json:"next_action"`
 }
 
 type ManifestEntryOutput struct {
@@ -81,6 +82,7 @@ type RecordRoundNotesOutput struct {
 	LogPath            string `json:"log_path"`
 	CommentaryRecorded bool   `json:"commentary_recorded"`
 	DecisionsRecorded  int    `json:"decisions_recorded"`
+	NextAction         string `json:"next_action"`
 }
 
 type CloseSessionInput struct {
@@ -203,7 +205,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "review_round",
-		Description: "run a review round for an active Mercurius session",
+		Description: "run one review round for an active Mercurius session. after this tool returns, pause: summarize the review for the user and ask whether to record notes, revise artifacts, or continue; do not immediately call another Mercurius tool unless the user explicitly asks you to continue",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input ReviewRoundInput) (*mcp.CallToolResult, any, error) {
 		var artifacts []broker.Artifact
 		if input.Artifacts != nil {
@@ -221,12 +223,13 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 			LogPath:     response.LogPath,
 			Manifest:    manifestOutput(response.Manifest),
 			Reviewers:   reviewerOutput(response.Reviewers),
+			NextAction:  "pause and ask the user how to proceed before recording notes or starting another review round",
 		}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "record_round_notes",
-		Description: "record commentary and human decisions for a completed round",
+		Description: "record commentary and human decisions for a completed round. after this tool returns, pause and ask the user whether to run another review round or stop; do not immediately call review_round unless the user explicitly asks you to continue",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RecordRoundNotesInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.RecordRoundNotes(ctx, broker.RecordRoundNotesRequest{
 			SessionID:   input.SessionID,
@@ -242,6 +245,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 			LogPath:            response.LogPath,
 			CommentaryRecorded: response.CommentaryRecorded,
 			DecisionsRecorded:  response.DecisionsRecorded,
+			NextAction:         "pause and ask the user whether to run another review round or close the session",
 		}, nil
 	})
 

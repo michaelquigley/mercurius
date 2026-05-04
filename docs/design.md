@@ -511,7 +511,8 @@ Run a round against the session's current artifacts (or the supplied override). 
       "raw": { /* object matching §5 review-output schema */ },
       "usage_notes": "model=..., tokens=..."
     }
-  ]
+  ],
+  "next_action": "pause and ask the user how to proceed before recording notes or starting another review round"
 }
 ```
 
@@ -551,7 +552,8 @@ Attach the design agent's commentary and the human's decisions to a completed ro
   "round_number": 3,
   "log_path": "/abs/path/to/<session_id>/round-03.md",
   "commentary_recorded": true,
-  "decisions_recorded": 1
+  "decisions_recorded": 1,
+  "next_action": "pause and ask the user whether to run another review round or close the session"
 }
 ```
 
