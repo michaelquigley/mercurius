@@ -1,6 +1,6 @@
 # Mercurius
 
-> Mediates the design-build duel.
+_Mediates the design-build duel._
 
 Mercurius is a workflow broker that sits between a design agent and an implementing agent during the iterative review of design documents and work orders.
 

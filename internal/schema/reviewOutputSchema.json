@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mercurius.local/schemas/review-output.schema.json",
+  "title": "Mercurius review output",
+  "description": "structured assessment returned by a reviewer for one Mercurius round",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "summary",
+    "concerns",
+    "questions",
+    "proposed_diffs"
+  ],
+  "properties": {
+    "verdict": {
+      "description": "headline judgment for the whole review round",
+      "type": "string",
+      "enum": [
+        "ready_to_build",
+        "needs_changes",
+        "needs_discussion"
+      ]
+    },
+    "summary": {
+      "description": "one-paragraph high-level assessment of the artifacts",
+      "type": "string"
+    },
+    "concerns": {
+      "description": "problems, omissions, contradictions, or worthwhile minor flags found by the reviewer",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "location",
+          "claim",
+          "rationale"
+        ],
+        "properties": {
+          "id": {
+            "description": "stable identifier for this concern within the round",
+            "type": "string"
+          },
+          "severity": {
+            "description": "impact level for this concern",
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ]
+          },
+          "location": {
+            "description": "document and section reference, or N/A when no concrete location applies",
+            "type": "string"
+          },
+          "claim": {
+            "description": "what the reviewer believes is wrong or missing",
+            "type": "string"
+          },
+          "rationale": {
+            "description": "why the claim matters for implementation readiness",
+            "type": "string"
+          },
+          "suggestion": {
+            "description": "optional concrete fix; omit or use null when there is no suggestion",
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "questions": {
+      "description": "clarifications the reviewer needs before forming a position",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "topic",
+          "why_it_blocks"
+        ],
+        "properties": {
+          "id": {
+            "description": "stable identifier for this question within the round",
+            "type": "string"
+          },
+          "topic": {
+            "description": "the clarification topic",
+            "type": "string"
+          },
+          "why_it_blocks": {
+            "description": "what the reviewer cannot decide without an answer",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "proposed_diffs": {
+      "description": "optional concrete artifact edits proposed by the reviewer",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "target",
+          "patch"
+        ],
+        "properties": {
+          "id": {
+            "description": "stable identifier for this proposed diff within the round",
+            "type": "string"
+          },
+          "target": {
+            "description": "artifact name and section targeted by this proposed edit",
+            "type": "string"
+          },
+          "patch": {
+            "description": "concrete replacement text or unified diff",
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
