@@ -22,12 +22,13 @@ M1 establishes the Go scaffold, reviewer interface, structured review schema, sc
 
 - `cmd/mercurius/` - binary entrypoint
 - `internal/reviewer/` - Reviewer interface and shared request/response types
+- `internal/reviewer/codex/` - Codex subprocess reviewer implementation
 - `internal/reviewer/dummy/` - in-process reviewer for tests
 - `internal/schema/` - structured review output JSON Schema and validation
 - `docs/` - design and work-order documents
 - `README.md` - user-facing overview
 
-Planned packages for later milestones include `internal/reviewer/codex`, `internal/broker`, `internal/prompt`, `internal/roundlog`, and `internal/config`.
+Planned packages for later milestones include `internal/broker`, `internal/prompt`, `internal/roundlog`, and `internal/config`.
 
 ## project rules
 
