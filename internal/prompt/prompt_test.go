@@ -1,0 +1,103 @@
+package prompt
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/michaelquigley/mercurius/internal/reviewer"
+)
+
+func TestBuildIncludesRequiredSectionsInOrder(t *testing.T) {
+	prompt, schema := Build(Request{
+		Artifacts: []Artifact{
+			{
+				Name:         "design",
+				SourcePath:   "/tmp/design.md",
+				SnapshotPath: "/tmp/session/snapshots/round-01/design",
+				Hash:         "sha256:abc",
+				Content:      []byte("design content"),
+			},
+		},
+	})
+	if len(schema) == 0 {
+		t.Fatal("expected schema")
+	}
+
+	sections := []string{
+		"You are reviewing project artifacts",
+		"## Review criteria",
+		"## Project-specific guidance",
+		"## Artifacts under review",
+		"## Prior decisions",
+		"## Verdict and severity",
+		"## Output",
+	}
+	last := -1
+	for _, section := range sections {
+		index := strings.Index(prompt, section)
+		if index == -1 {
+			t.Fatalf("missing section %q", section)
+		}
+		if index <= last {
+			t.Fatalf("section %q is out of order", section)
+		}
+		last = index
+	}
+	if !strings.Contains(prompt, "(no project-specific guidance)") {
+		t.Fatal("expected empty guidance placeholder")
+	}
+}
+
+func TestBuildRendersPromptOverridesAndPriorDecisions(t *testing.T) {
+	prompt, _ := Build(Request{
+		PromptOverrides: "flag ad-hoc logging.",
+		PriorDecisions: []reviewer.PriorDecision{
+			{RoundNumber: 2, Ref: "C-1", Disposition: "accepted", Note: "fix it."},
+		},
+	})
+
+	for _, want := range []string{
+		"flag ad-hoc logging.",
+		"- Round 2, C-1 (accepted): fix it.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected prompt to contain %q", want)
+		}
+	}
+}
+
+func TestBuildUsesDynamicArtifactFences(t *testing.T) {
+	prompt, _ := Build(Request{
+		Artifacts: []Artifact{
+			{
+				Name:         "design",
+				SourcePath:   "/tmp/design.md",
+				SnapshotPath: "/tmp/session/snapshots/round-01/design",
+				Hash:         "sha256:abc",
+				Content:      []byte("```\ninside\n```"),
+			},
+		},
+	})
+
+	if !strings.Contains(prompt, "````\n```\ninside\n```\n````") {
+		t.Fatalf("expected four-backtick wrapper, got:\n%s", prompt)
+	}
+}
+
+func TestBuildRendersInlineSource(t *testing.T) {
+	prompt, _ := Build(Request{
+		Artifacts: []Artifact{
+			{
+				Name:         "context",
+				SnapshotPath: "/tmp/session/snapshots/round-01/context",
+				Hash:         "sha256:def",
+				Content:      []byte("inline content"),
+				Inline:       true,
+			},
+		},
+	})
+
+	if !strings.Contains(prompt, "Source path: inline") {
+		t.Fatal("expected inline source path")
+	}
+}

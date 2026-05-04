@@ -170,3 +170,35 @@ func TestValidateReviewOutputConcernSuggestionVariants(t *testing.T) {
 		})
 	}
 }
+
+func TestParseReviewOutput(t *testing.T) {
+	raw := json.RawMessage(`{
+		"verdict": "needs_changes",
+		"summary": "changes needed",
+		"concerns": [
+			{
+				"id": "C-1",
+				"severity": "major",
+				"location": "design:section 5",
+				"claim": "missing decision",
+				"rationale": "two implementers would diverge"
+			}
+		],
+		"questions": [
+			{
+				"id": "Q-1",
+				"topic": "budget",
+				"why_it_blocks": "cannot judge acceptance"
+			}
+		],
+		"proposed_diffs": []
+	}`)
+
+	output, err := ParseReviewOutput(raw)
+	if err != nil {
+		t.Fatalf("parse review output: %v", err)
+	}
+	if output.Verdict != "needs_changes" || output.Concerns[0].ID != "C-1" || output.Questions[0].ID != "Q-1" {
+		t.Fatalf("unexpected parsed output: %+v", output)
+	}
+}

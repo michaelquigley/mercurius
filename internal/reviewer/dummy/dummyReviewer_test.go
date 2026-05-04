@@ -2,6 +2,8 @@ package dummy_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/michaelquigley/mercurius/internal/reviewer"
@@ -33,5 +35,36 @@ func TestReviewerProducesValidReviewOutput(t *testing.T) {
 	}
 	if err := schema.ValidateReviewOutput(resp.Raw); err != nil {
 		t.Fatalf("schema validation failed: %v", err)
+	}
+}
+
+func TestReviewerCanBeConfiguredAndCapturesRequests(t *testing.T) {
+	wantErr := errors.New("configured")
+	r := dummy.New(dummy.Options{
+		Raw:        json.RawMessage(`{"not":"used"}`),
+		Err:        wantErr,
+		UsageNotes: "configured usage",
+	})
+	_, err := r.Review(context.Background(), reviewer.ReviewRequest{
+		Prompt: "prompt",
+		Artifacts: []reviewer.Artifact{
+			{Name: "design", Path: "/tmp/design.md", Content: []byte("content")},
+		},
+		Schema: json.RawMessage(`{"type":"object"}`),
+		SessionMeta: reviewer.SessionMetadata{
+			SessionID:   "s_test",
+			RoundNumber: 2,
+		},
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected configured error, got %v", err)
+	}
+
+	requests := r.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(requests))
+	}
+	if requests[0].Prompt != "prompt" || requests[0].SessionMeta.RoundNumber != 2 {
+		t.Fatalf("unexpected captured request: %+v", requests[0])
 	}
 }

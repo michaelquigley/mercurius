@@ -6,7 +6,7 @@ Workflow broker for design-agent review loops. Mercurius runs as a local MCP ser
 
 See `docs/design.md` for the product and architecture design. See `docs/work-order.md` for the milestone implementation plan.
 
-M1 establishes the Go scaffold, reviewer interface, structured review schema, schema validation, and a dummy reviewer for tests. Later milestones add Codex subprocess execution, broker/session orchestration, prompt assembly, log writing, configuration, and MCP tools.
+M1-M3 establish the Go scaffold, reviewer interface, structured review schema, Codex subprocess reviewer, broker/session orchestration, prompt assembly, snapshotting, log writing, and dummy reviewer test support. Later milestones add configuration loading and MCP tools.
 
 ## tech stack
 
@@ -21,14 +21,17 @@ M1 establishes the Go scaffold, reviewer interface, structured review schema, sc
 ## package structure
 
 - `cmd/mercurius/` - binary entrypoint
+- `internal/broker/` - in-memory session and round orchestration
+- `internal/prompt/` - standard review prompt assembly
 - `internal/reviewer/` - Reviewer interface and shared request/response types
 - `internal/reviewer/codex/` - Codex subprocess reviewer implementation
 - `internal/reviewer/dummy/` - in-process reviewer for tests
+- `internal/roundlog/` - markdown round log writer and notes updater
 - `internal/schema/` - structured review output JSON Schema and validation
 - `docs/` - design and work-order documents
 - `README.md` - user-facing overview
 
-Planned packages for later milestones include `internal/broker`, `internal/prompt`, `internal/roundlog`, and `internal/config`.
+Planned packages for later milestones include `internal/config` and MCP server wiring under `cmd/mercurius/`.
 
 ## project rules
 
