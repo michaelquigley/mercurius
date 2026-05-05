@@ -25,6 +25,7 @@ func TestBuildIncludesRequiredSectionsInOrder(t *testing.T) {
 
 	sections := []string{
 		"You are reviewing project artifacts",
+		"## Review context",
 		"## Review criteria",
 		"## Project-specific guidance",
 		"## Artifacts under review",
@@ -50,6 +51,8 @@ func TestBuildIncludesRequiredSectionsInOrder(t *testing.T) {
 
 func TestBuildRendersPromptOverridesAndPriorDecisions(t *testing.T) {
 	prompt, _ := Build(Request{
+		ReviewContext:   "deployment: personal one-shot",
+		DecisionsLog:    "# session decisions log\n\n## round 2\n- C-1 (accepted): fix it.\n",
 		PromptOverrides: "flag ad-hoc logging.",
 		PriorDecisions: []reviewer.PriorDecision{
 			{RoundNumber: 2, Ref: "C-1", Disposition: "accepted", Note: "fix it."},
@@ -57,8 +60,11 @@ func TestBuildRendersPromptOverridesAndPriorDecisions(t *testing.T) {
 	})
 
 	for _, want := range []string{
+		"deployment: personal one-shot",
+		"Rendered decisions log:",
 		"flag ad-hoc logging.",
 		"- Round 2, C-1 (accepted): fix it.",
+		"- C-1 (accepted): fix it.",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected prompt to contain %q", want)
@@ -71,7 +77,8 @@ func TestBuildIncludesFindingBudget(t *testing.T) {
 
 	for _, want := range []string{
 		"## Finding budget",
-		"Return at most 3 total findings",
+		"Return at most 3 total blocking findings",
+		"`advisory_notes` are outside this budget",
 		`"maxItems": 3`,
 	} {
 		if !strings.Contains(prompt, want) {

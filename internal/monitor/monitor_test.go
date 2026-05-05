@@ -12,12 +12,19 @@ func TestWriteReadStatusAndEvents(t *testing.T) {
 	eventsPath := EventsPath(dir)
 	now := time.Now().UTC()
 	status := SessionStatus{
-		SessionID:       "s_test",
-		State:           "active",
-		OpenedAt:        now,
-		Budget:          2,
-		BudgetRemaining: 2,
-		MaxFindings:     10,
+		SessionID:            "s_test",
+		State:                "active",
+		OpenedAt:             now,
+		Budget:               2,
+		BudgetRemaining:      2,
+		MaxFindings:          10,
+		ReviewContextSource:  "config",
+		ReviewContextPresent: true,
+		Convergence: Convergence{
+			Signal:                 "watch",
+			Message:                "consider closing soon",
+			LatestBlockingFindings: 1,
+		},
 		ActiveRound: &RoundJob{
 			SessionID:   "s_test",
 			RoundNumber: 1,
@@ -37,7 +44,7 @@ func TestWriteReadStatusAndEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read status: %v", err)
 	}
-	if read.SessionID != "s_test" || read.ActiveRound == nil || read.ActiveRound.RoundNumber != 1 {
+	if read.SessionID != "s_test" || read.ActiveRound == nil || read.ActiveRound.RoundNumber != 1 || read.ReviewContextSource != "config" || read.Convergence.Signal != "watch" {
 		t.Fatalf("status = %+v", read)
 	}
 

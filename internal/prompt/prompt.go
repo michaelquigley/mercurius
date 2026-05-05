@@ -24,6 +24,8 @@ type Artifact struct {
 type Request struct {
 	Artifacts       []Artifact
 	PriorDecisions  []reviewer.PriorDecision
+	ReviewContext   string
+	DecisionsLog    string
 	PromptOverrides string
 	MaxFindings     int
 }
@@ -32,7 +34,17 @@ type Request struct {
 func Build(req Request) (string, json.RawMessage) {
 	var b strings.Builder
 
-	b.WriteString("You are reviewing project artifacts before implementation begins. Your job is to surface what is missing, ambiguous, contradictory, or wrong, before code gets written. You are not the implementer; you are the reviewer.\n\n")
+	b.WriteString("You are reviewing project artifacts before implementation begins. Your job is to decide whether the artifacts are ready to ship or build under the stated constraints. You are not the implementer; you are the reviewer.\n\n")
+	b.WriteString("Answer three questions: Would you ship/build this under the stated constraints? If not, what specifically blocks readiness? Separately, what polish opportunities are advisory only and should not block readiness?\n\n")
+	b.WriteString("## Review context\n\n")
+	if strings.TrimSpace(req.ReviewContext) == "" {
+		b.WriteString("(no review context provided)\n\n")
+	} else {
+		b.WriteString(strings.TrimRight(strings.TrimSpace(req.ReviewContext), "\n"))
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Weight every finding against this review context. Suppress concerns that do not realistically apply under the stated deployment constraints, implementation model, locked decisions, or out-of-scope boundaries. When a point is useful but not readiness-blocking, put it in `advisory_notes`, not `concerns` or `questions`.\n\n")
+
 	b.WriteString("## Review criteria\n\n")
 	b.WriteString("For the design document, look for:\n")
 	b.WriteString("- Decisions that are described but not actually made (handwaves like \"decided at scaffold time\").\n")
@@ -44,7 +56,7 @@ func Build(req Request) (string, json.RawMessage) {
 	b.WriteString("- Dependencies between milestones that are not stated.\n")
 	b.WriteString("- Concrete decisions deferred to implementation rather than settled.\n")
 	b.WriteString("- Test coverage gaps for the architectural commitments in the design.\n\n")
-	b.WriteString("For both, you may also surface points that are correct but worth flagging - small improvements, missed opportunities, or downstream considerations - at `minor` severity.\n\n")
+	b.WriteString("For both, separate readiness blockers from polish. Only use `concerns` or `questions` for items that block shipping/building under the stated context; put non-blocking small improvements, missed opportunities, or downstream considerations in `advisory_notes`.\n\n")
 
 	b.WriteString("## Project-specific guidance\n\n")
 	if strings.TrimSpace(req.PromptOverrides) == "" {
@@ -70,22 +82,30 @@ func Build(req Request) (string, json.RawMessage) {
 		}
 		b.WriteString("\n")
 	}
+	b.WriteString("Rendered decisions log:\n\n")
+	if strings.TrimSpace(req.DecisionsLog) == "" {
+		b.WriteString("(no decisions log has been recorded yet)\n\n")
+	} else {
+		b.WriteString(strings.TrimRight(strings.TrimSpace(req.DecisionsLog), "\n"))
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Treat accepted, rejected, and deferred decisions as adjudicated session context. Do not re-raise rejected or deferred items unless the artifacts now make the decision concretely broken or there is a genuinely new angle.\n\n")
 
 	b.WriteString("## Verdict and severity\n\n")
 	b.WriteString("Apply these definitions precisely.\n\n")
 	b.WriteString("Verdict (the headline judgment for the whole review):\n")
-	b.WriteString("- `ready_to_build`: an implementer could pick up this work order and produce code that satisfies the design without further clarification. No `blocker` or `major` concerns are open.\n")
-	b.WriteString("- `needs_changes`: at least one `blocker` or `major` concern exists; the artifacts must be revised before implementation.\n")
-	b.WriteString("- `needs_discussion`: the artifacts are buildable, but at least one substantive question is open that the human and design agent should adjudicate before proceeding.\n\n")
+	b.WriteString("- `ready_to_build`: an implementer could pick up this work order and produce code that satisfies the design under the stated constraints without further clarification. `ready_to_ship` must be true, and `concerns` plus `questions` must be empty.\n")
+	b.WriteString("- `needs_changes`: at least one readiness-blocking concern exists; the artifacts must be revised before implementation.\n")
+	b.WriteString("- `needs_discussion`: the artifacts are close, but at least one readiness-blocking question is open that the human and design agent should adjudicate before proceeding.\n\n")
 	b.WriteString("Severity (per concern):\n")
 	b.WriteString("- `blocker`: implementation cannot proceed without resolving this.\n")
 	b.WriteString("- `major`: implementation could proceed but would produce something materially different from intent.\n")
-	b.WriteString("- `minor`: small issues that can be fixed in passing without a round of revision.\n\n")
-	b.WriteString("A `verdict` of `ready_to_build` requires that all `concerns` are `minor` (or the `concerns` array is empty). Returning `ready_to_build` alongside any `blocker` or `major` concern is a contradiction; do not produce one.\n\n")
+	b.WriteString("- `minor`: a low-impact readiness issue. If it does not block readiness under the context, use `advisory_notes` instead.\n\n")
+	b.WriteString("A `ready_to_ship` value of true requires `verdict: \"ready_to_build\"`, `concerns: []`, and `questions: []`. A `ready_to_ship` value of false requires at least one `concerns` or `questions` entry and a verdict other than `ready_to_build`. Advisory notes never make the artifact unready.\n\n")
 
 	if req.MaxFindings > 0 {
 		b.WriteString("## Finding budget\n\n")
-		b.WriteString(fmt.Sprintf("Return at most %d total findings across `concerns` and `questions` combined. Prioritize blockers and major concerns first, then the highest-leverage minor concerns or blocking questions. Do not pad the output to fill the budget.\n\n", req.MaxFindings))
+		b.WriteString(fmt.Sprintf("Return at most %d total blocking findings across `concerns` and `questions` combined. Prioritize blockers and major concerns first, then the highest-leverage blocking questions. Do not pad the output to fill the budget. `advisory_notes` are outside this budget, but keep them concise and only include notes that are genuinely useful.\n\n", req.MaxFindings))
 	}
 
 	b.WriteString("## Output\n\n")
@@ -93,7 +113,7 @@ func Build(req Request) (string, json.RawMessage) {
 	b.WriteString("```json\n")
 	b.WriteString(prettySchema(req.MaxFindings))
 	b.WriteString("\n```\n\n")
-	b.WriteString("Required fields must be present even when empty (e.g., `concerns: []`). Do not include fields not defined in the schema.\n")
+	b.WriteString("Required fields must be present even when empty (e.g., `concerns: []`, `advisory_notes: []`). Do not include fields not defined in the schema.\n")
 
 	return b.String(), schema.ReviewOutputSchemaWithMaxFindings(req.MaxFindings)
 }

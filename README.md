@@ -19,19 +19,20 @@ Step 3 is the tax. Moving feedback from one agent to another is mechanical work,
 Mercurius runs as an MCP server that the design agent can call. Each call:
 
 1. Runs the implementing agent against the current design artifacts under a constrained review prompt.
-2. Returns structured output — verdict, concerns, questions, optional concrete diffs — rather than free-form prose.
+2. Returns structured output — readiness verdict, blocking concerns/questions, advisory notes, optional concrete diffs — rather than free-form prose.
 3. Logs the round to a configurable destination so the audit trail accumulates without effort.
 
-The design agent then uses the returned triage hint to present the full finding list, then discuss one finding at a time with the human before fixing, deferring, or rejecting it. The loop continues until the verdict is `ready_to_build` or the human calls it.
+The design agent then uses the returned triage hint to present the full blocking-finding list, then discuss one finding at a time with the human before fixing, deferring, or rejecting it. Advisory notes are presented separately as non-blocking polish. The loop continues until the verdict is `ready_to_build` or the human calls it.
 
 Mercurius is reviewer-agnostic by design. Codex is the first implementation; the interface is built so other implementing agents can be swapped in without touching the orchestration layer.
 
 ## Status
 
-MVP implementation through M4 is in place: schema validation, Codex/dummy reviewers, session orchestration, round logs, config loading, and the MCP stdio server surface.
+Mercurius has a working local MCP server, Codex and dummy reviewers, background review rounds, structured output validation, round logs, durable decisions, review context, convergence hints, and CLI monitoring.
 
-- [`docs/design.md`](docs/design.md) — what Mercurius is and how it works
-- [`docs/work-order.md`](docs/work-order.md) — the implementation plan
+- [`docs/current/`](docs/current/README.md) — documentation for the current implementation
+- [`docs/current/user-guide.md`](docs/current/user-guide.md) — real-world usage guide
+- [`docs/future/`](docs/future/) — future changes and deferred designs
 - [`examples/mercurius.yaml`](examples/mercurius.yaml) — starter project config
 
 ## Install
@@ -59,6 +60,8 @@ name: my-project
 log_destination: ./reviews
 default_budget: 4
 max_findings: 10
+review_context: |
+  Add project/session constraints that should calibrate reviewer rigor.
 prompt_overrides: |
   Add project-specific review guidance here.
 reviewers:
@@ -96,13 +99,13 @@ Tools exposed:
 - `list_reviewers`
 - `list_sessions`
 
-Manual smoke path: connect an MCP client, call `open_session` with absolute artifact paths for `docs/design.md` and `docs/work-order.md`, call `start_review_round`, monitor it with:
+Manual smoke path: connect an MCP client, call `open_session` with absolute artifact paths for the design/work-order files you want reviewed, call `start_review_round`, monitor it with:
 
 ```sh
 mercurius monitor --config /absolute/path/to/mercurius.yaml --session <session_id> --wait
 ```
 
-When the round completes, call `collect_round`, present `triage.findings`, handle one selected finding with the user, record commentary with `record_round_notes`, then continue or close with `close_session`.
+When the round completes, call `collect_round`, present blocking `triage.findings` with `triage.advisory_notes` separate, handle one selected blocking finding with the user, record commentary/decisions with `record_round_notes`, then continue or close with `close_session`. `collect_round` and `session_status` include an advisory `convergence` signal to help decide when another round is no longer worth the cost.
 
 ## License
 

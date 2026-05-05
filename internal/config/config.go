@@ -28,6 +28,7 @@ type Config struct {
 	LogDestination  string
 	DefaultBudget   int
 	MaxFindings     int
+	ReviewContext   string
 	PromptOverrides string
 	Reviewers       []*ReviewerConfig
 }

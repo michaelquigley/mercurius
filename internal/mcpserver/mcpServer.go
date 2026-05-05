@@ -27,20 +27,23 @@ type ArtifactInput struct {
 }
 
 type OpenSessionInput struct {
-	Artifacts []ArtifactInput `json:"artifacts,omitempty"`
-	Reviewers []string        `json:"reviewers,omitempty"`
-	Budget    int             `json:"budget,omitempty"`
+	Artifacts     []ArtifactInput `json:"artifacts,omitempty"`
+	Reviewers     []string        `json:"reviewers,omitempty"`
+	Budget        int             `json:"budget,omitempty"`
+	ReviewContext string          `json:"review_context,omitempty"`
 }
 
 type OpenSessionOutput struct {
-	SessionID       string                     `json:"session_id"`
-	OpenedAt        string                     `json:"opened_at"`
-	Budget          int                        `json:"budget"`
-	BudgetRemaining int                        `json:"budget_remaining"`
-	MaxFindings     int                        `json:"max_findings"`
-	RoundsUsed      int                        `json:"rounds_used"`
-	Reviewers       []ReviewerInfoOutput       `json:"reviewers"`
-	Artifacts       []RegisteredArtifactOutput `json:"artifacts"`
+	SessionID            string                     `json:"session_id"`
+	OpenedAt             string                     `json:"opened_at"`
+	Budget               int                        `json:"budget"`
+	BudgetRemaining      int                        `json:"budget_remaining"`
+	MaxFindings          int                        `json:"max_findings"`
+	ReviewContextSource  string                     `json:"review_context_source"`
+	ReviewContextPresent bool                       `json:"review_context_present"`
+	RoundsUsed           int                        `json:"rounds_used"`
+	Reviewers            []ReviewerInfoOutput       `json:"reviewers"`
+	Artifacts            []RegisteredArtifactOutput `json:"artifacts"`
 }
 
 type StartRoundInput struct {
@@ -54,16 +57,18 @@ type CollectedRoundOutput struct {
 	Manifest    []ManifestEntryOutput `json:"manifest"`
 	Reviewers   []ReviewerOutput      `json:"reviewers"`
 	Triage      RoundTriageOutput     `json:"triage"`
+	Convergence ConvergenceOutput     `json:"convergence"`
 	NextAction  string                `json:"next_action"`
 }
 
 type RoundTriageOutput struct {
-	Mode              string                `json:"mode"`
-	TotalFindings     int                   `json:"total_findings"`
-	RemainingFindings int                   `json:"remaining_findings"`
-	Findings          []TriageFindingOutput `json:"findings"`
-	NextFinding       *TriageFindingOutput  `json:"next_finding"`
-	Guidance          string                `json:"guidance"`
+	Mode              string                 `json:"mode"`
+	TotalFindings     int                    `json:"total_findings"`
+	RemainingFindings int                    `json:"remaining_findings"`
+	Findings          []TriageFindingOutput  `json:"findings"`
+	AdvisoryNotes     []TriageAdvisoryOutput `json:"advisory_notes"`
+	NextFinding       *TriageFindingOutput   `json:"next_finding"`
+	Guidance          string                 `json:"guidance"`
 }
 
 type TriageFindingOutput struct {
@@ -75,6 +80,24 @@ type TriageFindingOutput struct {
 	Title        string  `json:"title"`
 	Detail       string  `json:"detail"`
 	Suggestion   *string `json:"suggestion,omitempty"`
+}
+
+type TriageAdvisoryOutput struct {
+	ReviewerName string  `json:"reviewer_name"`
+	Ref          string  `json:"ref"`
+	Location     string  `json:"location"`
+	Note         string  `json:"note"`
+	Rationale    string  `json:"rationale"`
+	Suggestion   *string `json:"suggestion,omitempty"`
+}
+
+type ConvergenceOutput struct {
+	Signal                      string `json:"signal"`
+	Message                     string `json:"message"`
+	LatestBlockingFindings      int    `json:"latest_blocking_findings"`
+	PreviousBlockingFindings    int    `json:"previous_blocking_findings"`
+	DeclinedOrDeferredDecisions int    `json:"declined_or_deferred_decisions"`
+	AcceptedDecisions           int    `json:"accepted_decisions"`
 }
 
 type StartReviewRoundOutput struct {
@@ -168,21 +191,24 @@ type SessionStatusInput struct {
 }
 
 type SessionStatusOutput struct {
-	SessionID       string                     `json:"session_id"`
-	State           string                     `json:"state"`
-	Verdict         *string                    `json:"verdict"`
-	OpenedAt        string                     `json:"opened_at"`
-	ClosedAt        *string                    `json:"closed_at"`
-	Budget          int                        `json:"budget"`
-	BudgetRemaining int                        `json:"budget_remaining"`
-	MaxFindings     int                        `json:"max_findings"`
-	RoundsUsed      int                        `json:"rounds_used"`
-	Reviewers       []ReviewerInfoOutput       `json:"reviewers"`
-	Artifacts       []RegisteredArtifactOutput `json:"artifacts"`
-	LastError       *ErrorOutput               `json:"last_error"`
-	ActiveRound     *RoundJobOutput            `json:"active_round"`
-	LastRoundJob    *RoundJobOutput            `json:"last_round_job"`
-	Rounds          []RoundStatusOutput        `json:"rounds"`
+	SessionID            string                     `json:"session_id"`
+	State                string                     `json:"state"`
+	Verdict              *string                    `json:"verdict"`
+	OpenedAt             string                     `json:"opened_at"`
+	ClosedAt             *string                    `json:"closed_at"`
+	Budget               int                        `json:"budget"`
+	BudgetRemaining      int                        `json:"budget_remaining"`
+	MaxFindings          int                        `json:"max_findings"`
+	ReviewContextSource  string                     `json:"review_context_source"`
+	ReviewContextPresent bool                       `json:"review_context_present"`
+	RoundsUsed           int                        `json:"rounds_used"`
+	Reviewers            []ReviewerInfoOutput       `json:"reviewers"`
+	Artifacts            []RegisteredArtifactOutput `json:"artifacts"`
+	LastError            *ErrorOutput               `json:"last_error"`
+	ActiveRound          *RoundJobOutput            `json:"active_round"`
+	LastRoundJob         *RoundJobOutput            `json:"last_round_job"`
+	Rounds               []RoundStatusOutput        `json:"rounds"`
+	Convergence          ConvergenceOutput          `json:"convergence"`
 }
 
 type RoundStatusOutput struct {
@@ -265,6 +291,7 @@ func BrokerOptions(cfg *config.Config) (broker.Options, error) {
 		ConfigPath:      cfg.ConfigPath,
 		DefaultBudget:   cfg.DefaultBudget,
 		MaxFindings:     cfg.MaxFindings,
+		ReviewContext:   cfg.ReviewContext,
 		PromptOverrides: cfg.PromptOverrides,
 		Reviewers:       make([]broker.ReviewerSpec, 0, len(cfg.Reviewers)),
 	}
@@ -286,25 +313,28 @@ func BrokerOptions(cfg *config.Config) (broker.Options, error) {
 func RegisterTools(server *mcp.Server, b *broker.Broker) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "open_session",
-		Description: "start a new Mercurius review session. artifacts must use unique safe names and absolute paths readable by the Mercurius server. budget defaults to the project default_budget when omitted. the response includes the configured max_findings cap for each review round.",
+		Description: "start a new Mercurius review session. artifacts must use unique safe names and absolute paths readable by the Mercurius server. budget defaults to the project default_budget when omitted. review_context can override the config's review_context for this session. the response includes the configured max_findings cap for each review round.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input OpenSessionInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.OpenSession(ctx, broker.OpenSessionRequest{
-			Artifacts: artifactsFromInput(input.Artifacts),
-			Reviewers: append([]string(nil), input.Reviewers...),
-			Budget:    input.Budget,
+			Artifacts:     artifactsFromInput(input.Artifacts),
+			Reviewers:     append([]string(nil), input.Reviewers...),
+			Budget:        input.Budget,
+			ReviewContext: input.ReviewContext,
 		})
 		if err != nil {
 			return toolErrorResult(err)
 		}
 		return nil, OpenSessionOutput{
-			SessionID:       response.SessionID,
-			OpenedAt:        formatTime(response.OpenedAt),
-			Budget:          response.Budget,
-			BudgetRemaining: response.BudgetRemaining,
-			MaxFindings:     response.MaxFindings,
-			RoundsUsed:      response.RoundsUsed,
-			Reviewers:       reviewerInfoOutput(response.Reviewers, false),
-			Artifacts:       registeredArtifactOutput(response.Artifacts),
+			SessionID:            response.SessionID,
+			OpenedAt:             formatTime(response.OpenedAt),
+			Budget:               response.Budget,
+			BudgetRemaining:      response.BudgetRemaining,
+			MaxFindings:          response.MaxFindings,
+			ReviewContextSource:  response.ReviewContextSource,
+			ReviewContextPresent: response.ReviewContextPresent,
+			RoundsUsed:           response.RoundsUsed,
+			Reviewers:            reviewerInfoOutput(response.Reviewers, false),
+			Artifacts:            registeredArtifactOutput(response.Artifacts),
 		}, nil
 	})
 
@@ -368,6 +398,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 			Manifest:    manifestOutput(response.Manifest),
 			Reviewers:   reviewerOutput(response.Reviewers),
 			Triage:      triage,
+			Convergence: convergenceOutput(response.Convergence),
 			NextAction:  collectedRoundNextAction(triage),
 		}, nil
 	})
@@ -623,6 +654,16 @@ func triageOutput(results []broker.ReviewerResult) RoundTriageOutput {
 				Detail:       question.WhyItBlocks,
 			})
 		}
+		for _, note := range raw.AdvisoryNotes {
+			triage.AdvisoryNotes = append(triage.AdvisoryNotes, TriageAdvisoryOutput{
+				ReviewerName: result.ReviewerName,
+				Ref:          note.ID,
+				Location:     note.Location,
+				Note:         note.Note,
+				Rationale:    note.Rationale,
+				Suggestion:   cloneString(note.Suggestion),
+			})
+		}
 	}
 	triage.TotalFindings = len(triage.Findings)
 	if triage.TotalFindings > 0 {
@@ -635,37 +676,51 @@ func triageOutput(results []broker.ReviewerResult) RoundTriageOutput {
 }
 
 func oneFindingTriageGuidance() string {
-	return "First present all entries in triage.findings as a concise overview so the user sees the full review landscape. Then address only one finding in the current turn, defaulting to triage.next_finding unless the user chooses another ref. Ask whether they want to discuss it, fix it, defer it, or reject it before making artifact changes. Then stop and wait for the user; do not address other findings, record notes, or call another Mercurius tool until the user explicitly responds. This preserves a fresh turn and tool-call budget for each finding."
+	return "First present all entries in triage.findings as a concise overview so the user sees the full review landscape. Present triage.advisory_notes separately as non-blocking polish when present. Then address only one blocking finding in the current turn, defaulting to triage.next_finding unless the user chooses another ref. Ask whether they want to discuss it, fix it, defer it, or reject it before making artifact changes. Then stop and wait for the user; do not address other findings, record notes, or call another Mercurius tool until the user explicitly responds. This preserves a fresh turn and tool-call budget for each finding."
 }
 
 func noFindingsTriageGuidance() string {
-	return "No concerns or questions were returned. Summarize that there are no findings, then ask whether to record notes, start another review round, or close the session."
+	return "No concerns or questions were returned. Summarize that there are no blocking findings, present triage.advisory_notes separately if present, then ask whether to record notes, start another review round, or close the session."
 }
 
 func collectedRoundNextAction(triage RoundTriageOutput) string {
 	if triage.NextFinding != nil {
-		return "pause and present all triage.findings as a concise overview; then address one finding only, defaulting to triage.next_finding unless the user chooses another ref, and stop before addressing other findings or calling another Mercurius tool"
+		return "pause and present all triage.findings as a concise overview, with triage.advisory_notes separate if present; then address one blocking finding only, defaulting to triage.next_finding unless the user chooses another ref, and stop before addressing other findings or calling another Mercurius tool"
 	}
-	return "pause and tell the user this round returned no findings; ask whether to record notes, start another review round, or close the session"
+	return "pause and tell the user this round returned no blocking findings, with triage.advisory_notes separate if present; ask whether to record notes, start another review round, or close the session"
 }
 
 func sessionStatusOutput(status broker.SessionStatusResponse) SessionStatusOutput {
 	return SessionStatusOutput{
-		SessionID:       status.SessionID,
-		State:           status.State,
-		Verdict:         cloneString(status.Verdict),
-		OpenedAt:        formatTime(status.OpenedAt),
-		ClosedAt:        formatTimePtr(status.ClosedAt),
-		Budget:          status.Budget,
-		BudgetRemaining: status.BudgetRemaining,
-		MaxFindings:     status.MaxFindings,
-		RoundsUsed:      status.RoundsUsed,
-		Reviewers:       reviewerInfoOutput(status.Reviewers, false),
-		Artifacts:       registeredArtifactOutput(status.Artifacts),
-		LastError:       errorOutputPtr(status.LastError),
-		ActiveRound:     roundJobOutputPtr(status.ActiveRound),
-		LastRoundJob:    roundJobOutputPtr(status.LastRoundJob),
-		Rounds:          roundStatusOutput(status.Rounds),
+		SessionID:            status.SessionID,
+		State:                status.State,
+		Verdict:              cloneString(status.Verdict),
+		OpenedAt:             formatTime(status.OpenedAt),
+		ClosedAt:             formatTimePtr(status.ClosedAt),
+		Budget:               status.Budget,
+		BudgetRemaining:      status.BudgetRemaining,
+		MaxFindings:          status.MaxFindings,
+		ReviewContextSource:  status.ReviewContextSource,
+		ReviewContextPresent: status.ReviewContextPresent,
+		RoundsUsed:           status.RoundsUsed,
+		Reviewers:            reviewerInfoOutput(status.Reviewers, false),
+		Artifacts:            registeredArtifactOutput(status.Artifacts),
+		LastError:            errorOutputPtr(status.LastError),
+		ActiveRound:          roundJobOutputPtr(status.ActiveRound),
+		LastRoundJob:         roundJobOutputPtr(status.LastRoundJob),
+		Rounds:               roundStatusOutput(status.Rounds),
+		Convergence:          convergenceOutput(status.Convergence),
+	}
+}
+
+func convergenceOutput(convergence broker.Convergence) ConvergenceOutput {
+	return ConvergenceOutput{
+		Signal:                      convergence.Signal,
+		Message:                     convergence.Message,
+		LatestBlockingFindings:      convergence.LatestBlockingFindings,
+		PreviousBlockingFindings:    convergence.PreviousBlockingFindings,
+		DeclinedOrDeferredDecisions: convergence.DeclinedOrDeferredDecisions,
+		AcceptedDecisions:           convergence.AcceptedDecisions,
 	}
 }
 

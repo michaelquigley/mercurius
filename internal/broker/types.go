@@ -24,6 +24,7 @@ type Options struct {
 	ConfigPath      string
 	DefaultBudget   int
 	MaxFindings     int
+	ReviewContext   string
 	PromptOverrides string
 	Reviewers       []ReviewerSpec
 }
@@ -37,22 +38,25 @@ type Artifact struct {
 
 // OpenSessionRequest starts a new review session.
 type OpenSessionRequest struct {
-	Artifacts []Artifact
-	Reviewers []string
-	Budget    int
+	Artifacts     []Artifact
+	Reviewers     []string
+	Budget        int
+	ReviewContext string
 }
 
 // OpenSessionResponse describes a newly opened session.
 type OpenSessionResponse struct {
-	SessionID       string
-	SessionDir      string
-	OpenedAt        time.Time
-	Budget          int
-	BudgetRemaining int
-	MaxFindings     int
-	RoundsUsed      int
-	Reviewers       []ReviewerInfo
-	Artifacts       []RegisteredArtifact
+	SessionID            string
+	SessionDir           string
+	OpenedAt             time.Time
+	Budget               int
+	BudgetRemaining      int
+	MaxFindings          int
+	ReviewContextSource  string
+	ReviewContextPresent bool
+	RoundsUsed           int
+	Reviewers            []ReviewerInfo
+	Artifacts            []RegisteredArtifact
 }
 
 // StartRoundRequest runs a new round, optionally replacing artifacts.
@@ -80,6 +84,7 @@ type CollectedRoundResponse struct {
 	LogPath     string
 	Manifest    []ArtifactManifestEntry
 	Reviewers   []ReviewerResult
+	Convergence Convergence
 }
 
 // RoundStatusRequest asks for a round job status.
@@ -126,6 +131,16 @@ type ReviewerResult struct {
 	UsageNotes   string
 }
 
+// Convergence describes advisory diminishing-return signals for a session.
+type Convergence struct {
+	Signal                      string
+	Message                     string
+	LatestBlockingFindings      int
+	PreviousBlockingFindings    int
+	DeclinedOrDeferredDecisions int
+	AcceptedDecisions           int
+}
+
 // RecordRoundNotesRequest replaces commentary and decisions for a round.
 type RecordRoundNotesRequest struct {
 	SessionID   string
@@ -164,21 +179,24 @@ type CloseSessionResponse struct {
 
 // SessionStatusResponse is a read-only session view.
 type SessionStatusResponse struct {
-	SessionID       string
-	State           string
-	Verdict         *string
-	OpenedAt        time.Time
-	ClosedAt        *time.Time
-	Budget          int
-	BudgetRemaining int
-	MaxFindings     int
-	RoundsUsed      int
-	Reviewers       []ReviewerInfo
-	Artifacts       []RegisteredArtifact
-	LastError       *ErrorInfo
-	ActiveRound     *RoundStatusResponse
-	LastRoundJob    *RoundStatusResponse
-	Rounds          []RoundStatus
+	SessionID            string
+	State                string
+	Verdict              *string
+	OpenedAt             time.Time
+	ClosedAt             *time.Time
+	Budget               int
+	BudgetRemaining      int
+	MaxFindings          int
+	ReviewContextSource  string
+	ReviewContextPresent bool
+	RoundsUsed           int
+	Reviewers            []ReviewerInfo
+	Artifacts            []RegisteredArtifact
+	LastError            *ErrorInfo
+	ActiveRound          *RoundStatusResponse
+	LastRoundJob         *RoundStatusResponse
+	Rounds               []RoundStatus
+	Convergence          Convergence
 }
 
 // RoundStatus is a read-only round summary.

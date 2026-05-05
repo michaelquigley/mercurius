@@ -6,13 +6,19 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "ready_to_ship",
     "verdict",
     "summary",
     "concerns",
     "questions",
+    "advisory_notes",
     "proposed_diffs"
   ],
   "properties": {
+    "ready_to_ship": {
+      "description": "true when the artifacts are ready to ship or build under the stated constraints",
+      "type": "boolean"
+    },
     "verdict": {
       "description": "headline judgment for the whole review round",
       "type": "string",
@@ -27,7 +33,7 @@
       "type": "string"
     },
     "concerns": {
-      "description": "problems, omissions, contradictions, or worthwhile minor flags found by the reviewer",
+      "description": "blocking problems, omissions, or contradictions that prevent readiness under the stated constraints",
       "type": "array",
       "items": {
         "type": "object",
@@ -100,6 +106,47 @@
           "why_it_blocks": {
             "description": "what the reviewer cannot decide without an answer",
             "type": "string"
+          }
+        }
+      }
+    },
+    "advisory_notes": {
+      "description": "non-blocking polish opportunities or downstream considerations that should not prevent ready_to_ship",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "location",
+          "note",
+          "rationale",
+          "suggestion"
+        ],
+        "properties": {
+          "id": {
+            "description": "stable identifier for this advisory note within the round",
+            "type": "string"
+          },
+          "location": {
+            "description": "document and section reference, or N/A when no concrete location applies",
+            "type": "string"
+          },
+          "note": {
+            "description": "the non-blocking polish opportunity or downstream consideration",
+            "type": "string"
+          },
+          "rationale": {
+            "description": "why the note may be useful despite not blocking readiness",
+            "type": "string"
+          },
+          "suggestion": {
+            "description": "nullable concrete improvement; use null when there is no suggestion",
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
           }
         }
       }

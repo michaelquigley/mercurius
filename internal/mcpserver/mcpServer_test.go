@@ -97,7 +97,7 @@ func TestDummyReviewFlow(t *testing.T) {
 	if round1.Triage.Mode != "one_finding_per_user_turn" || round1.Triage.TotalFindings != 0 || round1.Triage.RemainingFindings != 0 || len(round1.Triage.Findings) != 0 || round1.Triage.NextFinding != nil {
 		t.Fatalf("no-finding triage = %+v", round1.Triage)
 	}
-	if !strings.Contains(round1.Triage.Guidance, "No concerns or questions") || !strings.Contains(round1.NextAction, "no findings") {
+	if !strings.Contains(round1.Triage.Guidance, "No concerns or questions") || !strings.Contains(round1.NextAction, "no blocking findings") {
 		t.Fatalf("no-finding guidance = triage:%q next_action:%q", round1.Triage.Guidance, round1.NextAction)
 	}
 
@@ -258,6 +258,62 @@ func TestReviewerSelection(t *testing.T) {
 		},
 	})
 	assertToolError(t, result, err, broker.CodeUnknownReviewer)
+}
+
+func TestOpenSessionReviewContextMetadata(t *testing.T) {
+	cfg := testConfig(t, dummyReviewer())
+	cfg.ReviewContext = "config context"
+	ctx, client := newTestClient(t, cfg)
+	artifactPath := writeArtifact(t, "design.md", "# design\n")
+
+	result, err := client.CallTool(ctx, &mcp.CallToolParams{
+		Name: "open_session",
+		Arguments: map[string]any{
+			"artifacts": []map[string]any{{
+				"name": "design.md",
+				"path": artifactPath,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	configOutput := decodeStructured[OpenSessionOutput](t, result)
+	if configOutput.ReviewContextSource != "config" || !configOutput.ReviewContextPresent {
+		t.Fatalf("config context output = %+v", configOutput)
+	}
+
+	result, err = client.CallTool(ctx, &mcp.CallToolParams{
+		Name: "open_session",
+		Arguments: map[string]any{
+			"artifacts": []map[string]any{{
+				"name": "design.md",
+				"path": artifactPath,
+			}},
+			"review_context": "session context",
+		},
+	})
+	if err != nil {
+		t.Fatalf("open session with override: %v", err)
+	}
+	sessionOutput := decodeStructured[OpenSessionOutput](t, result)
+	if sessionOutput.ReviewContextSource != "session" || !sessionOutput.ReviewContextPresent {
+		t.Fatalf("session context output = %+v", sessionOutput)
+	}
+
+	statusResult, err := client.CallTool(ctx, &mcp.CallToolParams{
+		Name: "session_status",
+		Arguments: map[string]any{
+			"session_id": sessionOutput.SessionID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("session status: %v", err)
+	}
+	status := decodeStructured[SessionStatusOutput](t, statusResult)
+	if status.ReviewContextSource != "session" || !status.ReviewContextPresent {
+		t.Fatalf("status context = %+v", status)
+	}
 }
 
 func TestArtifactNameValidation(t *testing.T) {
@@ -471,10 +527,10 @@ func TestCollectRoundTriageConcernFirst(t *testing.T) {
 	if finding.Suggestion == nil || *finding.Suggestion != "make the acceptance criteria explicit" {
 		t.Fatalf("concern suggestion = %+v", finding)
 	}
-	if !strings.Contains(collected.Triage.Guidance, "present all entries in triage.findings") || !strings.Contains(collected.Triage.Guidance, "one finding") || !strings.Contains(collected.Triage.Guidance, "fresh turn") {
+	if !strings.Contains(collected.Triage.Guidance, "present all entries in triage.findings") || !strings.Contains(collected.Triage.Guidance, "one blocking finding") || !strings.Contains(collected.Triage.Guidance, "fresh turn") {
 		t.Fatalf("triage guidance = %q", collected.Triage.Guidance)
 	}
-	if !strings.Contains(collected.NextAction, "all triage.findings") || !strings.Contains(collected.NextAction, "one finding only") || !strings.Contains(collected.NextAction, "stop") {
+	if !strings.Contains(collected.NextAction, "all triage.findings") || !strings.Contains(collected.NextAction, "one blocking finding only") || !strings.Contains(collected.NextAction, "stop") {
 		t.Fatalf("next action = %q", collected.NextAction)
 	}
 }
@@ -502,6 +558,29 @@ func TestCollectRoundTriageQuestionOnly(t *testing.T) {
 	}
 	if finding.Severity != nil || finding.Location != nil || finding.Suggestion != nil {
 		t.Fatalf("question should not have concern-only fields: %+v", finding)
+	}
+}
+
+func TestCollectRoundTriageAdvisoryNotes(t *testing.T) {
+	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithAdvisoryOnly(t))
+	sessionID := openTestSession(t, ctx, client)
+
+	collected := startAndCollectRoundTool(t, ctx, client, sessionID)
+	if collected.Triage.TotalFindings != 0 || len(collected.Triage.Findings) != 0 || collected.Triage.NextFinding != nil {
+		t.Fatalf("blocking triage = %+v", collected.Triage)
+	}
+	if len(collected.Triage.AdvisoryNotes) != 1 {
+		t.Fatalf("advisory notes = %+v", collected.Triage.AdvisoryNotes)
+	}
+	note := collected.Triage.AdvisoryNotes[0]
+	if note.ReviewerName != "triage" || note.Ref != "A-1" || note.Note != "shorten one paragraph" || note.Rationale != "easier to scan" {
+		t.Fatalf("advisory note = %+v", note)
+	}
+	if collected.Convergence.Signal != "consider_closing" || collected.Convergence.LatestBlockingFindings != 0 {
+		t.Fatalf("convergence = %+v", collected.Convergence)
+	}
+	if !strings.Contains(collected.NextAction, "no blocking findings") {
+		t.Fatalf("next action = %q", collected.NextAction)
 	}
 }
 
@@ -802,10 +881,12 @@ func waitBlockingStarted(t *testing.T, r *blockingReviewer) {
 
 func validReviewOutput() json.RawMessage {
 	raw, err := json.Marshal(schema.ReviewOutput{
+		ReadyToShip:   true,
 		Verdict:       "ready_to_build",
 		Summary:       "ready",
 		Concerns:      []schema.Concern{},
 		Questions:     []schema.Question{},
+		AdvisoryNotes: []schema.AdvisoryNote{},
 		ProposedDiffs: []schema.ProposedDiff{},
 	})
 	if err != nil {
@@ -819,8 +900,9 @@ func reviewOutputWithConcernAndQuestion(t *testing.T) json.RawMessage {
 
 	suggestion := "make the acceptance criteria explicit"
 	raw, err := json.Marshal(schema.ReviewOutput{
-		Verdict: "needs_changes",
-		Summary: "needs one clarification and one answer",
+		ReadyToShip: false,
+		Verdict:     "needs_changes",
+		Summary:     "needs one clarification and one answer",
 		Concerns: []schema.Concern{{
 			ID:         "C-1",
 			Severity:   "major",
@@ -834,6 +916,7 @@ func reviewOutputWithConcernAndQuestion(t *testing.T) json.RawMessage {
 			Topic:       "rollout",
 			WhyItBlocks: "cannot determine deployment order",
 		}},
+		AdvisoryNotes: []schema.AdvisoryNote{},
 		ProposedDiffs: []schema.ProposedDiff{},
 	})
 	if err != nil {
@@ -846,18 +929,45 @@ func reviewOutputWithQuestionOnly(t *testing.T) json.RawMessage {
 	t.Helper()
 
 	raw, err := json.Marshal(schema.ReviewOutput{
-		Verdict:  "needs_discussion",
-		Summary:  "needs one answer",
-		Concerns: []schema.Concern{},
+		ReadyToShip: false,
+		Verdict:     "needs_discussion",
+		Summary:     "needs one answer",
+		Concerns:    []schema.Concern{},
 		Questions: []schema.Question{{
 			ID:          "Q-7",
 			Topic:       "deployment order",
 			WhyItBlocks: "cannot determine whether migration is safe",
 		}},
+		AdvisoryNotes: []schema.AdvisoryNote{},
 		ProposedDiffs: []schema.ProposedDiff{},
 	})
 	if err != nil {
 		t.Fatalf("marshal question review output: %v", err)
+	}
+	return raw
+}
+
+func reviewOutputWithAdvisoryOnly(t *testing.T) json.RawMessage {
+	t.Helper()
+
+	suggestion := "trim the second paragraph"
+	raw, err := json.Marshal(schema.ReviewOutput{
+		ReadyToShip: true,
+		Verdict:     "ready_to_build",
+		Summary:     "ready with optional polish",
+		Concerns:    []schema.Concern{},
+		Questions:   []schema.Question{},
+		AdvisoryNotes: []schema.AdvisoryNote{{
+			ID:         "A-1",
+			Location:   "docs/design.md",
+			Note:       "shorten one paragraph",
+			Rationale:  "easier to scan",
+			Suggestion: &suggestion,
+		}},
+		ProposedDiffs: []schema.ProposedDiff{},
+	})
+	if err != nil {
+		t.Fatalf("marshal advisory review output: %v", err)
 	}
 	return raw
 }

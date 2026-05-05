@@ -366,10 +366,12 @@ func readFile(t *testing.T, path string) string {
 
 func validReviewOutput() string {
 	raw, err := json.Marshal(map[string]any{
+		"ready_to_ship":  true,
 		"verdict":        "ready_to_build",
 		"summary":        "ready",
 		"concerns":       []any{},
 		"questions":      []any{},
+		"advisory_notes": []any{},
 		"proposed_diffs": []any{},
 	})
 	if err != nil {

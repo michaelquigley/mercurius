@@ -4,9 +4,11 @@ Workflow broker for design-agent review loops. Mercurius runs as a local MCP ser
 
 ## project context
 
-See `docs/design.md` for the product and architecture design. See `docs/work-order.md` for the milestone implementation plan.
+See `docs/current/` for documentation that describes the current implementation. Start with `docs/current/README.md` for the current docs index and `docs/current/user-guide.md` for real-world usage.
 
-M1-M4 establish the Go scaffold, reviewer interface, structured review schema, Codex subprocess reviewer, broker/session orchestration, prompt assembly, snapshotting, log writing, dummy reviewer test support, configuration loading, and the MCP stdio tool surface.
+See `docs/future/` for deferred designs, speculative changes, and notes about behavior that is not implemented yet. Do not document future behavior in `docs/current/` until the code exists and tests cover the behavior.
+
+M1-M4 established the Go scaffold, reviewer interface, structured review schema, Codex subprocess reviewer, broker/session orchestration, prompt assembly, snapshotting, log writing, dummy reviewer test support, configuration loading, MCP stdio tool surface, background review rounds, CLI monitoring, review context, advisory notes, decisions log carry-forward, and convergence hints.
 
 ## tech stack
 
@@ -30,8 +32,19 @@ M1-M4 establish the Go scaffold, reviewer interface, structured review schema, C
 - `internal/reviewer/dummy/` - in-process reviewer for tests
 - `internal/roundlog/` - markdown round log writer and notes updater
 - `internal/schema/` - structured review output JSON Schema and validation
-- `docs/` - design and work-order documents
+- `docs/current/` - complete documentation for the behavior implemented today
+- `docs/future/` - future-facing specs, work orders, ideas, and deferred designs
 - `README.md` - user-facing overview
+
+## documentation rules
+
+1. `docs/current/` is the source of truth for current behavior. Keep it accurate when changing user-facing tools, config, schema, session behavior, reviewer behavior, logs, or monitor output.
+
+2. `docs/future/` is for planned or possible changes only. Future docs must clearly avoid implying that the behavior exists today.
+
+3. When a future feature is implemented, re-synthesize the relevant `docs/future/` material into the `docs/current/` documentation as part of the implementation. Prefer a holistic merge that updates the current user guide, architecture, config, tool, and operations docs as appropriate; directly moving a future doc is only right when it already matches the current-doc structure and voice. Leave only still-deferred material in `docs/future/`.
+
+4. Keep `README.md` concise. It should orient users and link to `docs/current/` and specific high-value guides rather than duplicating full reference material.
 
 ## project rules
 

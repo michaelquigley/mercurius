@@ -171,6 +171,15 @@ func monitorSession(cmd *cobra.Command, logDestination string, sessionID string,
 func printStatus(cmd *cobra.Command, status monitorpkg.SessionStatus) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "session %s state=%s rounds_used=%d budget_remaining=%d\n", status.SessionID, status.State, status.RoundsUsed, status.BudgetRemaining)
+	if status.ReviewContextSource != "" {
+		fmt.Fprintf(out, "review_context source=%s present=%t\n", status.ReviewContextSource, status.ReviewContextPresent)
+	}
+	if status.Convergence.Signal != "" {
+		fmt.Fprintf(out, "convergence signal=%s latest_blocking=%d previous_blocking=%d accepted_decisions=%d declined_or_deferred_decisions=%d\n", status.Convergence.Signal, status.Convergence.LatestBlockingFindings, status.Convergence.PreviousBlockingFindings, status.Convergence.AcceptedDecisions, status.Convergence.DeclinedOrDeferredDecisions)
+		if status.Convergence.Message != "" {
+			fmt.Fprintf(out, "convergence_message=%s\n", status.Convergence.Message)
+		}
+	}
 	if status.ActiveRound != nil {
 		fmt.Fprintf(out, "active round %d state=%s reviewer=%s started=%s\n", status.ActiveRound.RoundNumber, status.ActiveRound.State, status.ActiveRound.Reviewer, formatMonitorTime(status.ActiveRound.StartedAt))
 		fmt.Fprintf(out, "status=%s events=%s\n", status.ActiveRound.StatusPath, status.ActiveRound.EventsPath)

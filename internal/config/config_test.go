@@ -15,6 +15,8 @@ name: test-project
 log_destination: ./reviews
 prompt_overrides: |
   flag unclear logging.
+review_context: |
+  deployment: personal one-shot
 reviewers:
   - name: codex
     impl: codex
@@ -42,6 +44,9 @@ reviewers:
 	}
 	if cfg.Reviewers[0].BinaryPath != filepath.Join(dir, "bin", "codex") {
 		t.Fatalf("binary path = %s", cfg.Reviewers[0].BinaryPath)
+	}
+	if !strings.Contains(cfg.ReviewContext, "deployment: personal one-shot") {
+		t.Fatalf("review context = %q", cfg.ReviewContext)
 	}
 	if cfg.Reviewers[0].ExtraArgs[0] != "--ignore-user-config" {
 		t.Fatalf("extra args not loaded: %+v", cfg.Reviewers[0].ExtraArgs)

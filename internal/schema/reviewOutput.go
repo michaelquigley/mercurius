@@ -12,10 +12,12 @@ import (
 
 // ReviewOutput is the canonical structured response returned by a reviewer.
 type ReviewOutput struct {
+	ReadyToShip   bool           `json:"ready_to_ship"`
 	Verdict       string         `json:"verdict"`
 	Summary       string         `json:"summary"`
 	Concerns      []Concern      `json:"concerns"`
 	Questions     []Question     `json:"questions"`
+	AdvisoryNotes []AdvisoryNote `json:"advisory_notes"`
 	ProposedDiffs []ProposedDiff `json:"proposed_diffs"`
 }
 
@@ -34,6 +36,15 @@ type Question struct {
 	ID          string `json:"id"`
 	Topic       string `json:"topic"`
 	WhyItBlocks string `json:"why_it_blocks"`
+}
+
+// AdvisoryNote records non-blocking polish or downstream considerations.
+type AdvisoryNote struct {
+	ID         string  `json:"id"`
+	Location   string  `json:"location"`
+	Note       string  `json:"note"`
+	Rationale  string  `json:"rationale"`
+	Suggestion *string `json:"suggestion"`
 }
 
 // ProposedDiff records concrete text or patch suggested by the reviewer.
@@ -113,6 +124,9 @@ func ParseReviewOutput(raw json.RawMessage) (ReviewOutput, error) {
 	if err := json.Unmarshal(raw, &output); err != nil {
 		return ReviewOutput{}, fmt.Errorf("parse review output: %w", err)
 	}
+	if err := ValidateReviewConsistency(output); err != nil {
+		return ReviewOutput{}, err
+	}
 	return output, nil
 }
 
@@ -131,6 +145,28 @@ func ValidateFindingLimit(output ReviewOutput, maxFindings int) error {
 		return nil
 	}
 	return fmt.Errorf("review output has %d findings (concerns=%d, questions=%d), maximum is %d", count, len(output.Concerns), len(output.Questions), maxFindings)
+}
+
+// ValidateReviewConsistency checks cross-field readiness invariants.
+func ValidateReviewConsistency(output ReviewOutput) error {
+	blockingFindings := FindingCount(output)
+	if output.ReadyToShip {
+		if output.Verdict != "ready_to_build" {
+			return fmt.Errorf("review output contradiction: ready_to_ship=true requires verdict ready_to_build")
+		}
+		if blockingFindings != 0 {
+			return fmt.Errorf("review output contradiction: ready_to_ship=true requires no concerns or questions")
+		}
+		return nil
+	}
+
+	if output.Verdict == "ready_to_build" {
+		return fmt.Errorf("review output contradiction: ready_to_ship=false cannot use verdict ready_to_build")
+	}
+	if blockingFindings == 0 {
+		return fmt.Errorf("review output contradiction: ready_to_ship=false requires at least one concern or question")
+	}
+	return nil
 }
 
 func reviewOutputSchema() (*jsonschema.Schema, error) {

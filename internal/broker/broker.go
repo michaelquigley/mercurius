@@ -25,13 +25,19 @@ import (
 )
 
 const (
-	defaultBudget       = 4
-	defaultMaxFindings  = 10
-	stateActive         = "active"
-	stateClosed         = "closed"
-	roundStateRunning   = "running"
-	roundStateCompleted = "completed"
-	roundStateFailed    = "failed"
+	defaultBudget        = 4
+	defaultMaxFindings   = 10
+	stateActive          = "active"
+	stateClosed          = "closed"
+	roundStateRunning    = "running"
+	roundStateCompleted  = "completed"
+	roundStateFailed     = "failed"
+	reviewContextSession = "session"
+	reviewContextConfig  = "config"
+	reviewContextNone    = "none"
+	convergenceNone      = "none"
+	convergenceWatch     = "watch"
+	convergenceClose     = "consider_closing"
 )
 
 var safeArtifactName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -46,23 +52,25 @@ type Broker struct {
 }
 
 type session struct {
-	id              string
-	dir             string
-	state           string
-	verdict         *string
-	openedAt        time.Time
-	closedAt        *time.Time
-	budget          int
-	maxFindings     int
-	artifacts       []Artifact
-	reviewerName    string
-	reviewerInfo    ReviewerInfo
-	reviewer        reviewer.Reviewer
-	rounds          []*round
-	promptOverrides string
-	lastError       *ErrorInfo
-	activeJob       *roundJob
-	lastRoundJob    *roundJob
+	id                  string
+	dir                 string
+	state               string
+	verdict             *string
+	openedAt            time.Time
+	closedAt            *time.Time
+	budget              int
+	maxFindings         int
+	artifacts           []Artifact
+	reviewerName        string
+	reviewerInfo        ReviewerInfo
+	reviewer            reviewer.Reviewer
+	rounds              []*round
+	reviewContext       string
+	reviewContextSource string
+	promptOverrides     string
+	lastError           *ErrorInfo
+	activeJob           *roundJob
+	lastRoundJob        *roundJob
 }
 
 type round struct {
@@ -93,6 +101,8 @@ type roundJob struct {
 	artifacts       []Artifact
 	hasOverride     bool
 	priorDecisions  []reviewer.PriorDecision
+	reviewContext   string
+	decisionsLog    string
 	promptOverrides string
 	maxFindings     int
 	startedAt       time.Time
@@ -168,19 +178,22 @@ func (b *Broker) OpenSession(ctx context.Context, req OpenSessionRequest) (OpenS
 		return OpenSessionResponse{}, brokerError(CodeInternalError, "reviewer factory returned nil", nil, map[string]any{"reviewer": spec.Name})
 	}
 
+	reviewContext, reviewContextSource := effectiveReviewContext(req.ReviewContext, b.options.ReviewContext)
 	openedAt := time.Now().UTC()
 	s := &session{
-		id:              id,
-		dir:             dir,
-		state:           stateActive,
-		openedAt:        openedAt,
-		budget:          budget,
-		maxFindings:     b.options.MaxFindings,
-		artifacts:       artifacts,
-		reviewerName:    spec.Name,
-		reviewerInfo:    reviewerInfo(spec),
-		reviewer:        reviewerImpl,
-		promptOverrides: b.options.PromptOverrides,
+		id:                  id,
+		dir:                 dir,
+		state:               stateActive,
+		openedAt:            openedAt,
+		budget:              budget,
+		maxFindings:         b.options.MaxFindings,
+		artifacts:           artifacts,
+		reviewerName:        spec.Name,
+		reviewerInfo:        reviewerInfo(spec),
+		reviewer:            reviewerImpl,
+		reviewContext:       reviewContext,
+		reviewContextSource: reviewContextSource,
+		promptOverrides:     b.options.PromptOverrides,
 	}
 	b.sessions[id] = s
 
@@ -201,15 +214,17 @@ func (b *Broker) OpenSession(ctx context.Context, req OpenSessionRequest) (OpenS
 	}
 
 	return OpenSessionResponse{
-		SessionID:       id,
-		SessionDir:      dir,
-		OpenedAt:        openedAt,
-		Budget:          budget,
-		BudgetRemaining: budget,
-		MaxFindings:     b.options.MaxFindings,
-		RoundsUsed:      0,
-		Reviewers:       []ReviewerInfo{reviewerInfo(spec)},
-		Artifacts:       registeredArtifacts(artifacts),
+		SessionID:            id,
+		SessionDir:           dir,
+		OpenedAt:             openedAt,
+		Budget:               budget,
+		BudgetRemaining:      budget,
+		MaxFindings:          b.options.MaxFindings,
+		ReviewContextSource:  reviewContextSource,
+		ReviewContextPresent: reviewContext != "",
+		RoundsUsed:           0,
+		Reviewers:            []ReviewerInfo{reviewerInfo(spec)},
+		Artifacts:            registeredArtifacts(artifacts),
 	}, nil
 }
 
@@ -277,6 +292,8 @@ func (b *Broker) StartReviewRound(ctx context.Context, req StartRoundRequest) (S
 		artifacts:       artifacts,
 		hasOverride:     hasOverride,
 		priorDecisions:  s.priorDecisions(),
+		reviewContext:   s.reviewContext,
+		decisionsLog:    s.decisionsLogText(),
 		promptOverrides: s.promptOverrides,
 		maxFindings:     s.maxFindings,
 		startedAt:       startedAt,
@@ -342,6 +359,8 @@ func (b *Broker) executeRoundJob(job *roundJob) {
 	promptText, schemaBytes := prompt.Build(prompt.Request{
 		Artifacts:       snapshots.promptArtifacts,
 		PriorDecisions:  job.priorDecisions,
+		ReviewContext:   job.reviewContext,
+		DecisionsLog:    job.decisionsLog,
 		PromptOverrides: job.promptOverrides,
 		MaxFindings:     job.maxFindings,
 	})
@@ -498,7 +517,9 @@ func (b *Broker) CollectRound(ctx context.Context, req CollectRoundRequest) (Col
 			return CollectedRoundResponse{}, s.lastRoundJob.err
 		}
 		if s.lastRoundJob.state == roundStateCompleted {
-			return cloneCollectedRoundResponse(s.lastRoundJob.result), nil
+			response := cloneCollectedRoundResponse(s.lastRoundJob.result)
+			response.Convergence = s.convergence()
+			return response, nil
 		}
 	}
 	if round := s.findRound(roundNumber); round != nil {
@@ -507,6 +528,7 @@ func (b *Broker) CollectRound(ctx context.Context, req CollectRoundRequest) (Col
 			LogPath:     round.logPath,
 			Manifest:    cloneManifest(round.manifest),
 			Reviewers:   cloneResults(round.results),
+			Convergence: s.convergence(),
 		}, nil
 	}
 	return CollectedRoundResponse{}, brokerError(CodeUnknownRound, "round not found", nil, map[string]any{"round_number": req.RoundNumber})
@@ -535,6 +557,7 @@ func (b *Broker) finishRoundSuccess(job *roundJob, response CollectedRoundRespon
 	}
 	s.rounds = append(s.rounds, round)
 	s.lastError = nil
+	response.Convergence = s.convergence()
 	job.result = cloneCollectedRoundResponse(response)
 	job.finish(roundStateCompleted, response.LogPath, nil)
 	s.activeJob = nil
@@ -650,6 +673,12 @@ func (b *Broker) RecordRoundNotes(ctx context.Context, req RecordRoundNotesReque
 	}
 	round.hasNotes = true
 	round.decisions = decisions
+	if err := b.writeDecisionsLogLocked(s); err != nil {
+		err := brokerError(CodeInternalError, "write decisions log", err, map[string]any{"path": decisionsLogPath(s.dir)})
+		s.recordError(err)
+		_ = b.persistSessionLocked(s)
+		return RecordRoundNotesResponse{}, err
+	}
 	s.lastError = nil
 	now := time.Now().UTC()
 	if err := b.appendEventLocked(s, monitor.Event{
@@ -870,6 +899,88 @@ func (s *session) priorDecisions() []reviewer.PriorDecision {
 	return decisions
 }
 
+func (s *session) decisionsLogText() string {
+	var b strings.Builder
+	b.WriteString("# session decisions log\n\n")
+	hasDecisions := false
+	for _, round := range s.rounds {
+		if len(round.decisions) == 0 {
+			continue
+		}
+		hasDecisions = true
+		b.WriteString(fmt.Sprintf("## round %d\n", round.number))
+		for _, decision := range round.decisions {
+			note := strings.TrimSpace(decision.Note)
+			if note == "" {
+				note = "no note recorded"
+			}
+			b.WriteString(fmt.Sprintf("- %s (%s): %s\n", decision.Ref, decision.Disposition, note))
+		}
+		b.WriteString("\n")
+	}
+	if !hasDecisions {
+		b.WriteString("_no decisions recorded yet_\n")
+	}
+	return b.String()
+}
+
+func (s *session) convergence() Convergence {
+	convergence := Convergence{
+		Signal:                      convergenceNone,
+		Message:                     "No convergence signal yet.",
+		LatestBlockingFindings:      -1,
+		PreviousBlockingFindings:    -1,
+		DeclinedOrDeferredDecisions: 0,
+		AcceptedDecisions:           0,
+	}
+	if len(s.rounds) == 0 {
+		convergence.LatestBlockingFindings = 0
+		convergence.PreviousBlockingFindings = 0
+		return convergence
+	}
+
+	latestOutput, latestOK := firstParsedOutput(s.rounds[len(s.rounds)-1])
+	if latestOK {
+		convergence.LatestBlockingFindings = schema.FindingCount(latestOutput)
+	} else {
+		convergence.LatestBlockingFindings = 0
+	}
+	if len(s.rounds) >= 2 {
+		previousOutput, previousOK := firstParsedOutput(s.rounds[len(s.rounds)-2])
+		if previousOK {
+			convergence.PreviousBlockingFindings = schema.FindingCount(previousOutput)
+		} else {
+			convergence.PreviousBlockingFindings = 0
+		}
+	} else {
+		convergence.PreviousBlockingFindings = 0
+	}
+	for _, round := range s.rounds {
+		for _, decision := range round.decisions {
+			switch decision.Disposition {
+			case "accepted":
+				convergence.AcceptedDecisions++
+			case "rejected", "deferred":
+				convergence.DeclinedOrDeferredDecisions++
+			}
+		}
+	}
+
+	if latestOK && (latestOutput.ReadyToShip || convergence.LatestBlockingFindings == 0) {
+		convergence.Signal = convergenceClose
+		convergence.Message = "Latest review says the artifacts are ready or has no blocking findings; consider closing the session."
+		return convergence
+	}
+	decisionCount := convergence.AcceptedDecisions + convergence.DeclinedOrDeferredDecisions
+	if len(s.rounds) >= 2 && (convergence.LatestBlockingFindings <= 2 || (decisionCount > 0 && convergence.DeclinedOrDeferredDecisions >= convergence.AcceptedDecisions)) {
+		convergence.Signal = convergenceWatch
+		convergence.Message = "The session may be entering diminishing returns; review whether another round is worth the cost."
+		return convergence
+	}
+	convergence.Message = "No convergence pattern detected."
+	return convergence
+}
+
 func (s *session) status() SessionStatusResponse {
 	rounds := make([]RoundStatus, 0, len(s.rounds))
 	for _, round := range s.rounds {
@@ -882,21 +993,24 @@ func (s *session) status() SessionStatusResponse {
 		})
 	}
 	return SessionStatusResponse{
-		SessionID:       s.id,
-		State:           s.state,
-		Verdict:         cloneStringPtr(s.verdict),
-		OpenedAt:        s.openedAt,
-		ClosedAt:        cloneTimePtr(s.closedAt),
-		Budget:          s.budget,
-		BudgetRemaining: s.budget - len(s.rounds),
-		MaxFindings:     s.maxFindings,
-		RoundsUsed:      len(s.rounds),
-		Reviewers:       []ReviewerInfo{s.reviewerInfo},
-		Artifacts:       registeredArtifacts(s.artifacts),
-		LastError:       cloneErrorInfo(s.lastError),
-		ActiveRound:     jobStatusPtr(s.activeJob),
-		LastRoundJob:    jobStatusPtr(s.lastRoundJob),
-		Rounds:          rounds,
+		SessionID:            s.id,
+		State:                s.state,
+		Verdict:              cloneStringPtr(s.verdict),
+		OpenedAt:             s.openedAt,
+		ClosedAt:             cloneTimePtr(s.closedAt),
+		Budget:               s.budget,
+		BudgetRemaining:      s.budget - len(s.rounds),
+		MaxFindings:          s.maxFindings,
+		ReviewContextSource:  s.reviewContextSource,
+		ReviewContextPresent: s.reviewContext != "",
+		RoundsUsed:           len(s.rounds),
+		Reviewers:            []ReviewerInfo{s.reviewerInfo},
+		Artifacts:            registeredArtifacts(s.artifacts),
+		LastError:            cloneErrorInfo(s.lastError),
+		ActiveRound:          jobStatusPtr(s.activeJob),
+		LastRoundJob:         jobStatusPtr(s.lastRoundJob),
+		Rounds:               rounds,
+		Convergence:          s.convergence(),
 	}
 }
 
@@ -904,8 +1018,16 @@ func (b *Broker) persistSessionLocked(s *session) error {
 	return monitor.WriteStatus(monitor.StatusPath(s.dir), monitorSessionStatus(s.status()))
 }
 
+func (b *Broker) writeDecisionsLogLocked(s *session) error {
+	return os.WriteFile(decisionsLogPath(s.dir), []byte(s.decisionsLogText()), 0o600)
+}
+
 func (b *Broker) appendEventLocked(s *session, event monitor.Event) error {
 	return monitor.AppendEvent(monitor.EventsPath(s.dir), event)
+}
+
+func decisionsLogPath(sessionDir string) string {
+	return filepath.Join(sessionDir, "decisions.md")
 }
 
 func (b *Broker) monitorCommand(sessionID string) string {
@@ -1109,6 +1231,16 @@ func validCloseVerdict(verdict string) bool {
 	return verdict == "ready_to_build" || verdict == "paused" || verdict == "abandoned"
 }
 
+func effectiveReviewContext(sessionContext string, configContext string) (string, string) {
+	if trimmed := strings.TrimSpace(sessionContext); trimmed != "" {
+		return trimmed, reviewContextSession
+	}
+	if trimmed := strings.TrimSpace(configContext); trimmed != "" {
+		return trimmed, reviewContextConfig
+	}
+	return "", reviewContextNone
+}
+
 func refsFromOutput(output schema.ReviewOutput) map[string]struct{} {
 	refs := map[string]struct{}{}
 	for _, concern := range output.Concerns {
@@ -1118,6 +1250,17 @@ func refsFromOutput(output schema.ReviewOutput) map[string]struct{} {
 		refs[question.ID] = struct{}{}
 	}
 	return refs
+}
+
+func firstParsedOutput(round *round) (schema.ReviewOutput, bool) {
+	if round == nil || len(round.results) == 0 {
+		return schema.ReviewOutput{}, false
+	}
+	output, err := schema.ParseReviewOutput(round.results[0].Raw)
+	if err != nil {
+		return schema.ReviewOutput{}, false
+	}
+	return output, true
 }
 
 func newSessionID() (string, error) {
@@ -1174,21 +1317,24 @@ func cloneErrorInfo(info *ErrorInfo) *ErrorInfo {
 
 func monitorSessionStatus(status SessionStatusResponse) monitor.SessionStatus {
 	return monitor.SessionStatus{
-		SessionID:       status.SessionID,
-		State:           status.State,
-		Verdict:         cloneStringPtr(status.Verdict),
-		OpenedAt:        status.OpenedAt,
-		ClosedAt:        cloneTimePtr(status.ClosedAt),
-		Budget:          status.Budget,
-		BudgetRemaining: status.BudgetRemaining,
-		MaxFindings:     status.MaxFindings,
-		RoundsUsed:      status.RoundsUsed,
-		Reviewers:       monitorReviewers(status.Reviewers),
-		Artifacts:       monitorArtifacts(status.Artifacts),
-		LastError:       monitorErrorInfo(status.LastError),
-		ActiveRound:     monitorRoundJob(status.ActiveRound),
-		LastRoundJob:    monitorRoundJob(status.LastRoundJob),
-		Rounds:          monitorRounds(status.Rounds),
+		SessionID:            status.SessionID,
+		State:                status.State,
+		Verdict:              cloneStringPtr(status.Verdict),
+		OpenedAt:             status.OpenedAt,
+		ClosedAt:             cloneTimePtr(status.ClosedAt),
+		Budget:               status.Budget,
+		BudgetRemaining:      status.BudgetRemaining,
+		MaxFindings:          status.MaxFindings,
+		ReviewContextSource:  status.ReviewContextSource,
+		ReviewContextPresent: status.ReviewContextPresent,
+		RoundsUsed:           status.RoundsUsed,
+		Reviewers:            monitorReviewers(status.Reviewers),
+		Artifacts:            monitorArtifacts(status.Artifacts),
+		LastError:            monitorErrorInfo(status.LastError),
+		ActiveRound:          monitorRoundJob(status.ActiveRound),
+		LastRoundJob:         monitorRoundJob(status.LastRoundJob),
+		Rounds:               monitorRounds(status.Rounds),
+		Convergence:          monitorConvergence(status.Convergence),
 	}
 }
 
@@ -1230,6 +1376,17 @@ func monitorRounds(rounds []RoundStatus) []monitor.RoundStatus {
 	return out
 }
 
+func monitorConvergence(convergence Convergence) monitor.Convergence {
+	return monitor.Convergence{
+		Signal:                      convergence.Signal,
+		Message:                     convergence.Message,
+		LatestBlockingFindings:      convergence.LatestBlockingFindings,
+		PreviousBlockingFindings:    convergence.PreviousBlockingFindings,
+		DeclinedOrDeferredDecisions: convergence.DeclinedOrDeferredDecisions,
+		AcceptedDecisions:           convergence.AcceptedDecisions,
+	}
+}
+
 func monitorRoundJob(status *RoundStatusResponse) *monitor.RoundJob {
 	if status == nil {
 		return nil
@@ -1269,6 +1426,7 @@ func cloneCollectedRoundResponse(response CollectedRoundResponse) CollectedRound
 		LogPath:     response.LogPath,
 		Manifest:    cloneManifest(response.Manifest),
 		Reviewers:   cloneResults(response.Reviewers),
+		Convergence: response.Convergence,
 	}
 }
 

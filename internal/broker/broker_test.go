@@ -129,6 +129,115 @@ func TestSessionRoundsNotesPriorDecisionsAndClose(t *testing.T) {
 	assertBrokerCode(t, err, CodeSessionClosed)
 }
 
+func TestReviewContextDecisionsLogAndConvergence(t *testing.T) {
+	ctx := context.Background()
+	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithRefs()}, scriptedResponse{raw: validReviewOutput("ready_to_build")})
+	b := New(Options{
+		LogDestination:  filepath.Join(t.TempDir(), "reviews"),
+		DefaultBudget:   3,
+		ReviewContext:   "config context should be overridden",
+		PromptOverrides: "flag unclear acceptance criteria.",
+		Reviewers: []ReviewerSpec{{
+			Name:    "dummy",
+			Factory: func(string) reviewer.Reviewer { return r },
+		}},
+	})
+	open, err := b.OpenSession(ctx, OpenSessionRequest{
+		Artifacts:     []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+		ReviewContext: "session context: personal one-shot",
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if open.ReviewContextSource != reviewContextSession || !open.ReviewContextPresent {
+		t.Fatalf("review context metadata = %+v", open)
+	}
+
+	round1, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
+	if err != nil {
+		t.Fatalf("round 1: %v", err)
+	}
+	reqs := r.requests()
+	if !strings.Contains(reqs[0].Prompt, "session context: personal one-shot") || strings.Contains(reqs[0].Prompt, "config context should be overridden") {
+		t.Fatalf("unexpected review context in prompt:\n%s", reqs[0].Prompt)
+	}
+
+	if _, err := b.RecordRoundNotes(ctx, RecordRoundNotesRequest{
+		SessionID:   open.SessionID,
+		RoundNumber: round1.RoundNumber,
+		Commentary:  "handled round one",
+		Decisions: []Decision{
+			{Ref: "C-1", Disposition: "accepted", Note: "fix accepted"},
+			{Ref: "Q-1", Disposition: "rejected", Note: "constraint makes it irrelevant"},
+		},
+	}); err != nil {
+		t.Fatalf("record notes: %v", err)
+	}
+	decisionsLog := readFile(t, filepath.Join(open.SessionDir, "decisions.md"))
+	for _, want := range []string{
+		"# session decisions log",
+		"- C-1 (accepted): fix accepted",
+		"- Q-1 (rejected): constraint makes it irrelevant",
+	} {
+		if !strings.Contains(decisionsLog, want) {
+			t.Fatalf("decisions log missing %q:\n%s", want, decisionsLog)
+		}
+	}
+
+	round2, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
+	if err != nil {
+		t.Fatalf("round 2: %v", err)
+	}
+	if round2.Convergence.Signal != convergenceClose || round2.Convergence.LatestBlockingFindings != 0 || round2.Convergence.PreviousBlockingFindings != 2 {
+		t.Fatalf("round 2 convergence = %+v", round2.Convergence)
+	}
+	reqs = r.requests()
+	if got := reqs[1].SessionMeta.PriorDecisions; len(got) != 2 {
+		t.Fatalf("prior decisions = %+v", got)
+	}
+	for _, want := range []string{
+		"Rendered decisions log:",
+		"- C-1 (accepted): fix accepted",
+		"- Q-1 (rejected): constraint makes it irrelevant",
+	} {
+		if !strings.Contains(reqs[1].Prompt, want) {
+			t.Fatalf("round 2 prompt missing %q:\n%s", want, reqs[1].Prompt)
+		}
+	}
+	status, err := b.SessionStatus(ctx, open.SessionID)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.ReviewContextSource != reviewContextSession || !status.ReviewContextPresent || status.Convergence.Signal != convergenceClose {
+		t.Fatalf("status context/convergence = %+v", status)
+	}
+	if status.Convergence.AcceptedDecisions != 1 || status.Convergence.DeclinedOrDeferredDecisions != 1 {
+		t.Fatalf("decision convergence counts = %+v", status.Convergence)
+	}
+}
+
+func TestOpenSessionUsesConfigReviewContext(t *testing.T) {
+	ctx := context.Background()
+	b := New(Options{
+		LogDestination: filepath.Join(t.TempDir(), "reviews"),
+		DefaultBudget:  1,
+		ReviewContext:  "config context",
+		Reviewers: []ReviewerSpec{{
+			Name:    "dummy",
+			Factory: func(string) reviewer.Reviewer { return newScriptedReviewer() },
+		}},
+	})
+	open, err := b.OpenSession(ctx, OpenSessionRequest{
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if open.ReviewContextSource != reviewContextConfig || !open.ReviewContextPresent {
+		t.Fatalf("review context metadata = %+v", open)
+	}
+}
+
 func TestBudgetExhaustion(t *testing.T) {
 	ctx := context.Background()
 	r := newScriptedReviewer(scriptedResponse{raw: validReviewOutput("ready_to_build")})
@@ -366,6 +475,58 @@ func TestMaxFindingsFailsRoundAtomically(t *testing.T) {
 	}
 	if status.LastError != nil {
 		t.Fatalf("last error after retry = %+v, want nil", status.LastError)
+	}
+}
+
+func TestMaxFindingsIgnoresAdvisoryNotes(t *testing.T) {
+	ctx := context.Background()
+	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithAdvisory(t, 1, 3)})
+	b := New(Options{
+		LogDestination: filepath.Join(t.TempDir(), "reviews"),
+		DefaultBudget:  1,
+		MaxFindings:    1,
+		Reviewers: []ReviewerSpec{{
+			Name:    "dummy",
+			Factory: func(string) reviewer.Reviewer { return r },
+		}},
+	})
+	open, err := b.OpenSession(ctx, OpenSessionRequest{
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	round, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
+	if err != nil {
+		t.Fatalf("round: %v", err)
+	}
+	if round.RoundNumber != 1 {
+		t.Fatalf("round = %+v", round)
+	}
+}
+
+func TestConvergenceWatchSignal(t *testing.T) {
+	ctx := context.Background()
+	r := newScriptedReviewer(
+		scriptedResponse{raw: reviewOutputWithFindingCounts(t, 3, 0)},
+		scriptedResponse{raw: reviewOutputWithFindingCounts(t, 1, 0)},
+	)
+	b := testBroker(t, r, 3)
+	open, err := b.OpenSession(ctx, OpenSessionRequest{
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID}); err != nil {
+		t.Fatalf("round 1: %v", err)
+	}
+	round2, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
+	if err != nil {
+		t.Fatalf("round 2: %v", err)
+	}
+	if round2.Convergence.Signal != convergenceWatch || round2.Convergence.LatestBlockingFindings != 1 || round2.Convergence.PreviousBlockingFindings != 3 {
+		t.Fatalf("convergence = %+v", round2.Convergence)
 	}
 }
 
@@ -834,10 +995,12 @@ func assertBrokerCode(t *testing.T, err error, code string) {
 
 func validReviewOutput(verdict string) json.RawMessage {
 	raw, err := json.Marshal(schema.ReviewOutput{
+		ReadyToShip:   verdict == "ready_to_build",
 		Verdict:       verdict,
 		Summary:       "reviewed",
 		Concerns:      []schema.Concern{},
 		Questions:     []schema.Question{},
+		AdvisoryNotes: []schema.AdvisoryNote{},
 		ProposedDiffs: []schema.ProposedDiff{},
 	})
 	if err != nil {
@@ -849,14 +1012,16 @@ func validReviewOutput(verdict string) json.RawMessage {
 func reviewOutputWithRefs() json.RawMessage {
 	suggestion := "clarify the work order"
 	raw, err := json.Marshal(schema.ReviewOutput{
-		Verdict: "needs_changes",
-		Summary: "reviewed",
+		ReadyToShip: false,
+		Verdict:     "needs_changes",
+		Summary:     "reviewed",
 		Concerns: []schema.Concern{
 			{ID: "C-1", Severity: "major", Location: "work-order:M3", Claim: "missing detail", Rationale: "implementation would diverge", Suggestion: &suggestion},
 		},
 		Questions: []schema.Question{
 			{ID: "Q-1", Topic: "budget", WhyItBlocks: "cannot judge loop length"},
 		},
+		AdvisoryNotes: []schema.AdvisoryNote{},
 		ProposedDiffs: []schema.ProposedDiff{},
 	})
 	if err != nil {
@@ -870,10 +1035,12 @@ func reviewOutputWithFindingCounts(t *testing.T, concernCount int, questionCount
 
 	suggestion := "tighten the artifact"
 	output := schema.ReviewOutput{
+		ReadyToShip:   false,
 		Verdict:       "needs_changes",
 		Summary:       "reviewed",
 		Concerns:      make([]schema.Concern, 0, concernCount),
 		Questions:     make([]schema.Question, 0, questionCount),
+		AdvisoryNotes: []schema.AdvisoryNote{},
 		ProposedDiffs: []schema.ProposedDiff{},
 	}
 	for i := 0; i < concernCount; i++ {
@@ -891,6 +1058,49 @@ func reviewOutputWithFindingCounts(t *testing.T, concernCount int, questionCount
 			ID:          "Q-" + strconv.Itoa(i+1),
 			Topic:       "scope",
 			WhyItBlocks: "cannot decide implementation shape",
+		})
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("marshal review output: %v", err)
+	}
+	return raw
+}
+
+func reviewOutputWithAdvisory(t *testing.T, concernCount int, advisoryCount int) json.RawMessage {
+	t.Helper()
+
+	suggestion := "tighten the artifact"
+	output := schema.ReviewOutput{
+		ReadyToShip:   concernCount == 0,
+		Verdict:       "ready_to_build",
+		Summary:       "reviewed",
+		Concerns:      make([]schema.Concern, 0, concernCount),
+		Questions:     []schema.Question{},
+		AdvisoryNotes: make([]schema.AdvisoryNote, 0, advisoryCount),
+		ProposedDiffs: []schema.ProposedDiff{},
+	}
+	if concernCount > 0 {
+		output.ReadyToShip = false
+		output.Verdict = "needs_changes"
+	}
+	for i := 0; i < concernCount; i++ {
+		output.Concerns = append(output.Concerns, schema.Concern{
+			ID:         "C-" + strconv.Itoa(i+1),
+			Severity:   "major",
+			Location:   "design",
+			Claim:      "missing detail",
+			Rationale:  "implementation would diverge",
+			Suggestion: &suggestion,
+		})
+	}
+	for i := 0; i < advisoryCount; i++ {
+		output.AdvisoryNotes = append(output.AdvisoryNotes, schema.AdvisoryNote{
+			ID:         "A-" + strconv.Itoa(i+1),
+			Location:   "design",
+			Note:       "polish note",
+			Rationale:  "useful but not blocking",
+			Suggestion: nil,
 		})
 	}
 	raw, err := json.Marshal(output)

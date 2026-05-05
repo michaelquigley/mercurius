@@ -81,10 +81,12 @@ func (r *Reviewer) Requests() []reviewer.ReviewRequest {
 
 func defaultRaw() json.RawMessage {
 	raw, err := json.Marshal(map[string]any{
+		"ready_to_ship":  true,
 		"verdict":        "ready_to_build",
 		"summary":        "dummy reviewer found no concerns.",
 		"concerns":       []any{},
 		"questions":      []any{},
+		"advisory_notes": []any{},
 		"proposed_diffs": []any{},
 	})
 	if err != nil {
