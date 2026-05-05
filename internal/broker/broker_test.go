@@ -10,7 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/michaelquigley/mercurius/internal/monitor"
 	"github.com/michaelquigley/mercurius/internal/reviewer"
 	"github.com/michaelquigley/mercurius/internal/roundlog"
 	"github.com/michaelquigley/mercurius/internal/schema"
@@ -27,6 +29,15 @@ func TestSessionRoundsNotesPriorDecisionsAndClose(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("open session: %v", err)
+	}
+	if open.Budget != 3 || open.BudgetRemaining != 3 || open.RoundsUsed != 0 {
+		t.Fatalf("unexpected open budget metadata: %+v", open)
+	}
+	if len(open.Reviewers) != 1 || open.Reviewers[0].Name != "dummy" {
+		t.Fatalf("unexpected open reviewers: %+v", open.Reviewers)
+	}
+	if len(open.Artifacts) != 1 || open.Artifacts[0].Name != "design" || open.Artifacts[0].SourcePath != design {
+		t.Fatalf("unexpected open artifacts: %+v", open.Artifacts)
 	}
 
 	round1, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
@@ -103,6 +114,9 @@ func TestSessionRoundsNotesPriorDecisionsAndClose(t *testing.T) {
 	if status.RoundsUsed != 2 || !status.Rounds[0].HasNotes || status.Rounds[0].DecisionCount != 1 {
 		t.Fatalf("unexpected status: %+v", status)
 	}
+	if status.BudgetRemaining != 1 || len(status.Reviewers) != 1 || len(status.Artifacts) != 1 || status.LastError != nil {
+		t.Fatalf("unexpected status diagnostics: %+v", status)
+	}
 
 	closed, err := b.CloseSession(ctx, CloseSessionRequest{SessionID: open.SessionID, Verdict: "ready_to_build"})
 	if err != nil {
@@ -130,6 +144,117 @@ func TestBudgetExhaustion(t *testing.T) {
 	}
 	_, err = b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
 	assertBrokerCode(t, err, CodeBudgetExhausted)
+}
+
+func TestAsyncReviewRoundLifecycle(t *testing.T) {
+	ctx := context.Background()
+	r := newBlockingReviewer(validReviewOutput("ready_to_build"))
+	b := testBroker(t, nil, 2)
+	b.reviewers["dummy"] = ReviewerSpec{Name: "dummy", Factory: func(string) reviewer.Reviewer { return r }}
+	b.reviewerList = []ReviewerSpec{{Name: "dummy", Factory: func(string) reviewer.Reviewer { return r }}}
+	open, err := b.OpenSession(ctx, OpenSessionRequest{
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	started, err := b.StartReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	if err != nil {
+		t.Fatalf("start round: %v", err)
+	}
+	if started.State != roundStateRunning || started.RoundNumber != 1 || started.MonitorCommand == "" {
+		t.Fatalf("start response = %+v", started)
+	}
+	waitStarted(t, r)
+
+	status, err := b.SessionStatus(ctx, open.SessionID)
+	if err != nil {
+		t.Fatalf("status while running: %v", err)
+	}
+	if status.ActiveRound == nil || status.ActiveRound.State != roundStateRunning || status.BudgetRemaining != 2 {
+		t.Fatalf("running status = %+v", status)
+	}
+	if _, err := os.Stat(started.StatusPath); err != nil {
+		t.Fatalf("expected status file: %v", err)
+	}
+	fileStatus, err := monitor.ReadStatus(started.StatusPath)
+	if err != nil {
+		t.Fatalf("read monitor status: %v", err)
+	}
+	if fileStatus.ActiveRound == nil || fileStatus.ActiveRound.RoundNumber != 1 {
+		t.Fatalf("file status = %+v", fileStatus)
+	}
+
+	_, err = b.StartReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	assertBrokerCode(t, err, CodeRoundInProgress)
+	_, err = b.CloseSession(ctx, CloseSessionRequest{SessionID: open.SessionID, Verdict: "paused"})
+	assertBrokerCode(t, err, CodeRoundInProgress)
+
+	r.release()
+	waitRoundState(t, b, open.SessionID, 1, roundStateCompleted)
+	collected, err := b.CollectRound(ctx, CollectRoundRequest{SessionID: open.SessionID, RoundNumber: 1})
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if collected.RoundNumber != 1 || collected.LogPath == "" {
+		t.Fatalf("collected = %+v", collected)
+	}
+	status, err = b.SessionStatus(ctx, open.SessionID)
+	if err != nil {
+		t.Fatalf("status after completion: %v", err)
+	}
+	if status.ActiveRound != nil || status.LastRoundJob == nil || status.LastRoundJob.State != roundStateCompleted || status.BudgetRemaining != 1 {
+		t.Fatalf("completed status = %+v", status)
+	}
+	events, err := monitor.ReadEvents(started.EventsPath)
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	if !hasEvent(events, "round_started") || !hasEvent(events, "reviewer_started") || !hasEvent(events, "round_completed") {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestReviewRoundContinuesAfterCallerContextExpires(t *testing.T) {
+	r := newBlockingReviewer(validReviewOutput("ready_to_build"))
+	b := New(Options{
+		LogDestination: filepath.Join(t.TempDir(), "reviews"),
+		DefaultBudget:  2,
+		Reviewers: []ReviewerSpec{{
+			Name:    "dummy",
+			Factory: func(string) reviewer.Reviewer { return r },
+		}},
+	})
+	open, err := b.OpenSession(context.Background(), OpenSessionRequest{
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+		done <- err
+	}()
+	waitStarted(t, r)
+	err = <-done
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("review round err = %v, want deadline", err)
+	}
+
+	r.release()
+	waitRoundState(t, b, open.SessionID, 1, roundStateCompleted)
+	collected, err := b.CollectRound(context.Background(), CollectRoundRequest{SessionID: open.SessionID, RoundNumber: 1})
+	if err != nil {
+		t.Fatalf("collect after caller timeout: %v", err)
+	}
+	if collected.RoundNumber != 1 {
+		t.Fatalf("collected = %+v", collected)
+	}
 }
 
 func TestAtomicFailuresReuseRoundAndBudget(t *testing.T) {
@@ -170,6 +295,12 @@ func TestAtomicFailuresReuseRoundAndBudget(t *testing.T) {
 			if status.RoundsUsed != 0 {
 				t.Fatalf("rounds used = %d, want 0", status.RoundsUsed)
 			}
+			if status.BudgetRemaining != 2 {
+				t.Fatalf("budget remaining = %d, want 2", status.BudgetRemaining)
+			}
+			if status.LastError == nil || status.LastError.Code != test.code || !status.LastError.Retryable {
+				t.Fatalf("last error = %+v, want retryable %s", status.LastError, test.code)
+			}
 
 			round, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
 			if err != nil {
@@ -178,7 +309,68 @@ func TestAtomicFailuresReuseRoundAndBudget(t *testing.T) {
 			if round.RoundNumber != 1 {
 				t.Fatalf("round number after failure = %d, want 1", round.RoundNumber)
 			}
+			status, err = b.SessionStatus(ctx, open.SessionID)
+			if err != nil {
+				t.Fatalf("status after successful retry: %v", err)
+			}
+			if status.LastError != nil {
+				t.Fatalf("last error after successful retry = %+v, want nil", status.LastError)
+			}
 		})
+	}
+}
+
+func TestMaxFindingsFailsRoundAtomically(t *testing.T) {
+	ctx := context.Background()
+	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithFindingCounts(t, 1, 1)}, scriptedResponse{raw: validReviewOutput("ready_to_build")})
+	b := New(Options{
+		LogDestination: filepath.Join(t.TempDir(), "reviews"),
+		DefaultBudget:  2,
+		MaxFindings:    1,
+		Reviewers: []ReviewerSpec{{
+			Name:    "dummy",
+			Factory: func(string) reviewer.Reviewer { return r },
+		}},
+	})
+	open, err := b.OpenSession(ctx, OpenSessionRequest{
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	_, err = b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	assertBrokerCode(t, err, CodeSchemaViolation)
+	if _, err := os.Stat(filepath.Join(open.SessionDir, "round-01.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected no round log, got err=%v", err)
+	}
+	status, err := b.SessionStatus(ctx, open.SessionID)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.RoundsUsed != 0 || status.BudgetRemaining != 2 {
+		t.Fatalf("status after max findings failure = %+v", status)
+	}
+	if status.LastError == nil || status.LastError.Code != CodeSchemaViolation {
+		t.Fatalf("last error = %+v, want schema violation", status.LastError)
+	}
+	if status.LastError.Details["max_findings"] != 1 || status.LastError.Details["findings"] != 2 {
+		t.Fatalf("last error details = %+v", status.LastError.Details)
+	}
+
+	round, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	if err != nil {
+		t.Fatalf("round after max findings failure: %v", err)
+	}
+	if round.RoundNumber != 1 {
+		t.Fatalf("round number after max findings failure = %d, want 1", round.RoundNumber)
+	}
+	status, err = b.SessionStatus(ctx, open.SessionID)
+	if err != nil {
+		t.Fatalf("status after retry: %v", err)
+	}
+	if status.LastError != nil {
+		t.Fatalf("last error after retry = %+v, want nil", status.LastError)
 	}
 }
 
@@ -200,6 +392,13 @@ func TestArtifactOverrideUpdatesOnlyAfterSuccessfulRound(t *testing.T) {
 		Artifacts: []Artifact{{Name: "design", Path: override}},
 	})
 	assertBrokerCode(t, err, CodeReviewerFailed)
+	status, err := b.SessionStatus(ctx, open.SessionID)
+	if err != nil {
+		t.Fatalf("status after failed override: %v", err)
+	}
+	if status.LastError == nil || status.LastError.Code != CodeReviewerFailed {
+		t.Fatalf("last error = %+v, want reviewer failure", status.LastError)
+	}
 
 	round, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
 	if err != nil {
@@ -207,6 +406,39 @@ func TestArtifactOverrideUpdatesOnlyAfterSuccessfulRound(t *testing.T) {
 	}
 	if round.Manifest[0].SourcePath != original {
 		t.Fatalf("expected original artifact after failed override, got %s", round.Manifest[0].SourcePath)
+	}
+	status, err = b.SessionStatus(ctx, open.SessionID)
+	if err != nil {
+		t.Fatalf("status after successful round: %v", err)
+	}
+	if status.LastError != nil {
+		t.Fatalf("last error after successful round = %+v, want nil", status.LastError)
+	}
+}
+
+func TestListReviewers(t *testing.T) {
+	ctx := context.Background()
+	b := New(Options{
+		LogDestination: filepath.Join(t.TempDir(), "reviews"),
+		DefaultBudget:  1,
+		Reviewers: []ReviewerSpec{
+			{Name: "codex", Impl: "codex", Model: "gpt-test", Factory: func(string) reviewer.Reviewer { return newScriptedReviewer() }},
+			{Name: "dummy", Impl: "dummy", Factory: func(string) reviewer.Reviewer { return newScriptedReviewer() }},
+		},
+	})
+
+	response, err := b.ListReviewers(ctx)
+	if err != nil {
+		t.Fatalf("list reviewers: %v", err)
+	}
+	if len(response.Reviewers) != 2 {
+		t.Fatalf("reviewers = %+v", response.Reviewers)
+	}
+	if response.Reviewers[0].Name != "codex" || response.Reviewers[0].Model != "gpt-test" {
+		t.Fatalf("first reviewer = %+v", response.Reviewers[0])
+	}
+	if response.Reviewers[1].Name != "dummy" || response.Reviewers[1].Impl != "dummy" {
+		t.Fatalf("second reviewer = %+v", response.Reviewers[1])
 	}
 }
 
@@ -401,6 +633,69 @@ func (r *scriptedReviewer) requests() []reviewer.ReviewRequest {
 	return requests
 }
 
+type blockingReviewer struct {
+	started  chan struct{}
+	releaseC chan struct{}
+	once     sync.Once
+	raw      json.RawMessage
+}
+
+func newBlockingReviewer(raw json.RawMessage) *blockingReviewer {
+	return &blockingReviewer{
+		started:  make(chan struct{}),
+		releaseC: make(chan struct{}),
+		raw:      append(json.RawMessage(nil), raw...),
+	}
+}
+
+func (r *blockingReviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (reviewer.ReviewResponse, error) {
+	r.once.Do(func() { close(r.started) })
+	select {
+	case <-r.releaseC:
+		return reviewer.ReviewResponse{Raw: append(json.RawMessage(nil), r.raw...), UsageNotes: "blocking"}, nil
+	case <-ctx.Done():
+		return reviewer.ReviewResponse{}, ctx.Err()
+	}
+}
+
+func (r *blockingReviewer) release() {
+	close(r.releaseC)
+}
+
+func waitStarted(t *testing.T, r *blockingReviewer) {
+	t.Helper()
+	select {
+	case <-r.started:
+	case <-time.After(time.Second):
+		t.Fatal("reviewer did not start")
+	}
+}
+
+func waitRoundState(t *testing.T, b *Broker, sessionID string, roundNumber int, state string) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		status, err := b.RoundStatus(context.Background(), RoundStatusRequest{SessionID: sessionID, RoundNumber: roundNumber})
+		if err == nil && status.State == state {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("round did not reach state %s; last status=%+v err=%v", state, status, err)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func hasEvent(events []monitor.Event, name string) bool {
+	for _, event := range events {
+		if event.Event == name {
+			return true
+		}
+	}
+	return false
+}
+
 func testBroker(t *testing.T, r *scriptedReviewer, budget int) *Broker {
 	t.Helper()
 
@@ -540,6 +835,41 @@ func reviewOutputWithRefs() json.RawMessage {
 	})
 	if err != nil {
 		panic(err)
+	}
+	return raw
+}
+
+func reviewOutputWithFindingCounts(t *testing.T, concernCount int, questionCount int) json.RawMessage {
+	t.Helper()
+
+	suggestion := "tighten the artifact"
+	output := schema.ReviewOutput{
+		Verdict:       "needs_changes",
+		Summary:       "reviewed",
+		Concerns:      make([]schema.Concern, 0, concernCount),
+		Questions:     make([]schema.Question, 0, questionCount),
+		ProposedDiffs: []schema.ProposedDiff{},
+	}
+	for i := 0; i < concernCount; i++ {
+		output.Concerns = append(output.Concerns, schema.Concern{
+			ID:         "C-" + strconv.Itoa(i+1),
+			Severity:   "major",
+			Location:   "design",
+			Claim:      "missing detail",
+			Rationale:  "implementation would diverge",
+			Suggestion: &suggestion,
+		})
+	}
+	for i := 0; i < questionCount; i++ {
+		output.Questions = append(output.Questions, schema.Question{
+			ID:          "Q-" + strconv.Itoa(i+1),
+			Topic:       "scope",
+			WhyItBlocks: "cannot decide implementation shape",
+		})
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("marshal review output: %v", err)
 	}
 	return raw
 }

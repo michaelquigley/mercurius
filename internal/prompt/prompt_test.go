@@ -66,6 +66,23 @@ func TestBuildRendersPromptOverridesAndPriorDecisions(t *testing.T) {
 	}
 }
 
+func TestBuildIncludesFindingBudget(t *testing.T) {
+	prompt, schema := Build(Request{MaxFindings: 3})
+
+	for _, want := range []string{
+		"## Finding budget",
+		"Return at most 3 total findings",
+		`"maxItems": 3`,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected prompt to contain %q", want)
+		}
+	}
+	if !strings.Contains(string(schema), `"maxItems":3`) {
+		t.Fatalf("expected schema to contain maxItems, got %s", string(schema))
+	}
+}
+
 func TestBuildUsesDynamicArtifactFences(t *testing.T) {
 	prompt, _ := Build(Request{
 		Artifacts: []Artifact{

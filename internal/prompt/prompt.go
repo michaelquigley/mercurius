@@ -25,6 +25,7 @@ type Request struct {
 	Artifacts       []Artifact
 	PriorDecisions  []reviewer.PriorDecision
 	PromptOverrides string
+	MaxFindings     int
 }
 
 // Build assembles the standard review prompt and schema payload.
@@ -82,14 +83,19 @@ func Build(req Request) (string, json.RawMessage) {
 	b.WriteString("- `minor`: small issues that can be fixed in passing without a round of revision.\n\n")
 	b.WriteString("A `verdict` of `ready_to_build` requires that all `concerns` are `minor` (or the `concerns` array is empty). Returning `ready_to_build` alongside any `blocker` or `major` concern is a contradiction; do not produce one.\n\n")
 
+	if req.MaxFindings > 0 {
+		b.WriteString("## Finding budget\n\n")
+		b.WriteString(fmt.Sprintf("Return at most %d total findings across `concerns` and `questions` combined. Prioritize blockers and major concerns first, then the highest-leverage minor concerns or blocking questions. Do not pad the output to fill the budget.\n\n", req.MaxFindings))
+	}
+
 	b.WriteString("## Output\n\n")
 	b.WriteString("Respond with a single JSON object only. No prose before or after, no markdown fence, no commentary outside the object. Your response must conform exactly to this schema:\n\n")
 	b.WriteString("```json\n")
-	b.WriteString(prettySchema())
+	b.WriteString(prettySchema(req.MaxFindings))
 	b.WriteString("\n```\n\n")
 	b.WriteString("Required fields must be present even when empty (e.g., `concerns: []`). Do not include fields not defined in the schema.\n")
 
-	return b.String(), schema.ReviewOutputSchema()
+	return b.String(), schema.ReviewOutputSchemaWithMaxFindings(req.MaxFindings)
 }
 
 func writeArtifact(b *strings.Builder, artifact Artifact) {
@@ -132,8 +138,8 @@ func dynamicFence(content []byte) string {
 	return strings.Repeat("`", longest+1)
 }
 
-func prettySchema() string {
-	raw := schema.ReviewOutputSchema()
+func prettySchema(maxFindings int) string {
+	raw := schema.ReviewOutputSchemaWithMaxFindings(maxFindings)
 	var out bytes.Buffer
 	if err := json.Indent(&out, raw, "", "  "); err != nil {
 		return string(raw)

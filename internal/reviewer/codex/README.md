@@ -27,7 +27,9 @@ The assembled `ReviewRequest.Prompt` is sent on stdin. The temp directory is rem
 
 The reviewer reads `last-message.json`, strips conventional wrappers when necessary, and returns the first plausible JSON object as `ReviewResponse.Raw`. It accepts direct JSON, fenced JSON, or JSON surrounded by stray prose. It does not validate the object against the Mercurius review schema.
 
-If Codex exits unsuccessfully, the reviewer returns an error that includes captured stdout and stderr. If Codex succeeds but no JSON object can be extracted, the reviewer returns a normal reviewer error.
+If Codex exits unsuccessfully after writing a usable `last-message.json`, the reviewer returns that recovered output and marks `UsageNotes` with `recovered_last_message_after_error='true'`. This handles client-side timeout or cancellation races where Codex has produced the substantive response but is killed before its process exits cleanly.
+
+If Codex exits unsuccessfully and no JSON object can be recovered, the reviewer returns an error that includes captured stdout and stderr. If Codex succeeds but no JSON object can be extracted, the reviewer returns a normal reviewer error.
 
 ## Integration Test
 

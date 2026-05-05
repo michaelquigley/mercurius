@@ -57,6 +57,35 @@ func ReviewOutputSchema() json.RawMessage {
 	return append(json.RawMessage(nil), reviewOutputSchemaBytes()...)
 }
 
+// ReviewOutputSchemaWithMaxFindings returns the review schema with per-array hints.
+func ReviewOutputSchemaWithMaxFindings(maxFindings int) json.RawMessage {
+	raw := ReviewOutputSchema()
+	if maxFindings <= 0 {
+		return raw
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return raw
+	}
+	properties, ok := doc["properties"].(map[string]any)
+	if !ok {
+		return raw
+	}
+	for _, name := range []string{"concerns", "questions"} {
+		array, ok := properties[name].(map[string]any)
+		if !ok {
+			return raw
+		}
+		array["maxItems"] = maxFindings
+	}
+	limited, err := json.Marshal(doc)
+	if err != nil {
+		return raw
+	}
+	return limited
+}
+
 // ValidateReviewOutput validates raw reviewer output against the canonical schema.
 func ValidateReviewOutput(raw json.RawMessage) error {
 	compiled, err := reviewOutputSchema()
@@ -85,6 +114,23 @@ func ParseReviewOutput(raw json.RawMessage) (ReviewOutput, error) {
 		return ReviewOutput{}, fmt.Errorf("parse review output: %w", err)
 	}
 	return output, nil
+}
+
+// FindingCount returns the number of concern and question findings.
+func FindingCount(output ReviewOutput) int {
+	return len(output.Concerns) + len(output.Questions)
+}
+
+// ValidateFindingLimit checks the configured total findings cap.
+func ValidateFindingLimit(output ReviewOutput, maxFindings int) error {
+	if maxFindings <= 0 {
+		return nil
+	}
+	count := FindingCount(output)
+	if count <= maxFindings {
+		return nil
+	}
+	return fmt.Errorf("review output has %d findings (concerns=%d, questions=%d), maximum is %d", count, len(output.Concerns), len(output.Questions), maxFindings)
 }
 
 func reviewOutputSchema() (*jsonschema.Schema, error) {

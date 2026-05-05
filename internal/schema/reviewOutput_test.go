@@ -206,3 +206,43 @@ func TestParseReviewOutput(t *testing.T) {
 		t.Fatalf("unexpected parsed output: %+v", output)
 	}
 }
+
+func TestReviewOutputSchemaWithMaxFindings(t *testing.T) {
+	raw := ReviewOutputSchemaWithMaxFindings(2)
+
+	var doc struct {
+		Properties map[string]struct {
+			MaxItems int `json:"maxItems"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal schema: %v", err)
+	}
+	if doc.Properties["concerns"].MaxItems != 2 {
+		t.Fatalf("concerns maxItems = %d, want 2", doc.Properties["concerns"].MaxItems)
+	}
+	if doc.Properties["questions"].MaxItems != 2 {
+		t.Fatalf("questions maxItems = %d, want 2", doc.Properties["questions"].MaxItems)
+	}
+	if doc.Properties["proposed_diffs"].MaxItems != 0 {
+		t.Fatalf("proposed_diffs maxItems = %d, want unset", doc.Properties["proposed_diffs"].MaxItems)
+	}
+}
+
+func TestValidateFindingLimit(t *testing.T) {
+	output := ReviewOutput{
+		Concerns:  []Concern{{ID: "C-1"}, {ID: "C-2"}},
+		Questions: []Question{{ID: "Q-1"}},
+	}
+
+	if err := ValidateFindingLimit(output, 3); err != nil {
+		t.Fatalf("expected valid finding count: %v", err)
+	}
+	err := ValidateFindingLimit(output, 2)
+	if err == nil {
+		t.Fatal("expected finding limit error")
+	}
+	if !strings.Contains(err.Error(), "maximum is 2") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

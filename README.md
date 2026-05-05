@@ -58,6 +58,7 @@ Minimal config:
 name: my-project
 log_destination: ./reviews
 default_budget: 4
+max_findings: 10
 prompt_overrides: |
   Add project-specific review guidance here.
 reviewers:
@@ -86,13 +87,23 @@ Example MCP client configuration:
 Tools exposed:
 
 - `open_session`
+- `start_review_round`
 - `review_round`
+- `round_status`
+- `collect_round`
 - `record_round_notes`
 - `close_session`
 - `session_status`
+- `list_reviewers`
 - `list_sessions`
 
-Manual smoke path: connect an MCP client, call `open_session` with absolute artifact paths for `docs/design.md` and `docs/work-order.md`, call `review_round`, record commentary with `record_round_notes`, then close with `close_session`.
+Manual smoke path: connect an MCP client, call `open_session` with absolute artifact paths for `docs/design.md` and `docs/work-order.md`, call `start_review_round`, monitor it with:
+
+```sh
+mercurius monitor --config /absolute/path/to/mercurius.yaml --session <session_id> --wait
+```
+
+When the round completes, call `collect_round`, record commentary with `record_round_notes`, then close with `close_session`.
 
 ## License
 

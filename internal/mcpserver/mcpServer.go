@@ -32,9 +32,14 @@ type OpenSessionInput struct {
 }
 
 type OpenSessionOutput struct {
-	SessionID string `json:"session_id"`
-	OpenedAt  string `json:"opened_at"`
-	Budget    int    `json:"budget"`
+	SessionID       string                     `json:"session_id"`
+	OpenedAt        string                     `json:"opened_at"`
+	Budget          int                        `json:"budget"`
+	BudgetRemaining int                        `json:"budget_remaining"`
+	MaxFindings     int                        `json:"max_findings"`
+	RoundsUsed      int                        `json:"rounds_used"`
+	Reviewers       []ReviewerInfoOutput       `json:"reviewers"`
+	Artifacts       []RegisteredArtifactOutput `json:"artifacts"`
 }
 
 type ReviewRoundInput struct {
@@ -48,6 +53,46 @@ type ReviewRoundOutput struct {
 	Manifest    []ManifestEntryOutput `json:"manifest"`
 	Reviewers   []ReviewerOutput      `json:"reviewers"`
 	NextAction  string                `json:"next_action"`
+}
+
+type StartReviewRoundOutput struct {
+	SessionID      string `json:"session_id"`
+	RoundNumber    int    `json:"round_number"`
+	State          string `json:"state"`
+	Reviewer       string `json:"reviewer"`
+	StartedAt      string `json:"started_at"`
+	StatusPath     string `json:"status_path"`
+	EventsPath     string `json:"events_path"`
+	MonitorCommand string `json:"monitor_command"`
+	NextAction     string `json:"next_action"`
+}
+
+type RoundStatusInput struct {
+	SessionID   string `json:"session_id,omitempty"`
+	RoundNumber int    `json:"round_number,omitempty"`
+}
+
+type RoundJobOutput struct {
+	SessionID   string       `json:"session_id"`
+	RoundNumber int          `json:"round_number"`
+	State       string       `json:"state"`
+	Reviewer    string       `json:"reviewer"`
+	StartedAt   string       `json:"started_at"`
+	UpdatedAt   string       `json:"updated_at"`
+	CompletedAt *string      `json:"completed_at"`
+	LogPath     string       `json:"log_path,omitempty"`
+	StatusPath  string       `json:"status_path"`
+	EventsPath  string       `json:"events_path"`
+	Error       *ErrorOutput `json:"error"`
+}
+
+type RoundStatusToolOutput struct {
+	Round RoundJobOutput `json:"round"`
+}
+
+type CollectRoundInput struct {
+	SessionID   string `json:"session_id,omitempty"`
+	RoundNumber int    `json:"round_number,omitempty"`
 }
 
 type ManifestEntryOutput struct {
@@ -101,14 +146,21 @@ type SessionStatusInput struct {
 }
 
 type SessionStatusOutput struct {
-	SessionID  string              `json:"session_id"`
-	State      string              `json:"state"`
-	Verdict    *string             `json:"verdict"`
-	OpenedAt   string              `json:"opened_at"`
-	ClosedAt   *string             `json:"closed_at"`
-	Budget     int                 `json:"budget"`
-	RoundsUsed int                 `json:"rounds_used"`
-	Rounds     []RoundStatusOutput `json:"rounds"`
+	SessionID       string                     `json:"session_id"`
+	State           string                     `json:"state"`
+	Verdict         *string                    `json:"verdict"`
+	OpenedAt        string                     `json:"opened_at"`
+	ClosedAt        *string                    `json:"closed_at"`
+	Budget          int                        `json:"budget"`
+	BudgetRemaining int                        `json:"budget_remaining"`
+	MaxFindings     int                        `json:"max_findings"`
+	RoundsUsed      int                        `json:"rounds_used"`
+	Reviewers       []ReviewerInfoOutput       `json:"reviewers"`
+	Artifacts       []RegisteredArtifactOutput `json:"artifacts"`
+	LastError       *ErrorOutput               `json:"last_error"`
+	ActiveRound     *RoundJobOutput            `json:"active_round"`
+	LastRoundJob    *RoundJobOutput            `json:"last_round_job"`
+	Rounds          []RoundStatusOutput        `json:"rounds"`
 }
 
 type RoundStatusOutput struct {
@@ -131,10 +183,34 @@ type SessionSummaryOutput struct {
 	RoundsUsed int     `json:"rounds_used"`
 }
 
-type errorData struct {
-	Code    string         `json:"code"`
-	Message string         `json:"message"`
-	Details map[string]any `json:"details"`
+type ListReviewersOutput struct {
+	Reviewers []ReviewerInfoOutput `json:"reviewers"`
+}
+
+type ReviewerInfoOutput struct {
+	Name       string `json:"name"`
+	Impl       string `json:"impl"`
+	Model      string `json:"model,omitempty"`
+	Selectable bool   `json:"selectable,omitempty"`
+}
+
+type RegisteredArtifactOutput struct {
+	Name       string `json:"name"`
+	SourcePath string `json:"source_path"`
+	Inline     bool   `json:"inline"`
+}
+
+type ToolErrorOutput struct {
+	Error ErrorOutput `json:"error"`
+}
+
+type ErrorOutput struct {
+	Code       string         `json:"code"`
+	Message    string         `json:"message"`
+	Details    map[string]any `json:"details"`
+	Retryable  bool           `json:"retryable"`
+	NextAction string         `json:"next_action"`
+	At         string         `json:"at,omitempty"`
 }
 
 // New creates a configured MCP server and its backing broker.
@@ -164,7 +240,9 @@ func BrokerOptions(cfg *config.Config) (broker.Options, error) {
 
 	options := broker.Options{
 		LogDestination:  cfg.LogDestination,
+		ConfigPath:      cfg.ConfigPath,
 		DefaultBudget:   cfg.DefaultBudget,
+		MaxFindings:     cfg.MaxFindings,
 		PromptOverrides: cfg.PromptOverrides,
 		Reviewers:       make([]broker.ReviewerSpec, 0, len(cfg.Reviewers)),
 	}
@@ -186,7 +264,7 @@ func BrokerOptions(cfg *config.Config) (broker.Options, error) {
 func RegisterTools(server *mcp.Server, b *broker.Broker) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "open_session",
-		Description: "start a new Mercurius review session",
+		Description: "start a new Mercurius review session. artifacts must use unique safe names and absolute paths readable by the Mercurius server. budget defaults to the project default_budget when omitted. the response includes the configured max_findings cap for each review round.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input OpenSessionInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.OpenSession(ctx, broker.OpenSessionRequest{
 			Artifacts: artifactsFromInput(input.Artifacts),
@@ -194,18 +272,23 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 			Budget:    input.Budget,
 		})
 		if err != nil {
-			return nil, nil, rpcError(err)
+			return toolErrorResult(err)
 		}
 		return nil, OpenSessionOutput{
-			SessionID: response.SessionID,
-			OpenedAt:  formatTime(response.OpenedAt),
-			Budget:    response.Budget,
+			SessionID:       response.SessionID,
+			OpenedAt:        formatTime(response.OpenedAt),
+			Budget:          response.Budget,
+			BudgetRemaining: response.BudgetRemaining,
+			MaxFindings:     response.MaxFindings,
+			RoundsUsed:      response.RoundsUsed,
+			Reviewers:       reviewerInfoOutput(response.Reviewers, false),
+			Artifacts:       registeredArtifactOutput(response.Artifacts),
 		}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "review_round",
-		Description: "run one review round for an active Mercurius session. after this tool returns, pause: summarize the review for the user and ask whether to record notes, revise artifacts, or continue; do not immediately call another Mercurius tool unless the user explicitly asks you to continue",
+		Description: "run one review round for an active Mercurius session. optional artifact overrides must use absolute paths readable by the Mercurius server. reviewer output is capped by the session max_findings value. failed rounds do not consume budget. after this tool returns, pause: summarize the review for the user and ask whether to record notes, revise artifacts, or continue; do not immediately call another Mercurius tool unless the user explicitly asks you to continue",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input ReviewRoundInput) (*mcp.CallToolResult, any, error) {
 		var artifacts []broker.Artifact
 		if input.Artifacts != nil {
@@ -216,7 +299,69 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 			Artifacts: artifacts,
 		})
 		if err != nil {
-			return nil, nil, rpcError(err)
+			return toolErrorResult(err)
+		}
+		return nil, ReviewRoundOutput{
+			RoundNumber: response.RoundNumber,
+			LogPath:     response.LogPath,
+			Manifest:    manifestOutput(response.Manifest),
+			Reviewers:   reviewerOutput(response.Reviewers),
+			NextAction:  "pause and ask the user how to proceed before recording notes or starting another review round",
+		}, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "start_review_round",
+		Description: "start one review round in the background and return immediately. use this for real reviews that may outlive the MCP client timeout; tell the user to run monitor_command and re-engage when the round completes.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input ReviewRoundInput) (*mcp.CallToolResult, any, error) {
+		var artifacts []broker.Artifact
+		if input.Artifacts != nil {
+			artifacts = artifactsFromInput(input.Artifacts)
+		}
+		response, err := b.StartReviewRound(ctx, broker.ReviewRoundRequest{
+			SessionID: input.SessionID,
+			Artifacts: artifacts,
+		})
+		if err != nil {
+			return toolErrorResult(err)
+		}
+		return nil, StartReviewRoundOutput{
+			SessionID:      response.SessionID,
+			RoundNumber:    response.RoundNumber,
+			State:          response.State,
+			Reviewer:       response.Reviewer,
+			StartedAt:      formatTime(response.StartedAt),
+			StatusPath:     response.StatusPath,
+			EventsPath:     response.EventsPath,
+			MonitorCommand: response.MonitorCommand,
+			NextAction:     response.NextAction,
+		}, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "round_status",
+		Description: "return status for a running or completed Mercurius review round. omit round_number to inspect the active or latest round.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RoundStatusInput) (*mcp.CallToolResult, any, error) {
+		response, err := b.RoundStatus(ctx, broker.RoundStatusRequest{
+			SessionID:   input.SessionID,
+			RoundNumber: input.RoundNumber,
+		})
+		if err != nil {
+			return toolErrorResult(err)
+		}
+		return nil, RoundStatusToolOutput{Round: roundJobOutput(response)}, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "collect_round",
+		Description: "return a completed review round result. if the round is still running, pause and tell the user to keep monitoring instead of retrying immediately.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input CollectRoundInput) (*mcp.CallToolResult, any, error) {
+		response, err := b.CollectRound(ctx, broker.CollectRoundRequest{
+			SessionID:   input.SessionID,
+			RoundNumber: input.RoundNumber,
+		})
+		if err != nil {
+			return toolErrorResult(err)
 		}
 		return nil, ReviewRoundOutput{
 			RoundNumber: response.RoundNumber,
@@ -238,7 +383,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 			Decisions:   decisionsFromInput(input.Decisions),
 		})
 		if err != nil {
-			return nil, nil, rpcError(err)
+			return toolErrorResult(err)
 		}
 		return nil, RecordRoundNotesOutput{
 			RoundNumber:        response.RoundNumber,
@@ -258,7 +403,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 			Verdict:   input.Verdict,
 		})
 		if err != nil {
-			return nil, nil, rpcError(err)
+			return toolErrorResult(err)
 		}
 		return nil, CloseSessionOutput{
 			SessionID: response.SessionID,
@@ -273,7 +418,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input SessionStatusInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.SessionStatus(ctx, input.SessionID)
 		if err != nil {
-			return nil, nil, rpcError(err)
+			return toolErrorResult(err)
 		}
 		return nil, sessionStatusOutput(response), nil
 	})
@@ -284,9 +429,22 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.ListSessions(ctx)
 		if err != nil {
-			return nil, nil, rpcError(err)
+			return toolErrorResult(err)
 		}
 		return nil, listSessionsOutput(response), nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "list_reviewers",
+		Description: "list reviewer names configured for this Mercurius server. use these names in open_session.reviewers when the config has multiple reviewers.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
+		response, err := b.ListReviewers(ctx)
+		if err != nil {
+			return toolErrorResult(err)
+		}
+		return nil, ListReviewersOutput{
+			Reviewers: reviewerInfoOutput(response.Reviewers, true),
+		}, nil
 	})
 }
 
@@ -297,7 +455,9 @@ func reviewerSpec(cfg *config.ReviewerConfig) (broker.ReviewerSpec, error) {
 		model := cfg.Model
 		extraArgs := append([]string(nil), cfg.ExtraArgs...)
 		return broker.ReviewerSpec{
-			Name: cfg.Name,
+			Name:  cfg.Name,
+			Impl:  cfg.Impl,
+			Model: cfg.Model,
 			Factory: func(sessionDir string) reviewer.Reviewer {
 				return codex.New(codex.Options{
 					BinaryPath: binaryPath,
@@ -309,7 +469,9 @@ func reviewerSpec(cfg *config.ReviewerConfig) (broker.ReviewerSpec, error) {
 		}, nil
 	case "dummy":
 		return broker.ReviewerSpec{
-			Name: cfg.Name,
+			Name:  cfg.Name,
+			Impl:  cfg.Impl,
+			Model: cfg.Model,
 			Factory: func(string) reviewer.Reviewer {
 				return dummy.New()
 			},
@@ -331,6 +493,26 @@ func rpcError(err error) error {
 	return wireError(jsonrpc.CodeInternalError, broker.CodeInternalError, "internal error", nil, err)
 }
 
+func toolErrorResult(err error) (*mcp.CallToolResult, any, error) {
+	var brokerErr *broker.Error
+	if !errors.As(err, &brokerErr) {
+		return nil, nil, rpcError(err)
+	}
+
+	output := errorOutput(broker.ErrorInfoFrom(err))
+	text := fmt.Sprintf("%s: %s\nnext_action: %s", output.Code, output.Message, output.NextAction)
+	if cause, ok := output.Details["cause"].(string); ok && cause != "" {
+		text += "\ncause: " + cause
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: text},
+		},
+		StructuredContent: ToolErrorOutput{Error: output},
+		IsError:           true,
+	}, nil, nil
+}
+
 func wireError(code int64, stableCode string, message string, details map[string]any, cause error) *jsonrpc.Error {
 	payloadDetails := map[string]any{}
 	for key, value := range details {
@@ -340,13 +522,17 @@ func wireError(code int64, stableCode string, message string, details map[string
 		payloadDetails["cause"] = cause.Error()
 	}
 
-	raw, err := json.Marshal(errorData{
-		Code:    stableCode,
-		Message: message,
-		Details: payloadDetails,
+	raw, err := json.Marshal(ToolErrorOutput{
+		Error: ErrorOutput{
+			Code:       stableCode,
+			Message:    message,
+			Details:    payloadDetails,
+			Retryable:  broker.Retryable(stableCode),
+			NextAction: broker.NextAction(stableCode),
+		},
 	})
 	if err != nil {
-		raw = json.RawMessage(`{"code":"internal_error","message":"internal error","details":{"cause":"error payload marshal failed"}}`)
+		raw = json.RawMessage(`{"error":{"code":"internal_error","message":"internal error","details":{"cause":"error payload marshal failed"},"retryable":false,"next_action":"inspect details and escalate if the issue is not clear"}}`)
 	}
 	return &jsonrpc.Error{
 		Code:    code,
@@ -406,14 +592,45 @@ func reviewerOutput(results []broker.ReviewerResult) []ReviewerOutput {
 
 func sessionStatusOutput(status broker.SessionStatusResponse) SessionStatusOutput {
 	return SessionStatusOutput{
-		SessionID:  status.SessionID,
-		State:      status.State,
-		Verdict:    cloneString(status.Verdict),
-		OpenedAt:   formatTime(status.OpenedAt),
-		ClosedAt:   formatTimePtr(status.ClosedAt),
-		Budget:     status.Budget,
-		RoundsUsed: status.RoundsUsed,
-		Rounds:     roundStatusOutput(status.Rounds),
+		SessionID:       status.SessionID,
+		State:           status.State,
+		Verdict:         cloneString(status.Verdict),
+		OpenedAt:        formatTime(status.OpenedAt),
+		ClosedAt:        formatTimePtr(status.ClosedAt),
+		Budget:          status.Budget,
+		BudgetRemaining: status.BudgetRemaining,
+		MaxFindings:     status.MaxFindings,
+		RoundsUsed:      status.RoundsUsed,
+		Reviewers:       reviewerInfoOutput(status.Reviewers, false),
+		Artifacts:       registeredArtifactOutput(status.Artifacts),
+		LastError:       errorOutputPtr(status.LastError),
+		ActiveRound:     roundJobOutputPtr(status.ActiveRound),
+		LastRoundJob:    roundJobOutputPtr(status.LastRoundJob),
+		Rounds:          roundStatusOutput(status.Rounds),
+	}
+}
+
+func roundJobOutputPtr(status *broker.RoundStatusResponse) *RoundJobOutput {
+	if status == nil {
+		return nil
+	}
+	out := roundJobOutput(*status)
+	return &out
+}
+
+func roundJobOutput(status broker.RoundStatusResponse) RoundJobOutput {
+	return RoundJobOutput{
+		SessionID:   status.SessionID,
+		RoundNumber: status.RoundNumber,
+		State:       status.State,
+		Reviewer:    status.Reviewer,
+		StartedAt:   formatTime(status.StartedAt),
+		UpdatedAt:   formatTime(status.UpdatedAt),
+		CompletedAt: formatTimePtr(status.CompletedAt),
+		LogPath:     status.LogPath,
+		StatusPath:  status.StatusPath,
+		EventsPath:  status.EventsPath,
+		Error:       errorOutputPtr(status.Error),
 	}
 }
 
@@ -445,8 +662,68 @@ func listSessionsOutput(response broker.ListSessionsResponse) ListSessionsOutput
 	return ListSessionsOutput{Sessions: sessions}
 }
 
+func reviewerInfoOutput(reviewers []broker.ReviewerInfo, selectable bool) []ReviewerInfoOutput {
+	out := make([]ReviewerInfoOutput, 0, len(reviewers))
+	for _, reviewer := range reviewers {
+		out = append(out, ReviewerInfoOutput{
+			Name:       reviewer.Name,
+			Impl:       reviewer.Impl,
+			Model:      reviewer.Model,
+			Selectable: selectable,
+		})
+	}
+	return out
+}
+
+func registeredArtifactOutput(artifacts []broker.RegisteredArtifact) []RegisteredArtifactOutput {
+	out := make([]RegisteredArtifactOutput, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		out = append(out, RegisteredArtifactOutput{
+			Name:       artifact.Name,
+			SourcePath: artifact.SourcePath,
+			Inline:     artifact.Inline,
+		})
+	}
+	return out
+}
+
+func errorOutputPtr(info *broker.ErrorInfo) *ErrorOutput {
+	if info == nil {
+		return nil
+	}
+	out := errorOutput(info)
+	return &out
+}
+
+func errorOutput(info *broker.ErrorInfo) ErrorOutput {
+	if info == nil {
+		return ErrorOutput{
+			Code:       broker.CodeInternalError,
+			Message:    "internal error",
+			Details:    map[string]any{},
+			Retryable:  broker.Retryable(broker.CodeInternalError),
+			NextAction: broker.NextAction(broker.CodeInternalError),
+		}
+	}
+	return ErrorOutput{
+		Code:       info.Code,
+		Message:    info.Message,
+		Details:    cloneDetails(info.Details),
+		Retryable:  info.Retryable,
+		NextAction: info.NextAction,
+		At:         formatTimeOptional(info.At),
+	}
+}
+
 func formatTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
+}
+
+func formatTimeOptional(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return formatTime(t)
 }
 
 func formatTimePtr(t *time.Time) *string {
@@ -463,4 +740,12 @@ func cloneString(s *string) *string {
 	}
 	v := *s
 	return &v
+}
+
+func cloneDetails(details map[string]any) map[string]any {
+	out := map[string]any{}
+	for key, value := range details {
+		out[key] = value
+	}
+	return out
 }

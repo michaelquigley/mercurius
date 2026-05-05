@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/michaelquigley/mercurius/internal/monitor"
 	"github.com/michaelquigley/mercurius/internal/prompt"
 	"github.com/michaelquigley/mercurius/internal/reviewer"
 	"github.com/michaelquigley/mercurius/internal/roundlog"
@@ -24,19 +25,24 @@ import (
 )
 
 const (
-	defaultBudget = 4
-	stateActive   = "active"
-	stateClosed   = "closed"
+	defaultBudget       = 4
+	defaultMaxFindings  = 10
+	stateActive         = "active"
+	stateClosed         = "closed"
+	roundStateRunning   = "running"
+	roundStateCompleted = "completed"
+	roundStateFailed    = "failed"
 )
 
 var safeArtifactName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // Broker orchestrates in-memory sessions and review rounds.
 type Broker struct {
-	mu        sync.Mutex
-	options   Options
-	reviewers map[string]ReviewerSpec
-	sessions  map[string]*session
+	mu           sync.Mutex
+	options      Options
+	reviewers    map[string]ReviewerSpec
+	reviewerList []ReviewerSpec
+	sessions     map[string]*session
 }
 
 type session struct {
@@ -47,11 +53,16 @@ type session struct {
 	openedAt        time.Time
 	closedAt        *time.Time
 	budget          int
+	maxFindings     int
 	artifacts       []Artifact
 	reviewerName    string
+	reviewerInfo    ReviewerInfo
 	reviewer        reviewer.Reviewer
 	rounds          []*round
 	promptOverrides string
+	lastError       *ErrorInfo
+	activeJob       *roundJob
+	lastRoundJob    *roundJob
 }
 
 type round struct {
@@ -72,19 +83,47 @@ type snapshotResult struct {
 	snapshotDir       string
 }
 
+type roundJob struct {
+	sessionID       string
+	sessionDir      string
+	roundNumber     int
+	state           string
+	reviewerName    string
+	reviewer        reviewer.Reviewer
+	artifacts       []Artifact
+	hasOverride     bool
+	priorDecisions  []reviewer.PriorDecision
+	promptOverrides string
+	maxFindings     int
+	startedAt       time.Time
+	updatedAt       time.Time
+	completedAt     *time.Time
+	logPath         string
+	statusPath      string
+	eventsPath      string
+	result          ReviewRoundResponse
+	err             error
+	errorInfo       *ErrorInfo
+	done            chan struct{}
+}
+
 // New creates an in-memory broker.
 func New(options Options) *Broker {
 	if options.DefaultBudget == 0 {
 		options.DefaultBudget = defaultBudget
+	}
+	if options.MaxFindings <= 0 {
+		options.MaxFindings = defaultMaxFindings
 	}
 	reviewers := make(map[string]ReviewerSpec, len(options.Reviewers))
 	for _, spec := range options.Reviewers {
 		reviewers[spec.Name] = spec
 	}
 	return &Broker{
-		options:   options,
-		reviewers: reviewers,
-		sessions:  map[string]*session{},
+		options:      options,
+		reviewers:    reviewers,
+		reviewerList: append([]ReviewerSpec(nil), options.Reviewers...),
+		sessions:     map[string]*session{},
 	}
 }
 
@@ -130,28 +169,323 @@ func (b *Broker) OpenSession(ctx context.Context, req OpenSessionRequest) (OpenS
 	}
 
 	openedAt := time.Now().UTC()
-	b.sessions[id] = &session{
+	s := &session{
 		id:              id,
 		dir:             dir,
 		state:           stateActive,
 		openedAt:        openedAt,
 		budget:          budget,
+		maxFindings:     b.options.MaxFindings,
 		artifacts:       artifacts,
 		reviewerName:    spec.Name,
+		reviewerInfo:    reviewerInfo(spec),
 		reviewer:        reviewerImpl,
 		promptOverrides: b.options.PromptOverrides,
 	}
+	b.sessions[id] = s
+
+	if err := b.appendEventLocked(s, monitor.Event{
+		At:        openedAt,
+		Event:     "session_opened",
+		SessionID: id,
+		State:     stateActive,
+	}); err != nil {
+		delete(b.sessions, id)
+		_ = os.RemoveAll(dir)
+		return OpenSessionResponse{}, brokerError(CodeInternalError, "write session event", err, nil)
+	}
+	if err := b.persistSessionLocked(s); err != nil {
+		delete(b.sessions, id)
+		_ = os.RemoveAll(dir)
+		return OpenSessionResponse{}, brokerError(CodeInternalError, "write session status", err, nil)
+	}
 
 	return OpenSessionResponse{
-		SessionID:  id,
-		SessionDir: dir,
-		OpenedAt:   openedAt,
-		Budget:     budget,
+		SessionID:       id,
+		SessionDir:      dir,
+		OpenedAt:        openedAt,
+		Budget:          budget,
+		BudgetRemaining: budget,
+		MaxFindings:     b.options.MaxFindings,
+		RoundsUsed:      0,
+		Reviewers:       []ReviewerInfo{reviewerInfo(spec)},
+		Artifacts:       registeredArtifacts(artifacts),
 	}, nil
 }
 
-// ReviewRound snapshots artifacts, dispatches the reviewer, validates, and logs.
+// StartReviewRound starts a background review round.
+func (b *Broker) StartReviewRound(ctx context.Context, req ReviewRoundRequest) (StartReviewRoundResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return StartReviewRoundResponse{}, err
+	}
+
+	b.mu.Lock()
+
+	s, err := b.session(req.SessionID)
+	if err != nil {
+		b.mu.Unlock()
+		return StartReviewRoundResponse{}, err
+	}
+	if s.state == stateClosed {
+		err := brokerError(CodeSessionClosed, "session is closed", nil, map[string]any{"session_id": req.SessionID})
+		s.recordError(err)
+		_ = b.persistSessionLocked(s)
+		b.mu.Unlock()
+		return StartReviewRoundResponse{}, err
+	}
+	if s.activeJob != nil {
+		err := brokerError(CodeRoundInProgress, "a review round is already running", nil, map[string]any{
+			"session_id":   req.SessionID,
+			"round_number": s.activeJob.roundNumber,
+		})
+		s.recordError(err)
+		_ = b.persistSessionLocked(s)
+		b.mu.Unlock()
+		return StartReviewRoundResponse{}, err
+	}
+	if len(s.rounds) >= s.budget {
+		err := brokerError(CodeBudgetExhausted, "session budget is exhausted", nil, map[string]any{"session_id": req.SessionID, "budget": s.budget})
+		s.recordError(err)
+		_ = b.persistSessionLocked(s)
+		b.mu.Unlock()
+		return StartReviewRoundResponse{}, err
+	}
+
+	artifacts := cloneArtifacts(s.artifacts)
+	hasOverride := req.Artifacts != nil
+	if hasOverride {
+		validated, err := validateArtifacts(req.Artifacts)
+		if err != nil {
+			err := brokerError(CodeInvalidArtifacts, "invalid artifact override", err, nil)
+			s.recordError(err)
+			_ = b.persistSessionLocked(s)
+			b.mu.Unlock()
+			return StartReviewRoundResponse{}, err
+		}
+		artifacts = validated
+	}
+
+	roundNumber := len(s.rounds) + 1
+	startedAt := time.Now().UTC()
+	job := &roundJob{
+		sessionID:       s.id,
+		sessionDir:      s.dir,
+		roundNumber:     roundNumber,
+		state:           roundStateRunning,
+		reviewerName:    s.reviewerName,
+		reviewer:        s.reviewer,
+		artifacts:       artifacts,
+		hasOverride:     hasOverride,
+		priorDecisions:  s.priorDecisions(),
+		promptOverrides: s.promptOverrides,
+		maxFindings:     s.maxFindings,
+		startedAt:       startedAt,
+		updatedAt:       startedAt,
+		statusPath:      monitor.StatusPath(s.dir),
+		eventsPath:      monitor.EventsPath(s.dir),
+		done:            make(chan struct{}),
+	}
+	s.activeJob = job
+	s.lastRoundJob = job
+	s.lastError = nil
+	if err := b.appendEventLocked(s, monitor.Event{
+		At:          startedAt,
+		Event:       "round_started",
+		SessionID:   s.id,
+		RoundNumber: roundNumber,
+		Reviewer:    s.reviewerName,
+		State:       roundStateRunning,
+	}); err != nil {
+		s.activeJob = nil
+		s.lastRoundJob = nil
+		s.recordError(brokerError(CodeInternalError, "write round event", err, nil))
+		_ = b.persistSessionLocked(s)
+		b.mu.Unlock()
+		return StartReviewRoundResponse{}, brokerError(CodeInternalError, "write round event", err, nil)
+	}
+	if err := b.persistSessionLocked(s); err != nil {
+		s.activeJob = nil
+		s.lastRoundJob = nil
+		s.recordError(brokerError(CodeInternalError, "write session status", err, nil))
+		_ = b.persistSessionLocked(s)
+		b.mu.Unlock()
+		return StartReviewRoundResponse{}, brokerError(CodeInternalError, "write session status", err, nil)
+	}
+	response := StartReviewRoundResponse{
+		SessionID:      s.id,
+		RoundNumber:    roundNumber,
+		State:          roundStateRunning,
+		Reviewer:       s.reviewerName,
+		StartedAt:      startedAt,
+		StatusPath:     job.statusPath,
+		EventsPath:     job.eventsPath,
+		MonitorCommand: b.monitorCommand(s.id),
+		NextAction:     "tell the user this review is running; they can monitor it with the monitor_command and re-engage you when the round completes",
+	}
+	b.mu.Unlock()
+
+	go b.runRound(job)
+	return response, nil
+}
+
+// ReviewRound starts a round and waits for completion while the request lives.
 func (b *Broker) ReviewRound(ctx context.Context, req ReviewRoundRequest) (ReviewRoundResponse, error) {
+	started, err := b.StartReviewRound(ctx, req)
+	if err != nil {
+		return ReviewRoundResponse{}, err
+	}
+
+	done, err := b.roundDone(started.SessionID, started.RoundNumber)
+	if err != nil {
+		return ReviewRoundResponse{}, err
+	}
+	select {
+	case <-done:
+		return b.CollectRound(context.Background(), CollectRoundRequest{
+			SessionID:   started.SessionID,
+			RoundNumber: started.RoundNumber,
+		})
+	case <-ctx.Done():
+		return ReviewRoundResponse{}, ctx.Err()
+	}
+}
+
+func (b *Broker) runRound(job *roundJob) {
+	b.markRoundEvent(job, "artifacts_snapshotting", "")
+
+	snapshots, err := snapshotArtifacts(job.sessionDir, job.roundNumber, job.artifacts)
+	if err != nil {
+		cleanupSnapshot(snapshots.snapshotDir)
+		b.finishRoundFailure(job, brokerError(CodeInvalidArtifacts, "snapshot artifacts", err, nil))
+		return
+	}
+	b.markRoundEvent(job, "artifacts_snapshotted", "")
+
+	promptText, schemaBytes := prompt.Build(prompt.Request{
+		Artifacts:       snapshots.promptArtifacts,
+		PriorDecisions:  job.priorDecisions,
+		PromptOverrides: job.promptOverrides,
+		MaxFindings:     job.maxFindings,
+	})
+
+	b.markRoundEvent(job, "reviewer_started", "")
+	resp, err := job.reviewer.Review(context.Background(), reviewer.ReviewRequest{
+		Prompt:    promptText,
+		Artifacts: snapshots.reviewerArtifacts,
+		Schema:    schemaBytes,
+		SessionMeta: reviewer.SessionMetadata{
+			SessionID:      job.sessionID,
+			RoundNumber:    job.roundNumber,
+			PriorDecisions: job.priorDecisions,
+		},
+	})
+	if err != nil {
+		cleanupSnapshot(snapshots.snapshotDir)
+		b.finishRoundFailure(job, brokerError(CodeReviewerFailed, "reviewer failed", err, map[string]any{"reviewer": job.reviewerName}))
+		return
+	}
+	b.markRoundEvent(job, "reviewer_completed", "")
+
+	output, err := schema.ParseReviewOutput(resp.Raw)
+	if err != nil {
+		cleanupSnapshot(snapshots.snapshotDir)
+		err := brokerError(CodeSchemaViolation, "reviewer output failed schema validation", err, map[string]any{
+			"reviewer": job.reviewerName,
+			"raw":      string(resp.Raw),
+		})
+		b.finishRoundFailure(job, err)
+		return
+	}
+	if err := schema.ValidateFindingLimit(output, job.maxFindings); err != nil {
+		cleanupSnapshot(snapshots.snapshotDir)
+		err := brokerError(CodeSchemaViolation, "reviewer output exceeded max findings", err, map[string]any{
+			"reviewer":     job.reviewerName,
+			"max_findings": job.maxFindings,
+			"findings":     schema.FindingCount(output),
+			"concerns":     len(output.Concerns),
+			"questions":    len(output.Questions),
+			"raw":          string(resp.Raw),
+		})
+		b.finishRoundFailure(job, err)
+		return
+	}
+
+	logPath := filepath.Join(job.sessionDir, fmt.Sprintf("round-%02d.md", job.roundNumber))
+	results := []ReviewerResult{{
+		ReviewerName: job.reviewerName,
+		Raw:          append(json.RawMessage(nil), resp.Raw...),
+		UsageNotes:   resp.UsageNotes,
+	}}
+	if err := roundlog.WriteInitial(logPath, roundlog.Entry{
+		SessionID:   job.sessionID,
+		RoundNumber: job.roundNumber,
+		OpenedAt:    job.startedAt,
+		Verdict:     output.Verdict,
+		Manifest:    toRoundlogManifest(snapshots.manifest),
+		Reviewers:   toRoundlogReviewers(results),
+	}); err != nil {
+		cleanupSnapshot(snapshots.snapshotDir)
+		b.finishRoundFailure(job, brokerError(CodeInternalError, "write round log", err, map[string]any{"log_path": logPath}))
+		return
+	}
+
+	b.finishRoundSuccess(job, ReviewRoundResponse{
+		RoundNumber: job.roundNumber,
+		LogPath:     logPath,
+		Manifest:    cloneManifest(snapshots.manifest),
+		Reviewers:   cloneResults(results),
+	}, refsFromOutput(output))
+}
+
+// RoundStatus returns a background round status.
+func (b *Broker) RoundStatus(ctx context.Context, req RoundStatusRequest) (RoundStatusResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return RoundStatusResponse{}, err
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	s, err := b.session(req.SessionID)
+	if err != nil {
+		return RoundStatusResponse{}, err
+	}
+	roundNumber := req.RoundNumber
+	if roundNumber == 0 {
+		if s.activeJob != nil {
+			roundNumber = s.activeJob.roundNumber
+		} else if s.lastRoundJob != nil {
+			roundNumber = s.lastRoundJob.roundNumber
+		} else if len(s.rounds) > 0 {
+			roundNumber = s.rounds[len(s.rounds)-1].number
+		}
+	}
+	if s.activeJob != nil && s.activeJob.roundNumber == roundNumber {
+		return s.activeJob.status(), nil
+	}
+	if s.lastRoundJob != nil && s.lastRoundJob.roundNumber == roundNumber {
+		return s.lastRoundJob.status(), nil
+	}
+	if round := s.findRound(roundNumber); round != nil {
+		completedAt := round.openedAt
+		return RoundStatusResponse{
+			SessionID:   s.id,
+			RoundNumber: round.number,
+			State:       roundStateCompleted,
+			Reviewer:    s.reviewerName,
+			StartedAt:   round.openedAt,
+			UpdatedAt:   round.openedAt,
+			CompletedAt: &completedAt,
+			LogPath:     round.logPath,
+			StatusPath:  monitor.StatusPath(s.dir),
+			EventsPath:  monitor.EventsPath(s.dir),
+		}, nil
+	}
+	return RoundStatusResponse{}, brokerError(CodeUnknownRound, "round not found", nil, map[string]any{"round_number": req.RoundNumber})
+}
+
+// CollectRound returns a completed round response.
+func (b *Broker) CollectRound(ctx context.Context, req CollectRoundRequest) (ReviewRoundResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return ReviewRoundResponse{}, err
 	}
@@ -163,98 +497,151 @@ func (b *Broker) ReviewRound(ctx context.Context, req ReviewRoundRequest) (Revie
 	if err != nil {
 		return ReviewRoundResponse{}, err
 	}
-	if s.state == stateClosed {
-		return ReviewRoundResponse{}, brokerError(CodeSessionClosed, "session is closed", nil, map[string]any{"session_id": req.SessionID})
-	}
-	if len(s.rounds) >= s.budget {
-		return ReviewRoundResponse{}, brokerError(CodeBudgetExhausted, "session budget is exhausted", nil, map[string]any{"session_id": req.SessionID, "budget": s.budget})
-	}
-
-	artifacts := cloneArtifacts(s.artifacts)
-	hasOverride := req.Artifacts != nil
-	if hasOverride {
-		validated, err := validateArtifacts(req.Artifacts)
-		if err != nil {
-			return ReviewRoundResponse{}, brokerError(CodeInvalidArtifacts, "invalid artifact override", err, nil)
+	roundNumber := req.RoundNumber
+	if roundNumber == 0 {
+		if s.activeJob != nil {
+			roundNumber = s.activeJob.roundNumber
+		} else if s.lastRoundJob != nil {
+			roundNumber = s.lastRoundJob.roundNumber
+		} else if len(s.rounds) > 0 {
+			roundNumber = s.rounds[len(s.rounds)-1].number
 		}
-		artifacts = validated
 	}
-
-	roundNumber := len(s.rounds) + 1
-	snapshots, err := snapshotArtifacts(s.dir, roundNumber, artifacts)
-	if err != nil {
-		cleanupSnapshot(snapshots.snapshotDir)
-		return ReviewRoundResponse{}, brokerError(CodeInvalidArtifacts, "snapshot artifacts", err, nil)
-	}
-
-	promptText, schemaBytes := prompt.Build(prompt.Request{
-		Artifacts:       snapshots.promptArtifacts,
-		PriorDecisions:  s.priorDecisions(),
-		PromptOverrides: s.promptOverrides,
-	})
-
-	resp, err := s.reviewer.Review(ctx, reviewer.ReviewRequest{
-		Prompt:    promptText,
-		Artifacts: snapshots.reviewerArtifacts,
-		Schema:    schemaBytes,
-		SessionMeta: reviewer.SessionMetadata{
-			SessionID:      s.id,
-			RoundNumber:    roundNumber,
-			PriorDecisions: s.priorDecisions(),
-		},
-	})
-	if err != nil {
-		cleanupSnapshot(snapshots.snapshotDir)
-		return ReviewRoundResponse{}, brokerError(CodeReviewerFailed, "reviewer failed", err, map[string]any{"reviewer": s.reviewerName})
-	}
-
-	output, err := schema.ParseReviewOutput(resp.Raw)
-	if err != nil {
-		cleanupSnapshot(snapshots.snapshotDir)
-		return ReviewRoundResponse{}, brokerError(CodeSchemaViolation, "reviewer output failed schema validation", err, map[string]any{
-			"reviewer": s.reviewerName,
-			"raw":      string(resp.Raw),
+	if s.activeJob != nil && s.activeJob.roundNumber == roundNumber {
+		return ReviewRoundResponse{}, brokerError(CodeRoundInProgress, "round is still running", nil, map[string]any{
+			"session_id":   req.SessionID,
+			"round_number": roundNumber,
+			"status_path":  s.activeJob.statusPath,
+			"events_path":  s.activeJob.eventsPath,
 		})
 	}
-
-	openedAt := time.Now().UTC()
-	logPath := filepath.Join(s.dir, fmt.Sprintf("round-%02d.md", roundNumber))
-	results := []ReviewerResult{{
-		ReviewerName: s.reviewerName,
-		Raw:          append(json.RawMessage(nil), resp.Raw...),
-		UsageNotes:   resp.UsageNotes,
-	}}
-	if err := roundlog.WriteInitial(logPath, roundlog.Entry{
-		SessionID:   s.id,
-		RoundNumber: roundNumber,
-		OpenedAt:    openedAt,
-		Verdict:     output.Verdict,
-		Manifest:    toRoundlogManifest(snapshots.manifest),
-		Reviewers:   toRoundlogReviewers(results),
-	}); err != nil {
-		cleanupSnapshot(snapshots.snapshotDir)
-		return ReviewRoundResponse{}, brokerError(CodeInternalError, "write round log", err, map[string]any{"log_path": logPath})
+	if s.lastRoundJob != nil && s.lastRoundJob.roundNumber == roundNumber {
+		if s.lastRoundJob.state == roundStateFailed {
+			return ReviewRoundResponse{}, s.lastRoundJob.err
+		}
+		if s.lastRoundJob.state == roundStateCompleted {
+			return cloneReviewRoundResponse(s.lastRoundJob.result), nil
+		}
 	}
+	if round := s.findRound(roundNumber); round != nil {
+		return ReviewRoundResponse{
+			RoundNumber: round.number,
+			LogPath:     round.logPath,
+			Manifest:    cloneManifest(round.manifest),
+			Reviewers:   cloneResults(round.results),
+		}, nil
+	}
+	return ReviewRoundResponse{}, brokerError(CodeUnknownRound, "round not found", nil, map[string]any{"round_number": req.RoundNumber})
+}
 
-	if hasOverride {
-		s.artifacts = artifacts
+func (b *Broker) roundDone(sessionID string, roundNumber int) (<-chan struct{}, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	s, err := b.session(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if s.activeJob != nil && s.activeJob.roundNumber == roundNumber {
+		return s.activeJob.done, nil
+	}
+	if s.lastRoundJob != nil && s.lastRoundJob.roundNumber == roundNumber {
+		return s.lastRoundJob.done, nil
+	}
+	done := make(chan struct{})
+	close(done)
+	return done, nil
+}
+
+func (b *Broker) finishRoundSuccess(job *roundJob, response ReviewRoundResponse, refs map[string]struct{}) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	s, err := b.session(job.sessionID)
+	if err != nil {
+		job.finish(roundStateFailed, "", err)
+		close(job.done)
+		return
 	}
 	round := &round{
-		number:   roundNumber,
-		openedAt: openedAt,
-		logPath:  logPath,
-		manifest: cloneManifest(snapshots.manifest),
-		results:  cloneResults(results),
-		refs:     refsFromOutput(output),
+		number:   job.roundNumber,
+		openedAt: job.startedAt,
+		logPath:  response.LogPath,
+		manifest: cloneManifest(response.Manifest),
+		results:  cloneResults(response.Reviewers),
+		refs:     refs,
+	}
+	if job.hasOverride {
+		s.artifacts = cloneArtifacts(job.artifacts)
 	}
 	s.rounds = append(s.rounds, round)
+	s.lastError = nil
+	job.result = cloneReviewRoundResponse(response)
+	job.finish(roundStateCompleted, response.LogPath, nil)
+	s.activeJob = nil
+	s.lastRoundJob = job
+	_ = b.appendEventLocked(s, monitor.Event{
+		At:          job.updatedAt,
+		Event:       "round_completed",
+		SessionID:   job.sessionID,
+		RoundNumber: job.roundNumber,
+		Reviewer:    job.reviewerName,
+		State:       roundStateCompleted,
+		LogPath:     response.LogPath,
+	})
+	_ = b.persistSessionLocked(s)
+	close(job.done)
+}
 
-	return ReviewRoundResponse{
-		RoundNumber: roundNumber,
+func (b *Broker) finishRoundFailure(job *roundJob, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	s, sessionErr := b.session(job.sessionID)
+	if sessionErr != nil {
+		job.finish(roundStateFailed, "", sessionErr)
+		close(job.done)
+		return
+	}
+	job.finish(roundStateFailed, "", err)
+	s.recordError(err)
+	s.activeJob = nil
+	s.lastRoundJob = job
+	_ = b.appendEventLocked(s, monitor.Event{
+		At:          job.updatedAt,
+		Event:       "round_failed",
+		SessionID:   job.sessionID,
+		RoundNumber: job.roundNumber,
+		Reviewer:    job.reviewerName,
+		State:       roundStateFailed,
+		Error:       monitorErrorInfo(job.errorInfo),
+	})
+	_ = b.persistSessionLocked(s)
+	close(job.done)
+}
+
+func (b *Broker) markRoundEvent(job *roundJob, event string, logPath string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	s, err := b.session(job.sessionID)
+	if err != nil {
+		return
+	}
+	job.updatedAt = time.Now().UTC()
+	if logPath != "" {
+		job.logPath = logPath
+	}
+	_ = b.appendEventLocked(s, monitor.Event{
+		At:          job.updatedAt,
+		Event:       event,
+		SessionID:   job.sessionID,
+		RoundNumber: job.roundNumber,
+		Reviewer:    job.reviewerName,
+		State:       job.state,
 		LogPath:     logPath,
-		Manifest:    cloneManifest(snapshots.manifest),
-		Reviewers:   cloneResults(results),
-	}, nil
+	})
+	_ = b.persistSessionLocked(s)
 }
 
 // RecordRoundNotes replaces a round's commentary and decisions.
@@ -272,27 +659,58 @@ func (b *Broker) RecordRoundNotes(ctx context.Context, req RecordRoundNotesReque
 	}
 	round := s.findRound(req.RoundNumber)
 	if round == nil {
-		return RecordRoundNotesResponse{}, brokerError(CodeUnknownRound, "round not found", nil, map[string]any{"round_number": req.RoundNumber})
+		err := brokerError(CodeUnknownRound, "round not found", nil, map[string]any{"round_number": req.RoundNumber})
+		s.recordError(err)
+		return RecordRoundNotesResponse{}, err
 	}
 	if strings.TrimSpace(req.Commentary) == "" && len(req.Decisions) == 0 {
-		return RecordRoundNotesResponse{}, brokerError(CodeEmptyNotes, "commentary and decisions are empty", nil, nil)
+		err := brokerError(CodeEmptyNotes, "commentary and decisions are empty", nil, nil)
+		s.recordError(err)
+		return RecordRoundNotesResponse{}, err
 	}
 
 	decisions := cloneDecisions(req.Decisions)
 	for _, decision := range decisions {
 		if _, ok := round.refs[decision.Ref]; !ok {
-			return RecordRoundNotesResponse{}, brokerError(CodeUnknownRef, "decision ref is unknown", nil, map[string]any{"ref": decision.Ref})
+			err := brokerError(CodeUnknownRef, "decision ref is unknown", nil, map[string]any{"ref": decision.Ref})
+			s.recordError(err)
+			return RecordRoundNotesResponse{}, err
 		}
 		if !validDisposition(decision.Disposition) {
-			return RecordRoundNotesResponse{}, brokerError(CodeInvalidDecision, "decision disposition is invalid", nil, map[string]any{"disposition": decision.Disposition})
+			err := brokerError(CodeInvalidDecision, "decision disposition is invalid", nil, map[string]any{"disposition": decision.Disposition})
+			s.recordError(err)
+			return RecordRoundNotesResponse{}, err
 		}
 	}
 
 	if err := roundlog.UpdateNotes(round.logPath, req.Commentary, toRoundlogDecisions(decisions)); err != nil {
-		return RecordRoundNotesResponse{}, brokerError(CodeInternalError, "update round notes", err, map[string]any{"log_path": round.logPath})
+		err := brokerError(CodeInternalError, "update round notes", err, map[string]any{"log_path": round.logPath})
+		s.recordError(err)
+		_ = b.persistSessionLocked(s)
+		return RecordRoundNotesResponse{}, err
 	}
 	round.hasNotes = true
 	round.decisions = decisions
+	s.lastError = nil
+	now := time.Now().UTC()
+	if err := b.appendEventLocked(s, monitor.Event{
+		At:          now,
+		Event:       "notes_recorded",
+		SessionID:   s.id,
+		RoundNumber: req.RoundNumber,
+		State:       s.state,
+		LogPath:     round.logPath,
+	}); err != nil {
+		err := brokerError(CodeInternalError, "write notes event", err, nil)
+		s.recordError(err)
+		_ = b.persistSessionLocked(s)
+		return RecordRoundNotesResponse{}, err
+	}
+	if err := b.persistSessionLocked(s); err != nil {
+		err := brokerError(CodeInternalError, "write session status", err, nil)
+		s.recordError(err)
+		return RecordRoundNotesResponse{}, err
+	}
 
 	return RecordRoundNotesResponse{
 		RoundNumber:        req.RoundNumber,
@@ -316,16 +734,48 @@ func (b *Broker) CloseSession(ctx context.Context, req CloseSessionRequest) (Clo
 		return CloseSessionResponse{}, err
 	}
 	if s.state == stateClosed {
-		return CloseSessionResponse{}, brokerError(CodeAlreadyClosed, "session is already closed", nil, map[string]any{"session_id": req.SessionID})
+		err := brokerError(CodeAlreadyClosed, "session is already closed", nil, map[string]any{"session_id": req.SessionID})
+		s.recordError(err)
+		_ = b.persistSessionLocked(s)
+		return CloseSessionResponse{}, err
+	}
+	if s.activeJob != nil {
+		err := brokerError(CodeRoundInProgress, "a review round is still running", nil, map[string]any{
+			"session_id":   req.SessionID,
+			"round_number": s.activeJob.roundNumber,
+		})
+		s.recordError(err)
+		_ = b.persistSessionLocked(s)
+		return CloseSessionResponse{}, err
 	}
 	if !validCloseVerdict(req.Verdict) {
-		return CloseSessionResponse{}, brokerError(CodeInvalidVerdict, "session verdict is invalid", nil, map[string]any{"verdict": req.Verdict})
+		err := brokerError(CodeInvalidVerdict, "session verdict is invalid", nil, map[string]any{"verdict": req.Verdict})
+		s.recordError(err)
+		_ = b.persistSessionLocked(s)
+		return CloseSessionResponse{}, err
 	}
 
 	closedAt := time.Now().UTC()
 	s.state = stateClosed
 	s.verdict = &req.Verdict
 	s.closedAt = &closedAt
+	s.lastError = nil
+	if err := b.appendEventLocked(s, monitor.Event{
+		At:        closedAt,
+		Event:     "session_closed",
+		SessionID: s.id,
+		State:     stateClosed,
+	}); err != nil {
+		err := brokerError(CodeInternalError, "write session event", err, nil)
+		s.recordError(err)
+		_ = b.persistSessionLocked(s)
+		return CloseSessionResponse{}, err
+	}
+	if err := b.persistSessionLocked(s); err != nil {
+		err := brokerError(CodeInternalError, "write session status", err, nil)
+		s.recordError(err)
+		return CloseSessionResponse{}, err
+	}
 
 	return CloseSessionResponse{
 		SessionID: s.id,
@@ -373,6 +823,22 @@ func (b *Broker) ListSessions(ctx context.Context) (ListSessionsResponse, error)
 		return strings.Compare(a.SessionID, b.SessionID)
 	})
 	return ListSessionsResponse{Sessions: summaries}, nil
+}
+
+// ListReviewers returns configured reviewer metadata.
+func (b *Broker) ListReviewers(ctx context.Context) (ListReviewersResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return ListReviewersResponse{}, err
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	reviewers := make([]ReviewerInfo, 0, len(b.reviewerList))
+	for _, spec := range b.reviewerList {
+		reviewers = append(reviewers, reviewerInfo(spec))
+	}
+	return ListReviewersResponse{Reviewers: reviewers}, nil
 }
 
 func (b *Broker) session(id string) (*session, error) {
@@ -457,15 +923,84 @@ func (s *session) status() SessionStatusResponse {
 		})
 	}
 	return SessionStatusResponse{
-		SessionID:  s.id,
-		State:      s.state,
-		Verdict:    cloneStringPtr(s.verdict),
-		OpenedAt:   s.openedAt,
-		ClosedAt:   cloneTimePtr(s.closedAt),
-		Budget:     s.budget,
-		RoundsUsed: len(s.rounds),
-		Rounds:     rounds,
+		SessionID:       s.id,
+		State:           s.state,
+		Verdict:         cloneStringPtr(s.verdict),
+		OpenedAt:        s.openedAt,
+		ClosedAt:        cloneTimePtr(s.closedAt),
+		Budget:          s.budget,
+		BudgetRemaining: s.budget - len(s.rounds),
+		MaxFindings:     s.maxFindings,
+		RoundsUsed:      len(s.rounds),
+		Reviewers:       []ReviewerInfo{s.reviewerInfo},
+		Artifacts:       registeredArtifacts(s.artifacts),
+		LastError:       cloneErrorInfo(s.lastError),
+		ActiveRound:     jobStatusPtr(s.activeJob),
+		LastRoundJob:    jobStatusPtr(s.lastRoundJob),
+		Rounds:          rounds,
 	}
+}
+
+func (b *Broker) persistSessionLocked(s *session) error {
+	return monitor.WriteStatus(monitor.StatusPath(s.dir), monitorSessionStatus(s.status()))
+}
+
+func (b *Broker) appendEventLocked(s *session, event monitor.Event) error {
+	return monitor.AppendEvent(monitor.EventsPath(s.dir), event)
+}
+
+func (b *Broker) monitorCommand(sessionID string) string {
+	if b.options.ConfigPath == "" {
+		return fmt.Sprintf("mercurius monitor --session %s --wait", sessionID)
+	}
+	return fmt.Sprintf("mercurius monitor --config %s --session %s --wait", b.options.ConfigPath, sessionID)
+}
+
+func (s *session) recordError(err error) {
+	info := ErrorInfoFrom(err)
+	if info == nil {
+		s.lastError = nil
+		return
+	}
+	info.At = time.Now().UTC()
+	s.lastError = info
+}
+
+func (j *roundJob) finish(state string, logPath string, err error) {
+	now := time.Now().UTC()
+	j.state = state
+	j.updatedAt = now
+	j.completedAt = &now
+	j.logPath = logPath
+	j.err = err
+	j.errorInfo = ErrorInfoFrom(err)
+	if j.errorInfo != nil {
+		j.errorInfo.At = now
+	}
+}
+
+func (j *roundJob) status() RoundStatusResponse {
+	return RoundStatusResponse{
+		SessionID:   j.sessionID,
+		RoundNumber: j.roundNumber,
+		State:       j.state,
+		Reviewer:    j.reviewerName,
+		StartedAt:   j.startedAt,
+		UpdatedAt:   j.updatedAt,
+		CompletedAt: cloneTimePtr(j.completedAt),
+		LogPath:     j.logPath,
+		StatusPath:  j.statusPath,
+		EventsPath:  j.eventsPath,
+		Error:       cloneErrorInfo(j.errorInfo),
+	}
+}
+
+func jobStatusPtr(job *roundJob) *RoundStatusResponse {
+	if job == nil {
+		return nil
+	}
+	status := job.status()
+	return &status
 }
 
 func validateArtifacts(artifacts []Artifact) ([]Artifact, error) {
@@ -647,6 +1182,135 @@ func cloneArtifacts(artifacts []Artifact) []Artifact {
 		out = append(out, artifact)
 	}
 	return out
+}
+
+func registeredArtifacts(artifacts []Artifact) []RegisteredArtifact {
+	out := make([]RegisteredArtifact, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		out = append(out, RegisteredArtifact{
+			Name:       artifact.Name,
+			SourcePath: artifact.Path,
+			Inline:     artifact.Content != nil,
+		})
+	}
+	return out
+}
+
+func reviewerInfo(spec ReviewerSpec) ReviewerInfo {
+	return ReviewerInfo{
+		Name:  spec.Name,
+		Impl:  spec.Impl,
+		Model: spec.Model,
+	}
+}
+
+func cloneErrorInfo(info *ErrorInfo) *ErrorInfo {
+	if info == nil {
+		return nil
+	}
+	out := *info
+	out.Details = cloneDetails(info.Details)
+	return &out
+}
+
+func monitorSessionStatus(status SessionStatusResponse) monitor.SessionStatus {
+	return monitor.SessionStatus{
+		SessionID:       status.SessionID,
+		State:           status.State,
+		Verdict:         cloneStringPtr(status.Verdict),
+		OpenedAt:        status.OpenedAt,
+		ClosedAt:        cloneTimePtr(status.ClosedAt),
+		Budget:          status.Budget,
+		BudgetRemaining: status.BudgetRemaining,
+		MaxFindings:     status.MaxFindings,
+		RoundsUsed:      status.RoundsUsed,
+		Reviewers:       monitorReviewers(status.Reviewers),
+		Artifacts:       monitorArtifacts(status.Artifacts),
+		LastError:       monitorErrorInfo(status.LastError),
+		ActiveRound:     monitorRoundJob(status.ActiveRound),
+		LastRoundJob:    monitorRoundJob(status.LastRoundJob),
+		Rounds:          monitorRounds(status.Rounds),
+	}
+}
+
+func monitorReviewers(reviewers []ReviewerInfo) []monitor.ReviewerInfo {
+	out := make([]monitor.ReviewerInfo, 0, len(reviewers))
+	for _, reviewer := range reviewers {
+		out = append(out, monitor.ReviewerInfo{
+			Name:  reviewer.Name,
+			Impl:  reviewer.Impl,
+			Model: reviewer.Model,
+		})
+	}
+	return out
+}
+
+func monitorArtifacts(artifacts []RegisteredArtifact) []monitor.RegisteredArtifact {
+	out := make([]monitor.RegisteredArtifact, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		out = append(out, monitor.RegisteredArtifact{
+			Name:       artifact.Name,
+			SourcePath: artifact.SourcePath,
+			Inline:     artifact.Inline,
+		})
+	}
+	return out
+}
+
+func monitorRounds(rounds []RoundStatus) []monitor.RoundStatus {
+	out := make([]monitor.RoundStatus, 0, len(rounds))
+	for _, round := range rounds {
+		out = append(out, monitor.RoundStatus{
+			RoundNumber:   round.RoundNumber,
+			OpenedAt:      round.OpenedAt,
+			LogPath:       round.LogPath,
+			HasNotes:      round.HasNotes,
+			DecisionCount: round.DecisionCount,
+		})
+	}
+	return out
+}
+
+func monitorRoundJob(status *RoundStatusResponse) *monitor.RoundJob {
+	if status == nil {
+		return nil
+	}
+	return &monitor.RoundJob{
+		SessionID:   status.SessionID,
+		RoundNumber: status.RoundNumber,
+		State:       status.State,
+		Reviewer:    status.Reviewer,
+		StartedAt:   status.StartedAt,
+		UpdatedAt:   status.UpdatedAt,
+		CompletedAt: cloneTimePtr(status.CompletedAt),
+		LogPath:     status.LogPath,
+		StatusPath:  status.StatusPath,
+		EventsPath:  status.EventsPath,
+		Error:       monitorErrorInfo(status.Error),
+	}
+}
+
+func monitorErrorInfo(info *ErrorInfo) *monitor.ErrorInfo {
+	if info == nil {
+		return nil
+	}
+	return &monitor.ErrorInfo{
+		Code:       info.Code,
+		Message:    info.Message,
+		Details:    cloneDetails(info.Details),
+		Retryable:  info.Retryable,
+		NextAction: info.NextAction,
+		At:         info.At,
+	}
+}
+
+func cloneReviewRoundResponse(response ReviewRoundResponse) ReviewRoundResponse {
+	return ReviewRoundResponse{
+		RoundNumber: response.RoundNumber,
+		LogPath:     response.LogPath,
+		Manifest:    cloneManifest(response.Manifest),
+		Reviewers:   cloneResults(response.Reviewers),
+	}
 }
 
 func cloneManifest(manifest []ArtifactManifestEntry) []ArtifactManifestEntry {

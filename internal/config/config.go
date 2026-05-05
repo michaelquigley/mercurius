@@ -11,7 +11,10 @@ import (
 	"github.com/michaelquigley/df/dd"
 )
 
-const DefaultBudget = 4
+const (
+	DefaultBudget      = 4
+	DefaultMaxFindings = 10
+)
 
 var knownImpls = map[string]struct{}{
 	"codex": {},
@@ -21,8 +24,10 @@ var knownImpls = map[string]struct{}{
 // Config is the resolved Mercurius project configuration.
 type Config struct {
 	Name            string
+	ConfigPath      string
 	LogDestination  string
 	DefaultBudget   int
+	MaxFindings     int
 	PromptOverrides string
 	Reviewers       []*ReviewerConfig
 }
@@ -49,6 +54,7 @@ func Load(path string) (*Config, error) {
 
 	cfg := &Config{
 		DefaultBudget: DefaultBudget,
+		MaxFindings:   DefaultMaxFindings,
 	}
 	if err := dd.MergeYAMLFile(cfg, absPath); err != nil {
 		return nil, err
@@ -60,6 +66,7 @@ func Load(path string) (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	cfg.ConfigPath = absPath
 	return cfg, nil
 }
 
@@ -73,6 +80,9 @@ func (c *Config) Validate() error {
 	}
 	if c.DefaultBudget <= 0 {
 		return fmt.Errorf("default_budget must be greater than zero")
+	}
+	if c.MaxFindings <= 0 {
+		return fmt.Errorf("max_findings must be greater than zero")
 	}
 	if len(c.Reviewers) == 0 {
 		return errors.New("reviewers is required")

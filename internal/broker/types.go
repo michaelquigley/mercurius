@@ -13,13 +13,17 @@ type ReviewerFactory func(sessionDir string) reviewer.Reviewer
 // ReviewerSpec names one configured reviewer implementation.
 type ReviewerSpec struct {
 	Name    string
+	Impl    string
+	Model   string
 	Factory ReviewerFactory
 }
 
 // Options configures a broker instance.
 type Options struct {
 	LogDestination  string
+	ConfigPath      string
 	DefaultBudget   int
+	MaxFindings     int
 	PromptOverrides string
 	Reviewers       []ReviewerSpec
 }
@@ -40,10 +44,15 @@ type OpenSessionRequest struct {
 
 // OpenSessionResponse describes a newly opened session.
 type OpenSessionResponse struct {
-	SessionID  string
-	SessionDir string
-	OpenedAt   time.Time
-	Budget     int
+	SessionID       string
+	SessionDir      string
+	OpenedAt        time.Time
+	Budget          int
+	BudgetRemaining int
+	MaxFindings     int
+	RoundsUsed      int
+	Reviewers       []ReviewerInfo
+	Artifacts       []RegisteredArtifact
 }
 
 // ReviewRoundRequest runs a new round, optionally replacing artifacts.
@@ -52,12 +61,52 @@ type ReviewRoundRequest struct {
 	Artifacts []Artifact
 }
 
+// StartReviewRoundResponse describes a background review round.
+type StartReviewRoundResponse struct {
+	SessionID      string
+	RoundNumber    int
+	State          string
+	Reviewer       string
+	StartedAt      time.Time
+	StatusPath     string
+	EventsPath     string
+	MonitorCommand string
+	NextAction     string
+}
+
 // ReviewRoundResponse returns one successful round.
 type ReviewRoundResponse struct {
 	RoundNumber int
 	LogPath     string
 	Manifest    []ArtifactManifestEntry
 	Reviewers   []ReviewerResult
+}
+
+// RoundStatusRequest asks for a round job status.
+type RoundStatusRequest struct {
+	SessionID   string
+	RoundNumber int
+}
+
+// RoundStatusResponse describes a running or terminal review job.
+type RoundStatusResponse struct {
+	SessionID   string
+	RoundNumber int
+	State       string
+	Reviewer    string
+	StartedAt   time.Time
+	UpdatedAt   time.Time
+	CompletedAt *time.Time
+	LogPath     string
+	StatusPath  string
+	EventsPath  string
+	Error       *ErrorInfo
+}
+
+// CollectRoundRequest fetches a completed round result.
+type CollectRoundRequest struct {
+	SessionID   string
+	RoundNumber int
 }
 
 // ArtifactManifestEntry records one artifact snapshot.
@@ -115,14 +164,21 @@ type CloseSessionResponse struct {
 
 // SessionStatusResponse is a read-only session view.
 type SessionStatusResponse struct {
-	SessionID  string
-	State      string
-	Verdict    *string
-	OpenedAt   time.Time
-	ClosedAt   *time.Time
-	Budget     int
-	RoundsUsed int
-	Rounds     []RoundStatus
+	SessionID       string
+	State           string
+	Verdict         *string
+	OpenedAt        time.Time
+	ClosedAt        *time.Time
+	Budget          int
+	BudgetRemaining int
+	MaxFindings     int
+	RoundsUsed      int
+	Reviewers       []ReviewerInfo
+	Artifacts       []RegisteredArtifact
+	LastError       *ErrorInfo
+	ActiveRound     *RoundStatusResponse
+	LastRoundJob    *RoundStatusResponse
+	Rounds          []RoundStatus
 }
 
 // RoundStatus is a read-only round summary.
@@ -146,4 +202,33 @@ type SessionSummary struct {
 	Verdict    *string
 	OpenedAt   time.Time
 	RoundsUsed int
+}
+
+// ReviewerInfo describes a configured or selected reviewer.
+type ReviewerInfo struct {
+	Name  string
+	Impl  string
+	Model string
+}
+
+// RegisteredArtifact describes one artifact registered with a session.
+type RegisteredArtifact struct {
+	Name       string
+	SourcePath string
+	Inline     bool
+}
+
+// ErrorInfo is a durable session-visible broker error summary.
+type ErrorInfo struct {
+	Code       string
+	Message    string
+	Details    map[string]any
+	Retryable  bool
+	NextAction string
+	At         time.Time
+}
+
+// ListReviewersResponse enumerates configured reviewers.
+type ListReviewersResponse struct {
+	Reviewers []ReviewerInfo
 }

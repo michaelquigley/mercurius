@@ -141,7 +141,8 @@ Notes on the schema:
 - **`verdict` is the headline.** A reviewer that returns `ready_to_build` with five blocker-severity concerns has produced a contradiction. The broker does not enforce this consistency rule — it returns the round normally, since the JSON is well-formed and schema-valid. The design agent is responsible for noticing the contradiction during triage and surfacing it to the human ("the reviewer said `ready_to_build` but flagged a blocker — what do you want to do?"). The prompt template instructs the reviewer not to produce contradictions in the first place; this triage path is the safety net for when it does anyway.
 - **`severity` separates the no-brainers from the decisions.** Minor issues are presumptively integrable without human input. Blockers and majors need attention. The design agent uses severity as its first-pass triage signal.
 - **`questions` are not concerns.** A question means the reviewer needs information before forming a position. The right response is usually an answer that gets folded into the next round's context, not a doc edit.
-- **`proposed_diffs` are optional but valuable.** When the reviewer can articulate a concrete fix, the diff is more useful than a description of the fix. It also makes integration faster and reduces the chance of the design agent misinterpreting.
+- **`proposed_diffs` are optional but valuable.** When the reviewer can articulate a concrete mechanical patch, the diff is more useful than a description of the fix. It also makes integration faster and reduces the chance of the design agent misinterpreting. A concern-level `suggestion` does not imply a corresponding `proposed_diffs` entry; `proposed_diffs: []` is normal when the reviewer has advice but no ready patch.
+- **Findings are budgeted.** The project config's `max_findings` caps the total number of `concerns` plus `questions` in a single round. Reviewers should prioritize blockers and majors, then the highest-leverage minor flags or blocking questions. `proposed_diffs` are not counted as findings.
 
 ### Strictness
 
@@ -177,7 +178,7 @@ If any step after snapshotting fails — the reviewer errors, schema validation 
 - Does not consume budget.
 - Does not write a log entry.
 
-The error is returned through the MCP response with full diagnostic content (reviewer name, error code, validation details). The caller can inspect or persist that response if needed; Mercurius does not preserve failure state on disk.
+The error is returned as a tool-level MCP error result with full diagnostic content (reviewer name, error code, validation details, retry guidance, and next action). The caller can inspect or persist that response if needed. For an existing session, Mercurius also keeps the most recent broker error in `session_status.last_error` until a later successful session operation clears it. Mercurius does not preserve failure state on disk.
 
 The semantics are: a failed round is as if it never happened. A subsequent `review_round` call will reuse the same round number, snapshot fresh bytes (which may have changed), and try again. This keeps `session_status.rounds` and `rounds_used` accurate to what actually completed, and keeps budget consumption visible to the user — runaway loops from a misconfigured reviewer surface as repeated failure responses, not as silently-burning budget.
 
@@ -256,6 +257,10 @@ Severity (per concern):
 
 A `verdict` of `ready_to_build` requires that all `concerns` are `minor` (or the `concerns` array is empty). Returning `ready_to_build` alongside any `blocker` or `major` concern is a contradiction; do not produce one.
 
+## Finding budget
+
+Return at most {{max_findings}} total findings across `concerns` and `questions` combined. Prioritize blockers and major concerns first, then the highest-leverage minor concerns or blocking questions. Do not pad the output to fill the budget.
+
 ## Output
 
 Respond with a single JSON object only. No prose before or after, no markdown fence, no commentary outside the object. Your response must conform exactly to this schema:
@@ -277,6 +282,7 @@ Any future revision of the template must preserve the following sections, in ord
 - **Artifacts under review** — each artifact's logical name, snapshot path, source path (or "inline" when supplied via `Content`), SHA-256 hash, and full content.
 - **Prior decisions** — accumulated `SessionMeta.PriorDecisions` with the no-re-raise rule, or an explicit "no prior decisions" line when the list is empty.
 - **Verdict and severity** — explicit definitions for both, including the `ready_to_build` ↔ severity consistency rule.
+- **Finding budget** — the configured `max_findings` limit and prioritization instruction.
 - **Output instruction** — JSON-only directive, schema inclusion in a fenced block, required-fields reminder.
 
 Reviewer impls do not assemble or modify this prompt; the broker is the sole owner. Reviewers see the assembled string in `ReviewRequest.Prompt` and pass it to the underlying tool unchanged.
@@ -436,8 +442,9 @@ A Mercurius server is bound to a single project at launch via its config file. T
 
 - **`session_id`** — opaque string, stable for the session's lifetime. Implementation chooses the format; treat as a token.
 - **`round_number`** — 1-indexed integer, unique within a session. Used as the round's identifier across all tools.
+- **Round job states** — `running`, `completed`, or `failed`.
 - **Timestamps** — RFC3339 strings in UTC.
-- **Errors** — surfaced via the MCP error mechanism with a structured payload `{ "code": "stable_identifier", "message": "human-readable description", "details": {...} }`. Codes are stable across versions; messages and details may evolve. Each tool below lists its possible codes; all tools may additionally return `internal_error` for unexpected faults.
+- **Errors** — expected broker failures are returned as MCP tool error results (`is_error: true`) with structured content `{ "error": { "code": "stable_identifier", "message": "human-readable description", "details": {...}, "retryable": false, "next_action": "agent-facing guidance" } }`. Codes are stable across versions; messages, details, and guidance may evolve. JSON-RPC errors are reserved for protocol faults and unexpected server bugs. Each tool below lists its possible broker codes; all tools may additionally surface `internal_error` for unexpected faults.
 
 ### Tools
 
@@ -466,7 +473,17 @@ Start a new review session. Mercurius validates the artifact set, allocates a se
 {
   "session_id": "string",
   "opened_at": "2026-05-04T18:30:00Z",
-  "budget": 8
+  "budget": 8,
+  "budget_remaining": 8,
+  "max_findings": 10,
+  "rounds_used": 0,
+  "reviewers": [
+    { "name": "codex", "impl": "codex", "model": "gpt-5-codex" }
+  ],
+  "artifacts": [
+    { "name": "design", "source_path": "/abs/path/to/design.md", "inline": false },
+    { "name": "work-order", "source_path": "/abs/path/to/work-order.md", "inline": false }
+  ]
 }
 ```
 
@@ -476,9 +493,32 @@ Start a new review session. Mercurius validates the artifact set, allocates a se
 - `panel_mode_unsupported` — `reviewers` resolves to more than one reviewer, or is omitted while the config has multiple entries with no single default. V1 rejects this; V2 lifts the constraint.
 - `invalid_budget` — `budget <= 0`.
 
+#### `start_review_round`
+
+Start a background review round and return immediately. This is the preferred tool for real reviews that may outlive the MCP client's timeout.
+
+**Request:** same shape as `review_round`.
+
+**Response:**
+```json
+{
+  "session_id": "string",
+  "round_number": 3,
+  "state": "running",
+  "reviewer": "codex",
+  "started_at": "2026-05-04T18:31:00Z",
+  "status_path": "/abs/path/to/<session_id>/status.json",
+  "events_path": "/abs/path/to/<session_id>/events.ndjson",
+  "monitor_command": "mercurius monitor --config /abs/path/to/mercurius.yaml --session <session_id> --wait",
+  "next_action": "tell the user this review is running; they can monitor it with the monitor_command and re-engage you when the round completes"
+}
+```
+
+**Errors:** same validation and preflight errors as `review_round`, plus `round_in_progress` when the session already has an active round.
+
 #### `review_round`
 
-Run a round against the session's current artifacts (or the supplied override). Mercurius snapshots the artifacts, dispatches to the configured reviewer(s), validates output against the §5 schema, and writes a round log entry.
+Run a round against the session's current artifacts (or the supplied override) and wait for completion while the MCP request remains alive. Internally this uses the same background job path as `start_review_round`; if the MCP client times out, the background job continues and can be monitored or collected later. Agents should prefer `start_review_round` for substantive reviews and reserve `review_round` for short smoke flows.
 
 **Request:**
 ```json
@@ -490,6 +530,8 @@ Run a round against the session's current artifacts (or the supplied override). 
   ]
 }
 ```
+
+Artifact override paths follow the same rules as `open_session`: each path must be absolute and readable by the Mercurius server process. Overrides replace the session's artifact set only after the round succeeds.
 
 **Response:**
 ```json
@@ -520,9 +562,58 @@ Run a round against the session's current artifacts (or the supplied override). 
 - `unknown_session` — `session_id` not found.
 - `session_closed` — session is in a terminal state and cannot accept new rounds.
 - `budget_exhausted` — `rounds_used` already equals `budget`.
+- `round_in_progress` — another review round is already running for this session.
 - `invalid_artifacts` — applies in two cases. (1) The request supplies an `artifacts` override and that override fails the same conditions as `open_session` (empty, duplicate name, name fails the safe-name rule, path not absolute, path not readable, or fails to read at snapshot time). (2) The request omits the override and the session's current artifact set fails to read at the start of the round — most commonly, a source file was deleted, renamed, or had its permissions changed between rounds. In both cases the round fails atomically per §6: any partial snapshot directory is removed, the round counter does not advance, and budget is not consumed.
 - `reviewer_failed` — one or more reviewers errored before producing output. Details name the reviewers and carry their error messages. The round fails atomically per §6; the snapshot directory is removed and no log entry is written.
-- `schema_violation` — a reviewer produced output, but it failed the broker's validation against the §5 schema. The broker is the canonical validation gate; reviewer impls do not pre-validate. Details name the reviewer, summarize the validation error, and include the offending output bytes in-memory for inspection. The round fails atomically per §6; the snapshot directory is removed and no log entry is written.
+- `schema_violation` — a reviewer produced output, but it failed the broker's validation against the §5 schema or exceeded `max_findings`. The broker is the canonical validation gate; reviewer impls do not pre-validate. Details name the reviewer, summarize the validation error, and include the offending output bytes in-memory for inspection. The round fails atomically per §6; the snapshot directory is removed and no log entry is written.
+
+#### `round_status`
+
+Return status for a running or terminal review round. If `round_number` is omitted, Mercurius returns the active round, then the latest round job, then the latest completed round.
+
+**Request:**
+```json
+{ "session_id": "string", "round_number": 3 }
+```
+
+**Response:**
+```json
+{
+  "round": {
+    "session_id": "string",
+    "round_number": 3,
+    "state": "running",
+    "reviewer": "codex",
+    "started_at": "2026-05-04T18:31:00Z",
+    "updated_at": "2026-05-04T18:32:00Z",
+    "completed_at": null,
+    "status_path": "/abs/path/to/<session_id>/status.json",
+    "events_path": "/abs/path/to/<session_id>/events.ndjson",
+    "error": null
+  }
+}
+```
+
+**Errors:**
+- `unknown_session` — `session_id` not found.
+- `unknown_round` — no active, latest, or matching round exists.
+
+#### `collect_round`
+
+Return a completed review round payload. If the round is still running, the tool returns `round_in_progress` with status and event paths in the details.
+
+**Request:**
+```json
+{ "session_id": "string", "round_number": 3 }
+```
+
+**Response:** same successful shape as `review_round`.
+
+**Errors:**
+- `unknown_session` — `session_id` not found.
+- `unknown_round` — no matching round exists.
+- `round_in_progress` — the round is still running; monitor it and call `collect_round` later.
+- terminal failure errors such as `reviewer_failed` or `schema_violation` — the round failed atomically and has no successful result to collect.
 
 #### `record_round_notes`
 
@@ -591,6 +682,7 @@ The verdict describes the review's terminal state, not downstream implementation
 **Errors:**
 - `unknown_session` — `session_id` not found.
 - `already_closed` — session is already in a terminal state.
+- `round_in_progress` — a review round is still running; monitor or collect it before closing.
 - `invalid_verdict` — verdict is not one of the three permitted values.
 
 #### `session_status`
@@ -611,7 +703,31 @@ Read-only view of a session.
   "opened_at": "2026-05-04T18:30:00Z",
   "closed_at": null,                   // RFC3339 when closed, else null
   "budget": 8,
+  "budget_remaining": 5,
+  "max_findings": 10,
   "rounds_used": 3,
+  "reviewers": [
+    { "name": "codex", "impl": "codex", "model": "gpt-5-codex" }
+  ],
+  "artifacts": [
+    { "name": "design", "source_path": "/abs/path/to/design.md", "inline": false },
+    { "name": "work-order", "source_path": "/abs/path/to/work-order.md", "inline": false }
+  ],
+  "last_error": null,
+  "active_round": null,
+  "last_round_job": {
+    "session_id": "string",
+    "round_number": 3,
+    "state": "completed",
+    "reviewer": "codex",
+    "started_at": "2026-05-04T18:40:00Z",
+    "updated_at": "2026-05-04T18:43:00Z",
+    "completed_at": "2026-05-04T18:43:00Z",
+    "log_path": "/abs/path/to/<session_id>/round-03.md",
+    "status_path": "/abs/path/to/<session_id>/status.json",
+    "events_path": "/abs/path/to/<session_id>/events.ndjson",
+    "error": null
+  },
   "rounds": [
     {
       "round_number": 1,
@@ -624,8 +740,37 @@ Read-only view of a session.
 }
 ```
 
+`last_error` is `null` when the last session-specific operation succeeded or no broker error has occurred. After a failed session-specific call, it contains the same structured error shape used by tool error results plus an `at` timestamp.
+
 **Errors:**
 - `unknown_session` — `session_id` not found.
+
+#### `list_reviewers`
+
+Enumerate reviewer names configured for the running server. Design agents should call this before `open_session` when a project config contains more than one reviewer.
+
+**Request:** empty object `{}`.
+
+**Response:**
+```json
+{
+  "reviewers": [
+    {
+      "name": "codex",
+      "impl": "codex",
+      "model": "gpt-5-codex",
+      "selectable": true
+    },
+    {
+      "name": "dummy",
+      "impl": "dummy",
+      "selectable": true
+    }
+  ]
+}
+```
+
+**Errors:** none under normal operation.
 
 #### `list_sessions`
 
@@ -649,6 +794,28 @@ Enumerate sessions known to the running server.
 ```
 
 **Errors:** none under normal operation.
+
+### Durable monitoring and CLI
+
+Each session directory contains operator-readable monitoring files:
+
+```text
+<log_destination>/<session_id>/
+  status.json
+  events.ndjson
+```
+
+`status.json` is the current snapshot of the session, including active/latest round job state. `events.ndjson` is append-only lifecycle history with events such as `session_opened`, `round_started`, `artifacts_snapshotted`, `reviewer_started`, `reviewer_completed`, `round_completed`, `round_failed`, `notes_recorded`, and `session_closed`.
+
+The CLI exposes this state without connecting to the MCP server:
+
+```sh
+mercurius monitor --config /abs/path/to/mercurius.yaml --session s_...
+mercurius monitor --config /abs/path/to/mercurius.yaml --session s_... --wait
+mercurius monitor --config /abs/path/to/mercurius.yaml --all
+```
+
+Without `--wait`, `monitor` prints the current snapshot and known events, then exits. With `--wait`, it streams new events until the active round completes or fails. Design agents should hand the `monitor_command` from `start_review_round` to the user/operator and ask to be re-engaged after completion.
 
 ### What is and isn't exposed
 
@@ -696,6 +863,7 @@ name: mercurius
 log_destination: ./reviews                    # resolved relative to this config file
 
 default_budget: 8
+max_findings: 10
 
 prompt_overrides: |
   this project uses df/dl for logging; flag any ad-hoc logging.
@@ -723,6 +891,7 @@ reviewers:
 ### Optional fields with defaults
 
 - **`default_budget`** (default `4`) — default maximum rounds per session. Per-session overrides via `open_session.budget`.
+- **`max_findings`** (default `10`) — maximum total `concerns` plus `questions` a reviewer may return in a successful round.
 - **`prompt_overrides`** (default empty) — free-form markdown appended to the standard review prompt template. No conditional or per-reviewer overrides in V1.
 - per-reviewer **`binary_path`** — defaults to looking up the impl's conventional executable name on `PATH`.
 - per-reviewer **`model`** — reviewer-impl-specific. Each impl picks a default if unspecified.
@@ -744,7 +913,7 @@ The server validates the loaded config before starting and aborts with a structu
 - `log_destination` resolves to an existing writable directory, or to a path whose parent directory exists and is writable. Mercurius creates the leaf if necessary; it does not create parents.
 - Each reviewer's `impl` matches a registered implementation. Unknown impls produce a hard error that lists the registered impls.
 - Reviewer `name` values are unique within the file.
-- `default_budget`, if specified, is greater than zero.
+- `default_budget` and `max_findings`, if specified, are greater than zero.
 
 Validation errors name the offending field and reason. The server does not start in a partially-loaded state.
 

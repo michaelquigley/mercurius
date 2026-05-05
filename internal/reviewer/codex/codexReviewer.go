@@ -62,23 +62,26 @@ func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (revi
 		return reviewer.ReviewResponse{}, fmt.Errorf("write codex schema file: %w", err)
 	}
 
-	stdout, stderr, err := r.run(ctx, req.Prompt, schemaPath, lastMessagePath)
-	if err != nil {
-		return reviewer.ReviewResponse{}, err
-	}
+	stdout, stderr, runErr := r.run(ctx, req.Prompt, schemaPath, lastMessagePath)
 
 	output, err := os.ReadFile(lastMessagePath)
 	if err != nil {
+		if runErr != nil {
+			return reviewer.ReviewResponse{}, runErr
+		}
 		return reviewer.ReviewResponse{}, fmt.Errorf("read codex last message file: %w", err)
 	}
 	raw, err := extractReviewOutput(output)
 	if err != nil {
+		if runErr != nil {
+			return reviewer.ReviewResponse{}, fmt.Errorf("%w; extract codex last message: %v", runErr, err)
+		}
 		return reviewer.ReviewResponse{}, err
 	}
 
 	return reviewer.ReviewResponse{
 		Raw:        raw,
-		UsageNotes: r.usageNotes(stdout, stderr),
+		UsageNotes: r.usageNotes(stdout, stderr, runErr != nil),
 	}, nil
 }
 
@@ -151,13 +154,16 @@ func (r *Reviewer) args(schemaPath string, lastMessagePath string) []string {
 	return args
 }
 
-func (r *Reviewer) usageNotes(stdout []byte, stderr []byte) string {
+func (r *Reviewer) usageNotes(stdout []byte, stderr []byte, recoveredAfterError bool) string {
 	parts := []string{fmt.Sprintf("binary='%s'", r.options.BinaryPath)}
 	if r.options.Model != "" {
 		parts = append(parts, fmt.Sprintf("model='%s'", r.options.Model))
 	}
 	parts = append(parts, fmt.Sprintf("stdout_bytes='%d'", len(stdout)))
 	parts = append(parts, fmt.Sprintf("stderr_bytes='%d'", len(stderr)))
+	if recoveredAfterError {
+		parts = append(parts, "recovered_last_message_after_error='true'")
+	}
 	return strings.Join(parts, ", ")
 }
 

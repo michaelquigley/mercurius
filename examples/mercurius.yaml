@@ -1,6 +1,7 @@
 name: mercurius-example
 log_destination: ./reviews
 default_budget: 4
+max_findings: 6
 prompt_overrides: |
   Focus on design clarity, missing acceptance criteria, and risks that would
   block a straightforward implementation.

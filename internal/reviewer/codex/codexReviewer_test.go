@@ -128,6 +128,38 @@ func TestReviewerReturnsCommandFailureWithOutput(t *testing.T) {
 	}
 }
 
+func TestReviewerRecoversLastMessageAfterCommandFailure(t *testing.T) {
+	helper := newFakeCodex(t, fakeCodexOptions{
+		output:                validReviewOutput(),
+		exitCode:              143,
+		stderr:                "terminated after final output",
+		writeOutputBeforeExit: true,
+	})
+	r := New(Options{
+		BinaryPath: helper.binaryPath,
+		WorkingDir: t.TempDir(),
+	})
+
+	resp, err := r.Review(context.Background(), reviewer.ReviewRequest{
+		Prompt: "review this prompt",
+		Schema: schema.ReviewOutputSchema(),
+	})
+	if err != nil {
+		t.Fatalf("expected recovered review output: %v", err)
+	}
+	if string(resp.Raw) != validReviewOutput() {
+		t.Fatalf("raw output mismatch:\n got: %s\nwant: %s", resp.Raw, validReviewOutput())
+	}
+	if !strings.Contains(resp.UsageNotes, "recovered_last_message_after_error='true'") {
+		t.Fatalf("usage notes did not mark recovery: %s", resp.UsageNotes)
+	}
+
+	lastMessagePath := strings.TrimSpace(readFile(t, helper.lastMessagePathPath))
+	if _, err := os.Stat(lastMessagePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected last-message temp file cleanup after recovery, got err=%v", err)
+	}
+}
+
 func TestReviewerDoesNotValidateSchema(t *testing.T) {
 	helper := newFakeCodex(t, fakeCodexOptions{
 		output: `{"not":"a valid review output"}`,
@@ -170,10 +202,11 @@ func TestReviewerRequiresWorkingDirAndSchema(t *testing.T) {
 }
 
 type fakeCodexOptions struct {
-	output   string
-	stdout   string
-	stderr   string
-	exitCode int
+	output                string
+	stdout                string
+	stderr                string
+	exitCode              int
+	writeOutputBeforeExit bool
 }
 
 type fakeCodex struct {
@@ -248,11 +281,14 @@ fi
 if [ -n "${FAKE_CODEX_STDERR:-}" ]; then
 	printf '%s\n' "$FAKE_CODEX_STDERR" >&2
 fi
-if [ "${FAKE_CODEX_EXIT_CODE:-0}" -ne 0 ]; then
-	exit "$FAKE_CODEX_EXIT_CODE"
-fi
 if [ -n "$last_message_path" ]; then
 	printf '%s' "$FAKE_CODEX_OUTPUT" > "$last_message_path"
+fi
+if [ "${FAKE_CODEX_EXIT_CODE:-0}" -ne 0 ]; then
+	if [ "${FAKE_CODEX_WRITE_OUTPUT_BEFORE_EXIT:-0}" -eq 0 ] && [ -n "$last_message_path" ]; then
+		rm -f "$last_message_path"
+	fi
+	exit "$FAKE_CODEX_EXIT_CODE"
 fi
 `
 	if err := os.WriteFile(helper.binaryPath, []byte(script), 0o755); err != nil {
@@ -269,6 +305,11 @@ fi
 	t.Setenv("FAKE_CODEX_STDOUT", options.stdout)
 	t.Setenv("FAKE_CODEX_STDERR", options.stderr)
 	t.Setenv("FAKE_CODEX_EXIT_CODE", strconv.Itoa(options.exitCode))
+	if options.writeOutputBeforeExit {
+		t.Setenv("FAKE_CODEX_WRITE_OUTPUT_BEFORE_EXIT", "1")
+	} else {
+		t.Setenv("FAKE_CODEX_WRITE_OUTPUT_BEFORE_EXIT", "0")
+	}
 	t.Setenv("CODEX_HOME", helper.sourceCodexHome)
 
 	return helper

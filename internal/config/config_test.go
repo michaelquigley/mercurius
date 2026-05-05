@@ -31,6 +31,9 @@ reviewers:
 	if cfg.DefaultBudget != DefaultBudget {
 		t.Fatalf("default budget = %d, want %d", cfg.DefaultBudget, DefaultBudget)
 	}
+	if cfg.MaxFindings != DefaultMaxFindings {
+		t.Fatalf("max findings = %d, want %d", cfg.MaxFindings, DefaultMaxFindings)
+	}
 	if cfg.LogDestination != filepath.Join(dir, "reviews") {
 		t.Fatalf("log destination = %s", cfg.LogDestination)
 	}
@@ -42,6 +45,27 @@ reviewers:
 	}
 	if cfg.Reviewers[0].ExtraArgs[0] != "--ignore-user-config" {
 		t.Fatalf("extra args not loaded: %+v", cfg.Reviewers[0].ExtraArgs)
+	}
+}
+
+func TestLoadConfiguresMaxFindings(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mercurius.yaml")
+	writeConfig(t, cfgPath, `
+name: test-project
+log_destination: ./reviews
+max_findings: 6
+reviewers:
+  - name: dummy
+    impl: dummy
+`)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.MaxFindings != 6 {
+		t.Fatalf("max findings = %d, want 6", cfg.MaxFindings)
 	}
 }
 
@@ -72,6 +96,18 @@ reviewers:
     impl: dummy
 `,
 			want: "default_budget",
+		},
+		{
+			name: "invalid max findings",
+			body: `
+name: test
+log_destination: ./reviews
+max_findings: 0
+reviewers:
+  - name: dummy
+    impl: dummy
+`,
+			want: "max_findings",
 		},
 		{
 			name: "duplicate reviewer",

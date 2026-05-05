@@ -126,10 +126,11 @@ Five milestones. M1–M4 are the MVP. M5 is V2.
 
 **Scope:**
 
-- Implement the MCP tools listed in design §8: `open_session`, `review_round`, `record_round_notes`, `close_session`, `session_status`, `list_sessions`.
+- Implement the MCP tools listed in design §8: `open_session`, `start_review_round`, `review_round`, `round_status`, `collect_round`, `record_round_notes`, `close_session`, `session_status`, `list_reviewers`, `list_sessions`.
 - Enforce the V1 single-reviewer constraint at `open_session`: if the resolved reviewer set has more than one entry (or zero, when the config has multiple entries with no caller-supplied selection), return `panel_mode_unsupported`.
 - Implement project config loading (`mercurius.yaml`).
 - Wire the server entrypoint at `cmd/mercurius/main.go` with stdio transport.
+- Wire `mercurius monitor` for operator-visible review progress.
 - Document install and usage in the README.
 
 **Definition of done:**
