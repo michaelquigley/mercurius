@@ -42,12 +42,12 @@ type OpenSessionOutput struct {
 	Artifacts       []RegisteredArtifactOutput `json:"artifacts"`
 }
 
-type ReviewRoundInput struct {
+type StartRoundInput struct {
 	SessionID string          `json:"session_id,omitempty"`
 	Artifacts []ArtifactInput `json:"artifacts,omitempty"`
 }
 
-type ReviewRoundOutput struct {
+type CollectedRoundOutput struct {
 	RoundNumber int                   `json:"round_number"`
 	LogPath     string                `json:"log_path"`
 	Manifest    []ManifestEntryOutput `json:"manifest"`
@@ -287,38 +287,14 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "review_round",
-		Description: "run one review round for an active Mercurius session. optional artifact overrides must use absolute paths readable by the Mercurius server. reviewer output is capped by the session max_findings value. failed rounds do not consume budget. after this tool returns, pause: summarize the review for the user and ask whether to record notes, revise artifacts, or continue; do not immediately call another Mercurius tool unless the user explicitly asks you to continue",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input ReviewRoundInput) (*mcp.CallToolResult, any, error) {
-		var artifacts []broker.Artifact
-		if input.Artifacts != nil {
-			artifacts = artifactsFromInput(input.Artifacts)
-		}
-		response, err := b.ReviewRound(ctx, broker.ReviewRoundRequest{
-			SessionID: input.SessionID,
-			Artifacts: artifacts,
-		})
-		if err != nil {
-			return toolErrorResult(err)
-		}
-		return nil, ReviewRoundOutput{
-			RoundNumber: response.RoundNumber,
-			LogPath:     response.LogPath,
-			Manifest:    manifestOutput(response.Manifest),
-			Reviewers:   reviewerOutput(response.Reviewers),
-			NextAction:  "pause and ask the user how to proceed before recording notes or starting another review round",
-		}, nil
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
 		Name:        "start_review_round",
 		Description: "start one review round in the background and return immediately. use this for real reviews that may outlive the MCP client timeout; tell the user to run monitor_command and re-engage when the round completes.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input ReviewRoundInput) (*mcp.CallToolResult, any, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input StartRoundInput) (*mcp.CallToolResult, any, error) {
 		var artifacts []broker.Artifact
 		if input.Artifacts != nil {
 			artifacts = artifactsFromInput(input.Artifacts)
 		}
-		response, err := b.StartReviewRound(ctx, broker.ReviewRoundRequest{
+		response, err := b.StartReviewRound(ctx, broker.StartRoundRequest{
 			SessionID: input.SessionID,
 			Artifacts: artifacts,
 		})
@@ -363,7 +339,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 		if err != nil {
 			return toolErrorResult(err)
 		}
-		return nil, ReviewRoundOutput{
+		return nil, CollectedRoundOutput{
 			RoundNumber: response.RoundNumber,
 			LogPath:     response.LogPath,
 			Manifest:    manifestOutput(response.Manifest),
@@ -374,7 +350,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "record_round_notes",
-		Description: "record commentary and human decisions for a completed round. after this tool returns, pause and ask the user whether to run another review round or stop; do not immediately call review_round unless the user explicitly asks you to continue",
+		Description: "record commentary and human decisions for a completed round. after this tool returns, pause and ask the user whether to start another review round or stop; do not immediately call another Mercurius tool unless the user explicitly asks you to continue",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RecordRoundNotesInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.RecordRoundNotes(ctx, broker.RecordRoundNotesRequest{
 			SessionID:   input.SessionID,

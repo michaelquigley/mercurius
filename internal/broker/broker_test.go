@@ -40,7 +40,7 @@ func TestSessionRoundsNotesPriorDecisionsAndClose(t *testing.T) {
 		t.Fatalf("unexpected open artifacts: %+v", open.Artifacts)
 	}
 
-	round1, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	round1, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
 	if err != nil {
 		t.Fatalf("review round 1: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestSessionRoundsNotesPriorDecisionsAndClose(t *testing.T) {
 		t.Fatalf("edit artifact: %v", err)
 	}
 	r.push(scriptedResponse{raw: validReviewOutput("ready_to_build")})
-	round2, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	round2, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
 	if err != nil {
 		t.Fatalf("review round 2: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestSessionRoundsNotesPriorDecisionsAndClose(t *testing.T) {
 	if closed.Verdict != "ready_to_build" {
 		t.Fatalf("unexpected close response: %+v", closed)
 	}
-	_, err = b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	_, err = startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
 	assertBrokerCode(t, err, CodeSessionClosed)
 }
 
@@ -139,10 +139,10 @@ func TestBudgetExhaustion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if _, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID}); err != nil {
+	if _, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID}); err != nil {
 		t.Fatalf("round 1: %v", err)
 	}
-	_, err = b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	_, err = startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
 	assertBrokerCode(t, err, CodeBudgetExhausted)
 }
 
@@ -159,7 +159,7 @@ func TestAsyncReviewRoundLifecycle(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	started, err := b.StartReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	started, err := b.StartReviewRound(ctx, StartRoundRequest{SessionID: open.SessionID})
 	if err != nil {
 		t.Fatalf("start round: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestAsyncReviewRoundLifecycle(t *testing.T) {
 		t.Fatalf("file status = %+v", fileStatus)
 	}
 
-	_, err = b.StartReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	_, err = b.StartReviewRound(ctx, StartRoundRequest{SessionID: open.SessionID})
 	assertBrokerCode(t, err, CodeRoundInProgress)
 	_, err = b.CloseSession(ctx, CloseSessionRequest{SessionID: open.SessionID, Verdict: "paused"})
 	assertBrokerCode(t, err, CodeRoundInProgress)
@@ -216,7 +216,7 @@ func TestAsyncReviewRoundLifecycle(t *testing.T) {
 	}
 }
 
-func TestReviewRoundContinuesAfterCallerContextExpires(t *testing.T) {
+func TestStartedRoundContinuesAfterCallerContextExpires(t *testing.T) {
 	r := newBlockingReviewer(validReviewOutput("ready_to_build"))
 	b := New(Options{
 		LogDestination: filepath.Join(t.TempDir(), "reviews"),
@@ -233,24 +233,19 @@ func TestReviewRoundContinuesAfterCallerContextExpires(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		_, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
-		done <- err
-	}()
-	waitStarted(t, r)
-	err = <-done
-	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("review round err = %v, want deadline", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	started, err := b.StartReviewRound(ctx, StartRoundRequest{SessionID: open.SessionID})
+	if err != nil {
+		t.Fatalf("start round: %v", err)
 	}
+	waitStarted(t, r)
+	cancel()
 
 	r.release()
-	waitRoundState(t, b, open.SessionID, 1, roundStateCompleted)
-	collected, err := b.CollectRound(context.Background(), CollectRoundRequest{SessionID: open.SessionID, RoundNumber: 1})
+	waitRoundState(t, b, open.SessionID, started.RoundNumber, roundStateCompleted)
+	collected, err := b.CollectRound(context.Background(), CollectRoundRequest{SessionID: open.SessionID, RoundNumber: started.RoundNumber})
 	if err != nil {
-		t.Fatalf("collect after caller timeout: %v", err)
+		t.Fatalf("collect after caller context expired: %v", err)
 	}
 	if collected.RoundNumber != 1 {
 		t.Fatalf("collected = %+v", collected)
@@ -280,7 +275,7 @@ func TestAtomicFailuresReuseRoundAndBudget(t *testing.T) {
 				t.Fatalf("open: %v", err)
 			}
 
-			_, err = b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+			_, err = startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
 			assertBrokerCode(t, err, test.code)
 			if _, err := os.Stat(filepath.Join(open.SessionDir, "round-01.md")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("expected no round log, got err=%v", err)
@@ -302,7 +297,7 @@ func TestAtomicFailuresReuseRoundAndBudget(t *testing.T) {
 				t.Fatalf("last error = %+v, want retryable %s", status.LastError, test.code)
 			}
 
-			round, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+			round, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
 			if err != nil {
 				t.Fatalf("subsequent round: %v", err)
 			}
@@ -339,7 +334,7 @@ func TestMaxFindingsFailsRoundAtomically(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	_, err = b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	_, err = startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
 	assertBrokerCode(t, err, CodeSchemaViolation)
 	if _, err := os.Stat(filepath.Join(open.SessionDir, "round-01.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected no round log, got err=%v", err)
@@ -358,7 +353,7 @@ func TestMaxFindingsFailsRoundAtomically(t *testing.T) {
 		t.Fatalf("last error details = %+v", status.LastError.Details)
 	}
 
-	round, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	round, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
 	if err != nil {
 		t.Fatalf("round after max findings failure: %v", err)
 	}
@@ -387,7 +382,7 @@ func TestArtifactOverrideUpdatesOnlyAfterSuccessfulRound(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	_, err = b.ReviewRound(ctx, ReviewRoundRequest{
+	_, err = startAndCollectRound(t, b, ctx, StartRoundRequest{
 		SessionID: open.SessionID,
 		Artifacts: []Artifact{{Name: "design", Path: override}},
 	})
@@ -400,7 +395,7 @@ func TestArtifactOverrideUpdatesOnlyAfterSuccessfulRound(t *testing.T) {
 		t.Fatalf("last error = %+v, want reviewer failure", status.LastError)
 	}
 
-	round, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	round, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
 	if err != nil {
 		t.Fatalf("round after failed override: %v", err)
 	}
@@ -452,7 +447,7 @@ func TestRecordRoundNotesValidationAndReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	round, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	round, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
 	if err != nil {
 		t.Fatalf("round: %v", err)
 	}
@@ -538,7 +533,7 @@ func TestInlineArtifactSnapshotAndPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	round, err := b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	round, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
 	if err != nil {
 		t.Fatalf("round: %v", err)
 	}
@@ -568,7 +563,7 @@ func TestRoundLogWriteFailureIsAtomic(t *testing.T) {
 		t.Fatalf("create log path directory: %v", err)
 	}
 
-	_, err = b.ReviewRound(ctx, ReviewRoundRequest{SessionID: open.SessionID})
+	_, err = startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
 	assertBrokerCode(t, err, CodeInternalError)
 	if _, err := os.Stat(filepath.Join(open.SessionDir, "snapshots", "round-01")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected snapshot cleanup, got err=%v", err)
@@ -668,6 +663,37 @@ func waitStarted(t *testing.T, r *blockingReviewer) {
 	case <-r.started:
 	case <-time.After(time.Second):
 		t.Fatal("reviewer did not start")
+	}
+}
+
+func startAndCollectRound(t *testing.T, b *Broker, ctx context.Context, req StartRoundRequest) (CollectedRoundResponse, error) {
+	t.Helper()
+
+	started, err := b.StartReviewRound(ctx, req)
+	if err != nil {
+		return CollectedRoundResponse{}, err
+	}
+	waitRoundTerminal(t, b, started.SessionID, started.RoundNumber)
+	return b.CollectRound(ctx, CollectRoundRequest{
+		SessionID:   started.SessionID,
+		RoundNumber: started.RoundNumber,
+	})
+}
+
+func waitRoundTerminal(t *testing.T, b *Broker, sessionID string, roundNumber int) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	for {
+		status, err := b.RoundStatus(context.Background(), RoundStatusRequest{SessionID: sessionID, RoundNumber: roundNumber})
+		if err == nil && (status.State == roundStateCompleted || status.State == roundStateFailed) {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("round did not reach terminal state; last status=%+v err=%v", status, err)
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 

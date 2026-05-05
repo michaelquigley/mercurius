@@ -101,7 +101,7 @@ type roundJob struct {
 	logPath         string
 	statusPath      string
 	eventsPath      string
-	result          ReviewRoundResponse
+	result          CollectedRoundResponse
 	err             error
 	errorInfo       *ErrorInfo
 	done            chan struct{}
@@ -214,7 +214,7 @@ func (b *Broker) OpenSession(ctx context.Context, req OpenSessionRequest) (OpenS
 }
 
 // StartReviewRound starts a background review round.
-func (b *Broker) StartReviewRound(ctx context.Context, req ReviewRoundRequest) (StartReviewRoundResponse, error) {
+func (b *Broker) StartReviewRound(ctx context.Context, req StartRoundRequest) (StartReviewRoundResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return StartReviewRoundResponse{}, err
 	}
@@ -324,33 +324,11 @@ func (b *Broker) StartReviewRound(ctx context.Context, req ReviewRoundRequest) (
 	}
 	b.mu.Unlock()
 
-	go b.runRound(job)
+	go b.executeRoundJob(job)
 	return response, nil
 }
 
-// ReviewRound starts a round and waits for completion while the request lives.
-func (b *Broker) ReviewRound(ctx context.Context, req ReviewRoundRequest) (ReviewRoundResponse, error) {
-	started, err := b.StartReviewRound(ctx, req)
-	if err != nil {
-		return ReviewRoundResponse{}, err
-	}
-
-	done, err := b.roundDone(started.SessionID, started.RoundNumber)
-	if err != nil {
-		return ReviewRoundResponse{}, err
-	}
-	select {
-	case <-done:
-		return b.CollectRound(context.Background(), CollectRoundRequest{
-			SessionID:   started.SessionID,
-			RoundNumber: started.RoundNumber,
-		})
-	case <-ctx.Done():
-		return ReviewRoundResponse{}, ctx.Err()
-	}
-}
-
-func (b *Broker) runRound(job *roundJob) {
+func (b *Broker) executeRoundJob(job *roundJob) {
 	b.markRoundEvent(job, "artifacts_snapshotting", "")
 
 	snapshots, err := snapshotArtifacts(job.sessionDir, job.roundNumber, job.artifacts)
@@ -429,7 +407,7 @@ func (b *Broker) runRound(job *roundJob) {
 		return
 	}
 
-	b.finishRoundSuccess(job, ReviewRoundResponse{
+	b.finishRoundSuccess(job, CollectedRoundResponse{
 		RoundNumber: job.roundNumber,
 		LogPath:     logPath,
 		Manifest:    cloneManifest(snapshots.manifest),
@@ -485,9 +463,9 @@ func (b *Broker) RoundStatus(ctx context.Context, req RoundStatusRequest) (Round
 }
 
 // CollectRound returns a completed round response.
-func (b *Broker) CollectRound(ctx context.Context, req CollectRoundRequest) (ReviewRoundResponse, error) {
+func (b *Broker) CollectRound(ctx context.Context, req CollectRoundRequest) (CollectedRoundResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return ReviewRoundResponse{}, err
+		return CollectedRoundResponse{}, err
 	}
 
 	b.mu.Lock()
@@ -495,7 +473,7 @@ func (b *Broker) CollectRound(ctx context.Context, req CollectRoundRequest) (Rev
 
 	s, err := b.session(req.SessionID)
 	if err != nil {
-		return ReviewRoundResponse{}, err
+		return CollectedRoundResponse{}, err
 	}
 	roundNumber := req.RoundNumber
 	if roundNumber == 0 {
@@ -508,7 +486,7 @@ func (b *Broker) CollectRound(ctx context.Context, req CollectRoundRequest) (Rev
 		}
 	}
 	if s.activeJob != nil && s.activeJob.roundNumber == roundNumber {
-		return ReviewRoundResponse{}, brokerError(CodeRoundInProgress, "round is still running", nil, map[string]any{
+		return CollectedRoundResponse{}, brokerError(CodeRoundInProgress, "round is still running", nil, map[string]any{
 			"session_id":   req.SessionID,
 			"round_number": roundNumber,
 			"status_path":  s.activeJob.statusPath,
@@ -517,43 +495,24 @@ func (b *Broker) CollectRound(ctx context.Context, req CollectRoundRequest) (Rev
 	}
 	if s.lastRoundJob != nil && s.lastRoundJob.roundNumber == roundNumber {
 		if s.lastRoundJob.state == roundStateFailed {
-			return ReviewRoundResponse{}, s.lastRoundJob.err
+			return CollectedRoundResponse{}, s.lastRoundJob.err
 		}
 		if s.lastRoundJob.state == roundStateCompleted {
-			return cloneReviewRoundResponse(s.lastRoundJob.result), nil
+			return cloneCollectedRoundResponse(s.lastRoundJob.result), nil
 		}
 	}
 	if round := s.findRound(roundNumber); round != nil {
-		return ReviewRoundResponse{
+		return CollectedRoundResponse{
 			RoundNumber: round.number,
 			LogPath:     round.logPath,
 			Manifest:    cloneManifest(round.manifest),
 			Reviewers:   cloneResults(round.results),
 		}, nil
 	}
-	return ReviewRoundResponse{}, brokerError(CodeUnknownRound, "round not found", nil, map[string]any{"round_number": req.RoundNumber})
+	return CollectedRoundResponse{}, brokerError(CodeUnknownRound, "round not found", nil, map[string]any{"round_number": req.RoundNumber})
 }
 
-func (b *Broker) roundDone(sessionID string, roundNumber int) (<-chan struct{}, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	s, err := b.session(sessionID)
-	if err != nil {
-		return nil, err
-	}
-	if s.activeJob != nil && s.activeJob.roundNumber == roundNumber {
-		return s.activeJob.done, nil
-	}
-	if s.lastRoundJob != nil && s.lastRoundJob.roundNumber == roundNumber {
-		return s.lastRoundJob.done, nil
-	}
-	done := make(chan struct{})
-	close(done)
-	return done, nil
-}
-
-func (b *Broker) finishRoundSuccess(job *roundJob, response ReviewRoundResponse, refs map[string]struct{}) {
+func (b *Broker) finishRoundSuccess(job *roundJob, response CollectedRoundResponse, refs map[string]struct{}) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -576,7 +535,7 @@ func (b *Broker) finishRoundSuccess(job *roundJob, response ReviewRoundResponse,
 	}
 	s.rounds = append(s.rounds, round)
 	s.lastError = nil
-	job.result = cloneReviewRoundResponse(response)
+	job.result = cloneCollectedRoundResponse(response)
 	job.finish(roundStateCompleted, response.LogPath, nil)
 	s.activeJob = nil
 	s.lastRoundJob = job
@@ -1304,8 +1263,8 @@ func monitorErrorInfo(info *ErrorInfo) *monitor.ErrorInfo {
 	}
 }
 
-func cloneReviewRoundResponse(response ReviewRoundResponse) ReviewRoundResponse {
-	return ReviewRoundResponse{
+func cloneCollectedRoundResponse(response CollectedRoundResponse) CollectedRoundResponse {
+	return CollectedRoundResponse{
 		RoundNumber: response.RoundNumber,
 		LogPath:     response.LogPath,
 		Manifest:    cloneManifest(response.Manifest),

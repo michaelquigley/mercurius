@@ -39,7 +39,6 @@ func TestToolDiscovery(t *testing.T) {
 		"list_sessions",
 		"open_session",
 		"record_round_notes",
-		"review_round",
 		"round_status",
 		"session_status",
 		"start_review_round",
@@ -82,7 +81,7 @@ func TestDummyReviewFlow(t *testing.T) {
 		t.Fatalf("open artifacts = %+v", openOutput.Artifacts)
 	}
 
-	round1 := callRound(t, ctx, client, openOutput.SessionID)
+	round1 := startAndCollectRoundTool(t, ctx, client, openOutput.SessionID)
 	if round1.RoundNumber != 1 {
 		t.Fatalf("round number = %d, want 1", round1.RoundNumber)
 	}
@@ -115,7 +114,7 @@ func TestDummyReviewFlow(t *testing.T) {
 		t.Fatalf("notes next action = %q", notesOutput.NextAction)
 	}
 
-	round2 := callRound(t, ctx, client, openOutput.SessionID)
+	round2 := startAndCollectRoundTool(t, ctx, client, openOutput.SessionID)
 	if round2.RoundNumber != 2 {
 		t.Fatalf("round number = %d, want 2", round2.RoundNumber)
 	}
@@ -314,13 +313,7 @@ func TestFailedRoundReturnsToolErrorAndStatusLastError(t *testing.T) {
 	}
 	sessionID := decodeStructured[OpenSessionOutput](t, openResult).SessionID
 
-	roundResult, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "review_round",
-		Arguments: map[string]any{
-			"session_id": sessionID,
-		},
-	})
-	errorOutput := assertToolError(t, roundResult, err, broker.CodeReviewerFailed)
+	errorOutput := startAndCollectRoundToolError(t, ctx, client, sessionID, broker.CodeReviewerFailed)
 	if !errorOutput.Retryable || !strings.Contains(errorOutput.NextAction, "retry") {
 		t.Fatalf("error output = %+v", errorOutput)
 	}
@@ -414,7 +407,7 @@ func TestAsyncReviewTools(t *testing.T) {
 	assertToolError(t, collectResult, err, broker.CodeRoundInProgress)
 
 	reviewerImpl.release()
-	var collected ReviewRoundOutput
+	var collected CollectedRoundOutput
 	deadline := time.After(time.Second)
 	for {
 		collectResult, err = client.CallTool(ctx, &mcp.CallToolParams{
@@ -425,7 +418,7 @@ func TestAsyncReviewTools(t *testing.T) {
 			},
 		})
 		if err == nil && collectResult != nil && !collectResult.IsError {
-			collected = decodeStructured[ReviewRoundOutput](t, collectResult)
+			collected = decodeStructured[CollectedRoundOutput](t, collectResult)
 			break
 		}
 		select {
@@ -481,19 +474,98 @@ func newTestClientForServer(t *testing.T, server *mcp.Server) (context.Context, 
 	return ctx, clientSession
 }
 
-func callRound(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string) ReviewRoundOutput {
+func startAndCollectRoundTool(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string) CollectedRoundOutput {
 	t.Helper()
 
 	result, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "review_round",
+		Name: "start_review_round",
 		Arguments: map[string]any{
 			"session_id": sessionID,
 		},
 	})
 	if err != nil {
-		t.Fatalf("review round: %v", err)
+		t.Fatalf("start review round: %v", err)
 	}
-	return decodeStructured[ReviewRoundOutput](t, result)
+	if result.IsError {
+		t.Fatalf("start review round returned tool error: %+v", result.StructuredContent)
+	}
+	started := decodeStructured[StartReviewRoundOutput](t, result)
+	return collectRound(t, ctx, client, sessionID, started.RoundNumber)
+}
+
+func collectRound(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string, roundNumber int) CollectedRoundOutput {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	for {
+		result, err := client.CallTool(ctx, &mcp.CallToolParams{
+			Name: "collect_round",
+			Arguments: map[string]any{
+				"session_id":   sessionID,
+				"round_number": roundNumber,
+			},
+		})
+		if err != nil {
+			t.Fatalf("collect round: %v", err)
+		}
+		if !result.IsError {
+			return decodeStructured[CollectedRoundOutput](t, result)
+		}
+		payload := decodeStructured[ToolErrorOutput](t, result)
+		if payload.Error.Code != broker.CodeRoundInProgress {
+			t.Fatalf("collect round returned tool error: %+v", payload.Error)
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("collect round did not complete; last error=%+v", payload.Error)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func startAndCollectRoundToolError(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string, wantStableCode string) ErrorOutput {
+	t.Helper()
+
+	result, err := client.CallTool(ctx, &mcp.CallToolParams{
+		Name: "start_review_round",
+		Arguments: map[string]any{
+			"session_id": sessionID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start review round: %v", err)
+	}
+	if result.IsError {
+		return assertToolError(t, result, nil, wantStableCode)
+	}
+	started := decodeStructured[StartReviewRoundOutput](t, result)
+
+	deadline := time.After(time.Second)
+	for {
+		result, err = client.CallTool(ctx, &mcp.CallToolParams{
+			Name: "collect_round",
+			Arguments: map[string]any{
+				"session_id":   sessionID,
+				"round_number": started.RoundNumber,
+			},
+		})
+		if err != nil {
+			t.Fatalf("collect round: %v", err)
+		}
+		if result.IsError {
+			payload := decodeStructured[ToolErrorOutput](t, result)
+			if payload.Error.Code == broker.CodeRoundInProgress {
+				select {
+				case <-deadline:
+					t.Fatalf("collect round did not reach error %s; last error=%+v", wantStableCode, payload.Error)
+				case <-time.After(10 * time.Millisecond):
+				}
+				continue
+			}
+			return assertToolError(t, result, nil, wantStableCode)
+		}
+		t.Fatalf("collect round succeeded while waiting for error %s", wantStableCode)
+	}
 }
 
 func decodeStructured[T any](t *testing.T, result *mcp.CallToolResult) T {

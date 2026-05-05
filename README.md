@@ -88,7 +88,6 @@ Tools exposed:
 
 - `open_session`
 - `start_review_round`
-- `review_round`
 - `round_status`
 - `collect_round`
 - `record_round_notes`

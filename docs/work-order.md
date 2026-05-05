@@ -126,7 +126,7 @@ Five milestones. M1–M4 are the MVP. M5 is V2.
 
 **Scope:**
 
-- Implement the MCP tools listed in design §8: `open_session`, `start_review_round`, `review_round`, `round_status`, `collect_round`, `record_round_notes`, `close_session`, `session_status`, `list_reviewers`, `list_sessions`.
+- Implement the MCP tools listed in design §8: `open_session`, `start_review_round`, `round_status`, `collect_round`, `record_round_notes`, `close_session`, `session_status`, `list_reviewers`, `list_sessions`.
 - Enforce the V1 single-reviewer constraint at `open_session`: if the resolved reviewer set has more than one entry (or zero, when the config has multiple entries with no caller-supplied selection), return `panel_mode_unsupported`.
 - Implement project config loading (`mercurius.yaml`).
 - Wire the server entrypoint at `cmd/mercurius/main.go` with stdio transport.
@@ -153,7 +153,7 @@ Five milestones. M1–M4 are the MVP. M5 is V2.
 **Definition of done:**
 
 - Panel mode can be configured per session and produces a round result containing all reviewer outputs distinctly.
-- A diff round can be requested explicitly via `review_round(session_id, diff: true)` and produces output identifiable as a diff round in the log.
+- A diff round can be requested explicitly via `start_review_round(session_id, diff: true)` and produces output identifiable as a diff round in the log.
 
 Deferred to V2 because the MVP loop is valuable without these, and shipping the simpler version first surfaces real-use feedback that should inform the panel and diff designs.
 

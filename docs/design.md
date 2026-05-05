@@ -45,7 +45,7 @@ flowchart LR
     Log[(Round log<br/>filesystem)]
 
     Human <--> DA
-    DA -- review_round --> M
+    DA -- start_review_round / collect_round --> M
     M --> R1
     M -.-> R2
     R1 --> M
@@ -180,7 +180,7 @@ If any step after snapshotting fails — the reviewer errors, schema validation 
 
 The error is returned as a tool-level MCP error result with full diagnostic content (reviewer name, error code, validation details, retry guidance, and next action). The caller can inspect or persist that response if needed. For an existing session, Mercurius also keeps the most recent broker error in `session_status.last_error` until a later successful session operation clears it. Mercurius does not preserve failure state on disk.
 
-The semantics are: a failed round is as if it never happened. A subsequent `review_round` call will reuse the same round number, snapshot fresh bytes (which may have changed), and try again. This keeps `session_status.rounds` and `rounds_used` accurate to what actually completed, and keeps budget consumption visible to the user — runaway loops from a misconfigured reviewer surface as repeated failure responses, not as silently-burning budget.
+The semantics are: a failed round is as if it never happened. A subsequent `start_review_round` call will reuse the same round number, snapshot fresh bytes (which may have changed), and try again. This keeps `session_status.rounds` and `rounds_used` accurate to what actually completed, and keeps budget consumption visible to the user — runaway loops from a misconfigured reviewer surface as repeated failure responses, not as silently-burning budget.
 
 Mercurius does not modify the design or work-order artifacts. The design agent and human do that, between rounds, in their own context. This boundary keeps Mercurius stateless with respect to the artifacts themselves.
 
@@ -497,29 +497,6 @@ Start a new review session. Mercurius validates the artifact set, allocates a se
 
 Start a background review round and return immediately. This is the preferred tool for real reviews that may outlive the MCP client's timeout.
 
-**Request:** same shape as `review_round`.
-
-**Response:**
-```json
-{
-  "session_id": "string",
-  "round_number": 3,
-  "state": "running",
-  "reviewer": "codex",
-  "started_at": "2026-05-04T18:31:00Z",
-  "status_path": "/abs/path/to/<session_id>/status.json",
-  "events_path": "/abs/path/to/<session_id>/events.ndjson",
-  "monitor_command": "mercurius monitor --config /abs/path/to/mercurius.yaml --session <session_id> --wait",
-  "next_action": "tell the user this review is running; they can monitor it with the monitor_command and re-engage you when the round completes"
-}
-```
-
-**Errors:** same validation and preflight errors as `review_round`, plus `round_in_progress` when the session already has an active round.
-
-#### `review_round`
-
-Run a round against the session's current artifacts (or the supplied override) and wait for completion while the MCP request remains alive. Internally this uses the same background job path as `start_review_round`; if the MCP client times out, the background job continues and can be monitored or collected later. Agents should prefer `start_review_round` for substantive reviews and reserve `review_round` for short smoke flows.
-
 **Request:**
 ```json
 {
@@ -536,25 +513,15 @@ Artifact override paths follow the same rules as `open_session`: each path must 
 **Response:**
 ```json
 {
+  "session_id": "string",
   "round_number": 3,
-  "log_path": "/abs/path/to/<session_id>/round-03.md",
-  "manifest": [
-    {
-      "name": "design",
-      "source_path": "/abs/path/to/design.md",
-      "snapshot_path": "/abs/path/to/<session_id>/snapshots/round-03/design.md",
-      "size": 12453,
-      "hash": "sha256:..."
-    }
-  ],
-  "reviewers": [
-    {
-      "reviewer_name": "codex",
-      "raw": { /* object matching §5 review-output schema */ },
-      "usage_notes": "model=..., tokens=..."
-    }
-  ],
-  "next_action": "pause and ask the user how to proceed before recording notes or starting another review round"
+  "state": "running",
+  "reviewer": "codex",
+  "started_at": "2026-05-04T18:31:00Z",
+  "status_path": "/abs/path/to/<session_id>/status.json",
+  "events_path": "/abs/path/to/<session_id>/events.ndjson",
+  "monitor_command": "mercurius monitor --config /abs/path/to/mercurius.yaml --session <session_id> --wait",
+  "next_action": "tell the user this review is running; they can monitor it with the monitor_command and re-engage you when the round completes"
 }
 ```
 
@@ -607,7 +574,30 @@ Return a completed review round payload. If the round is still running, the tool
 { "session_id": "string", "round_number": 3 }
 ```
 
-**Response:** same successful shape as `review_round`.
+**Response:**
+```json
+{
+  "round_number": 3,
+  "log_path": "/abs/path/to/<session_id>/round-03.md",
+  "manifest": [
+    {
+      "name": "design",
+      "source_path": "/abs/path/to/design.md",
+      "snapshot_path": "/abs/path/to/<session_id>/snapshots/round-03/design.md",
+      "size": 12453,
+      "hash": "sha256:..."
+    }
+  ],
+  "reviewers": [
+    {
+      "reviewer_name": "codex",
+      "raw": { /* object matching §5 review-output schema */ },
+      "usage_notes": "model=..., tokens=..."
+    }
+  ],
+  "next_action": "pause and ask the user how to proceed before recording notes or starting another review round"
+}
+```
 
 **Errors:**
 - `unknown_session` — `session_id` not found.

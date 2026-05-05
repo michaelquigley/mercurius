@@ -55,8 +55,8 @@ type OpenSessionResponse struct {
 	Artifacts       []RegisteredArtifact
 }
 
-// ReviewRoundRequest runs a new round, optionally replacing artifacts.
-type ReviewRoundRequest struct {
+// StartRoundRequest runs a new round, optionally replacing artifacts.
+type StartRoundRequest struct {
 	SessionID string
 	Artifacts []Artifact
 }
@@ -74,8 +74,8 @@ type StartReviewRoundResponse struct {
 	NextAction     string
 }
 
-// ReviewRoundResponse returns one successful round.
-type ReviewRoundResponse struct {
+// CollectedRoundResponse returns one successful round.
+type CollectedRoundResponse struct {
 	RoundNumber int
 	LogPath     string
 	Manifest    []ArtifactManifestEntry
