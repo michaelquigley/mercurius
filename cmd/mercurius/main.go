@@ -132,6 +132,9 @@ func monitorSession(cmd *cobra.Command, logDestination string, sessionID string,
 	if err != nil {
 		return err
 	}
+	if len(events) > 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "events:")
+	}
 	for _, event := range events {
 		printEvent(cmd, event)
 	}
@@ -160,6 +163,7 @@ func monitorSession(cmd *cobra.Command, logDestination string, sessionID string,
 			for _, event := range events[seen:] {
 				printEvent(cmd, event)
 				if event.RoundNumber == waitRound && (event.Event == "round_completed" || event.Event == "round_failed") {
+					printRoundTerminalAction(cmd, event)
 					return nil
 				}
 			}
@@ -170,49 +174,82 @@ func monitorSession(cmd *cobra.Command, logDestination string, sessionID string,
 
 func printStatus(cmd *cobra.Command, status monitorpkg.SessionStatus) {
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "session %s state=%s rounds_used=%d budget_remaining=%d\n", status.SessionID, status.State, status.RoundsUsed, status.BudgetRemaining)
-	if status.ReviewContextSource != "" {
-		fmt.Fprintf(out, "review_context source=%s present=%t\n", status.ReviewContextSource, status.ReviewContextPresent)
+	fmt.Fprintf(out, "session '%s' %s\n", status.SessionID, status.State)
+	fmt.Fprintf(out, "rounds: used=%d budget_remaining=%d\n", status.RoundsUsed, status.BudgetRemaining)
+	if status.ReviewContextPresent {
+		fmt.Fprintf(out, "review context: %s\n", status.ReviewContextSource)
 	}
-	if status.Convergence.Signal != "" {
-		fmt.Fprintf(out, "convergence signal=%s latest_blocking=%d previous_blocking=%d accepted_decisions=%d declined_or_deferred_decisions=%d\n", status.Convergence.Signal, status.Convergence.LatestBlockingFindings, status.Convergence.PreviousBlockingFindings, status.Convergence.AcceptedDecisions, status.Convergence.DeclinedOrDeferredDecisions)
+	if status.Convergence.Signal != "" && status.Convergence.Signal != "none" {
+		fmt.Fprintf(out, "convergence: %s latest_blocking=%d previous_blocking=%d accepted_decisions=%d declined_or_deferred_decisions=%d\n", status.Convergence.Signal, status.Convergence.LatestBlockingFindings, status.Convergence.PreviousBlockingFindings, status.Convergence.AcceptedDecisions, status.Convergence.DeclinedOrDeferredDecisions)
 		if status.Convergence.Message != "" {
-			fmt.Fprintf(out, "convergence_message=%s\n", status.Convergence.Message)
+			fmt.Fprintf(out, "convergence message: %s\n", status.Convergence.Message)
+		}
+	}
+	if status.LastError != nil {
+		fmt.Fprintf(out, "last error: %s - %s\n", status.LastError.Code, status.LastError.Message)
+		if status.LastError.NextAction != "" {
+			fmt.Fprintf(out, "next: %s\n", status.LastError.NextAction)
 		}
 	}
 	if status.ActiveRound != nil {
-		fmt.Fprintf(out, "active round %d state=%s reviewer=%s started=%s\n", status.ActiveRound.RoundNumber, status.ActiveRound.State, status.ActiveRound.Reviewer, formatMonitorTime(status.ActiveRound.StartedAt))
-		fmt.Fprintf(out, "status=%s events=%s\n", status.ActiveRound.StatusPath, status.ActiveRound.EventsPath)
+		fmt.Fprintf(out, "active round: %d %s reviewer='%s' started=%s\n", status.ActiveRound.RoundNumber, status.ActiveRound.State, status.ActiveRound.Reviewer, formatMonitorTime(status.ActiveRound.StartedAt))
+		fmt.Fprintf(out, "monitor files: status='%s' events='%s'\n", status.ActiveRound.StatusPath, status.ActiveRound.EventsPath)
 	} else if status.LastRoundJob != nil {
-		fmt.Fprintf(out, "last round %d state=%s reviewer=%s updated=%s\n", status.LastRoundJob.RoundNumber, status.LastRoundJob.State, status.LastRoundJob.Reviewer, formatMonitorTime(status.LastRoundJob.UpdatedAt))
+		fmt.Fprintf(out, "last round: %d %s reviewer='%s' updated=%s\n", status.LastRoundJob.RoundNumber, status.LastRoundJob.State, status.LastRoundJob.Reviewer, formatMonitorTime(status.LastRoundJob.UpdatedAt))
 		if status.LastRoundJob.LogPath != "" {
-			fmt.Fprintf(out, "log=%s\n", status.LastRoundJob.LogPath)
+			fmt.Fprintf(out, "log: '%s'\n", status.LastRoundJob.LogPath)
+		}
+		if status.LastRoundJob.Error != nil {
+			fmt.Fprintf(out, "round error: %s - %s\n", status.LastRoundJob.Error.Code, status.LastRoundJob.Error.Message)
 		}
 	}
 }
 
 func printEvent(cmd *cobra.Command, event monitorpkg.Event) {
 	out := cmd.OutOrStdout()
-	line := fmt.Sprintf("[%s] %s", formatMonitorTime(event.At), event.Event)
-	if event.SessionID != "" {
-		line += " session=" + event.SessionID
-	}
+	line := fmt.Sprintf("  %s  %s", formatMonitorTime(event.At), event.Event)
 	if event.RoundNumber != 0 {
 		line += fmt.Sprintf(" round=%d", event.RoundNumber)
 	}
 	if event.Reviewer != "" {
-		line += " reviewer=" + event.Reviewer
+		line += " reviewer='" + event.Reviewer + "'"
 	}
 	if event.State != "" {
 		line += " state=" + event.State
 	}
 	if event.LogPath != "" {
-		line += " log=" + event.LogPath
+		line += " log='" + event.LogPath + "'"
 	}
 	if event.Error != nil {
 		line += " error=" + event.Error.Code
 	}
 	fmt.Fprintln(out, line)
+}
+
+func printRoundTerminalAction(cmd *cobra.Command, event monitorpkg.Event) {
+	out := cmd.OutOrStdout()
+	switch event.Event {
+	case "round_completed":
+		fmt.Fprintf(out, "\nround %d completed\n", event.RoundNumber)
+		if event.LogPath != "" {
+			fmt.Fprintf(out, "log: '%s'\n", event.LogPath)
+		}
+		if event.SessionID != "" {
+			fmt.Fprintf(out, "next: ask the design agent to call collect_round for session '%s' round %d\n", event.SessionID, event.RoundNumber)
+		} else {
+			fmt.Fprintf(out, "next: ask the design agent to call collect_round for round %d\n", event.RoundNumber)
+		}
+	case "round_failed":
+		fmt.Fprintf(out, "\nround %d failed\n", event.RoundNumber)
+		if event.Error != nil {
+			fmt.Fprintf(out, "error: %s - %s\n", event.Error.Code, event.Error.Message)
+			if event.Error.NextAction != "" {
+				fmt.Fprintf(out, "next: %s\n", event.Error.NextAction)
+				return
+			}
+		}
+		fmt.Fprintln(out, "next: inspect session_status.last_error, then decide whether to retry")
+	}
 }
 
 func formatMonitorTime(t time.Time) string {

@@ -20,6 +20,14 @@ List known sessions:
 mercurius monitor --config /abs/path/to/mercurius.yaml --all
 ```
 
+Monitor output is intentionally operator-facing rather than raw JSON. It suppresses empty convergence state, groups lifecycle events, and prints the next action when a waited round completes. A completed round ends with guidance like:
+
+```text
+round 1 completed
+log: '/abs/path/to/reviews/s_.../round-01.md'
+next: ask the design agent to call collect_round for session 's_...' round 1
+```
+
 ## Long Reviews and MCP Timeouts
 
 Real reviewer runs can outlive an MCP client's tool timeout. Use `start_review_round` rather than expecting a synchronous response. If `collect_round` returns `round_in_progress`, the design agent should pause, tell the user to keep monitoring, and collect later.
