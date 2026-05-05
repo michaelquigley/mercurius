@@ -567,7 +567,7 @@ Return status for a running or terminal review round. If `round_number` is omitt
 
 #### `collect_round`
 
-Return a completed review round payload. If the round is still running, the tool returns `round_in_progress` with status and event paths in the details.
+Return a completed review round payload with agent-facing triage guidance. If the round is still running, the tool returns `round_in_progress` with status and event paths in the details.
 
 **Request:**
 ```json
@@ -595,9 +595,46 @@ Return a completed review round payload. If the round is still running, the tool
       "usage_notes": "model=..., tokens=..."
     }
   ],
-  "next_action": "pause and ask the user how to proceed before recording notes or starting another review round"
+  "triage": {
+    "mode": "one_finding_per_user_turn",
+    "total_findings": 4,
+    "remaining_findings": 3,
+    "findings": [
+      {
+        "reviewer_name": "codex",
+        "ref": "C-1",
+        "kind": "concern",
+        "severity": "major",
+        "location": "docs/design.md",
+        "title": "scope is ambiguous",
+        "detail": "implementation would diverge",
+        "suggestion": "make the acceptance criteria explicit"
+      },
+      {
+        "reviewer_name": "codex",
+        "ref": "Q-1",
+        "kind": "question",
+        "title": "rollout",
+        "detail": "cannot determine deployment order"
+      }
+    ],
+    "next_finding": {
+      "reviewer_name": "codex",
+      "ref": "C-1",
+      "kind": "concern",
+      "severity": "major",
+      "location": "docs/design.md",
+      "title": "scope is ambiguous",
+      "detail": "implementation would diverge",
+      "suggestion": "make the acceptance criteria explicit"
+    },
+    "guidance": "First present all entries in triage.findings as a concise overview..."
+  },
+  "next_action": "pause and present all triage.findings as a concise overview; then address one finding only, defaulting to triage.next_finding unless the user chooses another ref, and stop before addressing other findings or calling another Mercurius tool"
 }
 ```
+
+`triage.findings` is the full ordered finding overview for the user. `triage.next_finding` is the default first concern or question to address after that overview, unless the user chooses another ref. Mercurius does not persist a finding queue; the hint is rebuilt from the immutable reviewer output. Agents should present the whole list, then handle one finding per user turn, which gives each finding a fresh agent turn and tool-call budget. If a round has no concerns or questions, `total_findings` and `remaining_findings` are `0`, `findings` is empty, `next_finding` is `null`, and `next_action` asks whether to record notes, start another round, or close.
 
 **Errors:**
 - `unknown_session` — `session_id` not found.
@@ -634,7 +671,7 @@ Attach the design agent's commentary and the human's decisions to a completed ro
   "log_path": "/abs/path/to/<session_id>/round-03.md",
   "commentary_recorded": true,
   "decisions_recorded": 1,
-  "next_action": "pause and ask the user whether to run another review round or close the session"
+  "next_action": "pause and ask the user whether to handle the next finding, start another review round, or close the session"
 }
 ```
 

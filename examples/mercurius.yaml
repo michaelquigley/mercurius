@@ -8,4 +8,4 @@ prompt_overrides: |
 reviewers:
   - name: codex
     impl: codex
-    model: gpt-5-codex
+    model: gpt-5.5

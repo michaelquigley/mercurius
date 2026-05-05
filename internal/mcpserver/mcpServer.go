@@ -12,6 +12,7 @@ import (
 	"github.com/michaelquigley/mercurius/internal/reviewer"
 	"github.com/michaelquigley/mercurius/internal/reviewer/codex"
 	"github.com/michaelquigley/mercurius/internal/reviewer/dummy"
+	"github.com/michaelquigley/mercurius/internal/schema"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -52,7 +53,28 @@ type CollectedRoundOutput struct {
 	LogPath     string                `json:"log_path"`
 	Manifest    []ManifestEntryOutput `json:"manifest"`
 	Reviewers   []ReviewerOutput      `json:"reviewers"`
+	Triage      RoundTriageOutput     `json:"triage"`
 	NextAction  string                `json:"next_action"`
+}
+
+type RoundTriageOutput struct {
+	Mode              string                `json:"mode"`
+	TotalFindings     int                   `json:"total_findings"`
+	RemainingFindings int                   `json:"remaining_findings"`
+	Findings          []TriageFindingOutput `json:"findings"`
+	NextFinding       *TriageFindingOutput  `json:"next_finding"`
+	Guidance          string                `json:"guidance"`
+}
+
+type TriageFindingOutput struct {
+	ReviewerName string  `json:"reviewer_name"`
+	Ref          string  `json:"ref"`
+	Kind         string  `json:"kind"`
+	Severity     *string `json:"severity,omitempty"`
+	Location     *string `json:"location,omitempty"`
+	Title        string  `json:"title"`
+	Detail       string  `json:"detail"`
+	Suggestion   *string `json:"suggestion,omitempty"`
 }
 
 type StartReviewRoundOutput struct {
@@ -330,7 +352,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "collect_round",
-		Description: "return a completed review round result. if the round is still running, pause and tell the user to keep monitoring instead of retrying immediately.",
+		Description: "return a completed review round result with triage guidance. if the round is still running, pause and tell the user to keep monitoring instead of retrying immediately. after a successful result, present all triage.findings as a concise overview, then address only one finding per user turn.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input CollectRoundInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.CollectRound(ctx, broker.CollectRoundRequest{
 			SessionID:   input.SessionID,
@@ -339,18 +361,20 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 		if err != nil {
 			return toolErrorResult(err)
 		}
+		triage := triageOutput(response.Reviewers)
 		return nil, CollectedRoundOutput{
 			RoundNumber: response.RoundNumber,
 			LogPath:     response.LogPath,
 			Manifest:    manifestOutput(response.Manifest),
 			Reviewers:   reviewerOutput(response.Reviewers),
-			NextAction:  "pause and ask the user how to proceed before recording notes or starting another review round",
+			Triage:      triage,
+			NextAction:  collectedRoundNextAction(triage),
 		}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "record_round_notes",
-		Description: "record commentary and human decisions for a completed round. after this tool returns, pause and ask the user whether to start another review round or stop; do not immediately call another Mercurius tool unless the user explicitly asks you to continue",
+		Description: "record commentary and human decisions for a completed round. after this tool returns, pause and ask the user whether to handle the next finding, start another round, or stop; do not immediately call another Mercurius tool unless the user explicitly asks you to continue",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RecordRoundNotesInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.RecordRoundNotes(ctx, broker.RecordRoundNotesRequest{
 			SessionID:   input.SessionID,
@@ -366,7 +390,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 			LogPath:            response.LogPath,
 			CommentaryRecorded: response.CommentaryRecorded,
 			DecisionsRecorded:  response.DecisionsRecorded,
-			NextAction:         "pause and ask the user whether to run another review round or close the session",
+			NextAction:         "pause and ask the user whether to handle the next finding, start another review round, or close the session",
 		}, nil
 	})
 
@@ -564,6 +588,65 @@ func reviewerOutput(results []broker.ReviewerResult) []ReviewerOutput {
 		})
 	}
 	return out
+}
+
+func triageOutput(results []broker.ReviewerResult) RoundTriageOutput {
+	triage := RoundTriageOutput{
+		Mode:     "one_finding_per_user_turn",
+		Guidance: noFindingsTriageGuidance(),
+	}
+	for _, result := range results {
+		var raw schema.ReviewOutput
+		if err := json.Unmarshal(result.Raw, &raw); err != nil {
+			continue
+		}
+		for _, concern := range raw.Concerns {
+			severity := concern.Severity
+			location := concern.Location
+			triage.Findings = append(triage.Findings, TriageFindingOutput{
+				ReviewerName: result.ReviewerName,
+				Ref:          concern.ID,
+				Kind:         "concern",
+				Severity:     &severity,
+				Location:     &location,
+				Title:        concern.Claim,
+				Detail:       concern.Rationale,
+				Suggestion:   cloneString(concern.Suggestion),
+			})
+		}
+		for _, question := range raw.Questions {
+			triage.Findings = append(triage.Findings, TriageFindingOutput{
+				ReviewerName: result.ReviewerName,
+				Ref:          question.ID,
+				Kind:         "question",
+				Title:        question.Topic,
+				Detail:       question.WhyItBlocks,
+			})
+		}
+	}
+	triage.TotalFindings = len(triage.Findings)
+	if triage.TotalFindings > 0 {
+		first := triage.Findings[0]
+		triage.NextFinding = &first
+		triage.RemainingFindings = triage.TotalFindings - 1
+		triage.Guidance = oneFindingTriageGuidance()
+	}
+	return triage
+}
+
+func oneFindingTriageGuidance() string {
+	return "First present all entries in triage.findings as a concise overview so the user sees the full review landscape. Then address only one finding in the current turn, defaulting to triage.next_finding unless the user chooses another ref. Ask whether they want to discuss it, fix it, defer it, or reject it before making artifact changes. Then stop and wait for the user; do not address other findings, record notes, or call another Mercurius tool until the user explicitly responds. This preserves a fresh turn and tool-call budget for each finding."
+}
+
+func noFindingsTriageGuidance() string {
+	return "No concerns or questions were returned. Summarize that there are no findings, then ask whether to record notes, start another review round, or close the session."
+}
+
+func collectedRoundNextAction(triage RoundTriageOutput) string {
+	if triage.NextFinding != nil {
+		return "pause and present all triage.findings as a concise overview; then address one finding only, defaulting to triage.next_finding unless the user chooses another ref, and stop before addressing other findings or calling another Mercurius tool"
+	}
+	return "pause and tell the user this round returned no findings; ask whether to record notes, start another review round, or close the session"
 }
 
 func sessionStatusOutput(status broker.SessionStatusResponse) SessionStatusOutput {

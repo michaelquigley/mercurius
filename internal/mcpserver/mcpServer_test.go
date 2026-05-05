@@ -94,6 +94,12 @@ func TestDummyReviewFlow(t *testing.T) {
 	if !strings.Contains(round1.NextAction, "pause") {
 		t.Fatalf("round next action = %q", round1.NextAction)
 	}
+	if round1.Triage.Mode != "one_finding_per_user_turn" || round1.Triage.TotalFindings != 0 || round1.Triage.RemainingFindings != 0 || len(round1.Triage.Findings) != 0 || round1.Triage.NextFinding != nil {
+		t.Fatalf("no-finding triage = %+v", round1.Triage)
+	}
+	if !strings.Contains(round1.Triage.Guidance, "No concerns or questions") || !strings.Contains(round1.NextAction, "no findings") {
+		t.Fatalf("no-finding guidance = triage:%q next_action:%q", round1.Triage.Guidance, round1.NextAction)
+	}
 
 	notesResult, err := client.CallTool(ctx, &mcp.CallToolParams{
 		Name: "record_round_notes",
@@ -432,6 +438,73 @@ func TestAsyncReviewTools(t *testing.T) {
 	}
 }
 
+func TestCollectRoundTriageConcernFirst(t *testing.T) {
+	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithConcernAndQuestion(t))
+	sessionID := openTestSession(t, ctx, client)
+
+	collected := startAndCollectRoundTool(t, ctx, client, sessionID)
+	if collected.Triage.Mode != "one_finding_per_user_turn" {
+		t.Fatalf("triage mode = %q", collected.Triage.Mode)
+	}
+	if collected.Triage.TotalFindings != 2 || collected.Triage.RemainingFindings != 1 {
+		t.Fatalf("triage counts = %+v", collected.Triage)
+	}
+	if len(collected.Triage.Findings) != 2 {
+		t.Fatalf("triage findings = %+v", collected.Triage.Findings)
+	}
+	finding := collected.Triage.NextFinding
+	if finding == nil {
+		t.Fatal("expected next finding")
+	}
+	if collected.Triage.Findings[0].Ref != finding.Ref || collected.Triage.Findings[1].Ref != "Q-1" || collected.Triage.Findings[1].Kind != "question" {
+		t.Fatalf("triage finding order = %+v; next=%+v", collected.Triage.Findings, finding)
+	}
+	if finding.ReviewerName != "triage" || finding.Ref != "C-1" || finding.Kind != "concern" {
+		t.Fatalf("next finding identity = %+v", finding)
+	}
+	if finding.Severity == nil || *finding.Severity != "major" || finding.Location == nil || *finding.Location != "docs/design.md" {
+		t.Fatalf("concern metadata = %+v", finding)
+	}
+	if finding.Title != "scope is ambiguous" || finding.Detail != "implementation would diverge" {
+		t.Fatalf("concern text = %+v", finding)
+	}
+	if finding.Suggestion == nil || *finding.Suggestion != "make the acceptance criteria explicit" {
+		t.Fatalf("concern suggestion = %+v", finding)
+	}
+	if !strings.Contains(collected.Triage.Guidance, "present all entries in triage.findings") || !strings.Contains(collected.Triage.Guidance, "one finding") || !strings.Contains(collected.Triage.Guidance, "fresh turn") {
+		t.Fatalf("triage guidance = %q", collected.Triage.Guidance)
+	}
+	if !strings.Contains(collected.NextAction, "all triage.findings") || !strings.Contains(collected.NextAction, "one finding only") || !strings.Contains(collected.NextAction, "stop") {
+		t.Fatalf("next action = %q", collected.NextAction)
+	}
+}
+
+func TestCollectRoundTriageQuestionOnly(t *testing.T) {
+	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithQuestionOnly(t))
+	sessionID := openTestSession(t, ctx, client)
+
+	collected := startAndCollectRoundTool(t, ctx, client, sessionID)
+	if collected.Triage.TotalFindings != 1 || collected.Triage.RemainingFindings != 0 {
+		t.Fatalf("triage counts = %+v", collected.Triage)
+	}
+	if len(collected.Triage.Findings) != 1 {
+		t.Fatalf("triage findings = %+v", collected.Triage.Findings)
+	}
+	finding := collected.Triage.NextFinding
+	if finding == nil {
+		t.Fatal("expected next finding")
+	}
+	if finding.ReviewerName != "triage" || finding.Ref != "Q-7" || finding.Kind != "question" {
+		t.Fatalf("question identity = %+v", finding)
+	}
+	if finding.Title != "deployment order" || finding.Detail != "cannot determine whether migration is safe" {
+		t.Fatalf("question text = %+v", finding)
+	}
+	if finding.Severity != nil || finding.Location != nil || finding.Suggestion != nil {
+		t.Fatalf("question should not have concern-only fields: %+v", finding)
+	}
+}
+
 func newTestClient(t *testing.T, cfg *config.Config) (context.Context, *mcp.ClientSession) {
 	t.Helper()
 
@@ -440,6 +513,24 @@ func newTestClient(t *testing.T, cfg *config.Config) (context.Context, *mcp.Clie
 		t.Fatalf("new server: %v", err)
 	}
 	return newTestClientForServer(t, server)
+}
+
+func newTestClientWithFixedReviewer(t *testing.T, raw json.RawMessage) (context.Context, *mcp.ClientSession) {
+	t.Helper()
+
+	b := broker.New(broker.Options{
+		LogDestination: filepath.Join(t.TempDir(), "reviews"),
+		DefaultBudget:  2,
+		MaxFindings:    config.DefaultMaxFindings,
+		Reviewers: []broker.ReviewerSpec{{
+			Name: "triage",
+			Impl: "dummy",
+			Factory: func(string) reviewer.Reviewer {
+				return fixedReviewer{raw: raw}
+			},
+		}},
+	})
+	return newTestClientWithBroker(t, b)
 }
 
 func newTestClientWithBroker(t *testing.T, b *broker.Broker) (context.Context, *mcp.ClientSession) {
@@ -472,6 +563,25 @@ func newTestClientForServer(t *testing.T, server *mcp.Server) (context.Context, 
 		_ = serverSession.Close()
 	})
 	return ctx, clientSession
+}
+
+func openTestSession(t *testing.T, ctx context.Context, client *mcp.ClientSession) string {
+	t.Helper()
+
+	artifactPath := writeArtifact(t, "design.md", "# design\n")
+	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{
+		Name: "open_session",
+		Arguments: map[string]any{
+			"artifacts": []map[string]any{{
+				"name": "design.md",
+				"path": artifactPath,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	return decodeStructured[OpenSessionOutput](t, openResult).SessionID
 }
 
 func startAndCollectRoundTool(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string) CollectedRoundOutput {
@@ -642,6 +752,17 @@ func (failingReviewer) Review(context.Context, reviewer.ReviewRequest) (reviewer
 	return reviewer.ReviewResponse{}, errors.New("reviewer unavailable")
 }
 
+type fixedReviewer struct {
+	raw json.RawMessage
+}
+
+func (r fixedReviewer) Review(ctx context.Context, _ reviewer.ReviewRequest) (reviewer.ReviewResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return reviewer.ReviewResponse{}, err
+	}
+	return reviewer.ReviewResponse{Raw: append(json.RawMessage(nil), r.raw...), UsageNotes: "fixed"}, nil
+}
+
 type blockingReviewer struct {
 	started  chan struct{}
 	releaseC chan struct{}
@@ -689,6 +810,54 @@ func validReviewOutput() json.RawMessage {
 	})
 	if err != nil {
 		panic(err)
+	}
+	return raw
+}
+
+func reviewOutputWithConcernAndQuestion(t *testing.T) json.RawMessage {
+	t.Helper()
+
+	suggestion := "make the acceptance criteria explicit"
+	raw, err := json.Marshal(schema.ReviewOutput{
+		Verdict: "needs_changes",
+		Summary: "needs one clarification and one answer",
+		Concerns: []schema.Concern{{
+			ID:         "C-1",
+			Severity:   "major",
+			Location:   "docs/design.md",
+			Claim:      "scope is ambiguous",
+			Rationale:  "implementation would diverge",
+			Suggestion: &suggestion,
+		}},
+		Questions: []schema.Question{{
+			ID:          "Q-1",
+			Topic:       "rollout",
+			WhyItBlocks: "cannot determine deployment order",
+		}},
+		ProposedDiffs: []schema.ProposedDiff{},
+	})
+	if err != nil {
+		t.Fatalf("marshal concern/question review output: %v", err)
+	}
+	return raw
+}
+
+func reviewOutputWithQuestionOnly(t *testing.T) json.RawMessage {
+	t.Helper()
+
+	raw, err := json.Marshal(schema.ReviewOutput{
+		Verdict:  "needs_discussion",
+		Summary:  "needs one answer",
+		Concerns: []schema.Concern{},
+		Questions: []schema.Question{{
+			ID:          "Q-7",
+			Topic:       "deployment order",
+			WhyItBlocks: "cannot determine whether migration is safe",
+		}},
+		ProposedDiffs: []schema.ProposedDiff{},
+	})
+	if err != nil {
+		t.Fatalf("marshal question review output: %v", err)
 	}
 	return raw
 }

@@ -22,7 +22,7 @@ Mercurius runs as an MCP server that the design agent can call. Each call:
 2. Returns structured output — verdict, concerns, questions, optional concrete diffs — rather than free-form prose.
 3. Logs the round to a configurable destination so the audit trail accumulates without effort.
 
-The design agent then triages the output, applies what is mechanical, and surfaces the actual decisions to the human. The loop continues until the verdict is `ready_to_build` or the human calls it.
+The design agent then uses the returned triage hint to present the full finding list, then discuss one finding at a time with the human before fixing, deferring, or rejecting it. The loop continues until the verdict is `ready_to_build` or the human calls it.
 
 Mercurius is reviewer-agnostic by design. Codex is the first implementation; the interface is built so other implementing agents can be swapped in without touching the orchestration layer.
 
@@ -64,7 +64,7 @@ prompt_overrides: |
 reviewers:
   - name: codex
     impl: codex
-    model: gpt-5-codex
+    model: gpt-5.5
 ```
 
 Relative `log_destination` and `binary_path` values resolve relative to the config file, not the process working directory. Omit `binary_path` to use the reviewer's default executable lookup.
@@ -102,7 +102,7 @@ Manual smoke path: connect an MCP client, call `open_session` with absolute arti
 mercurius monitor --config /absolute/path/to/mercurius.yaml --session <session_id> --wait
 ```
 
-When the round completes, call `collect_round`, record commentary with `record_round_notes`, then close with `close_session`.
+When the round completes, call `collect_round`, present `triage.findings`, handle one selected finding with the user, record commentary with `record_round_notes`, then continue or close with `close_session`.
 
 ## License
 
