@@ -12,17 +12,30 @@ max_findings: 6
 # stakes, scope, locked decisions, simplicity-vs-defensiveness preference. the
 # reviewer suppresses findings that do not materially apply under this context.
 review_context: |
-  personal tool, single supervised implementer. pre-1.0; breaking changes are
-  acceptable. prefer simple over highly defensive when both achieve correctness.
-  out of scope: production-grade observability and multi-tenant concerns.
+  mercurius is a small Go tool for design-agent review loops. pre-1.0 with
+  one known user (the author); breaking config and protocol changes are
+  acceptable. single supervised implementer; no production users. prefer
+  simple over highly defensive when both achieve correctness. out of scope
+  for now: panel mode, diff rounds, multi-tenant concerns, production-grade
+  observability.
 
 # review_focus directs the reviewer at project-specific surfaces that the base
 # review philosophy does not already cover. the base prompt already carries
 # the universal subtle-vs-obvious filter, so this field is typically just one
 # paragraph naming the invariants or risks unique to this project.
 review_focus: |
-  pay particular attention to invariants specific to this project that the
-  universal what-to-flag criteria do not already cover.
+  pay particular attention to:
+
+  - broker invariants that are easy to drift past in prose: atomic
+    round-failure cleanup (no orphan logs, no partial snapshots, no budget
+    consumption on failure), single-reviewer-per-session, and broker-owned
+    prompt assembly (reviewers run their underlying tool and return raw
+    output; they do not construct prompts).
+  - decisions carry-forward: adjudicated findings must not be silently
+    re-raised across rounds, and the prior-decisions prompt block must
+    reflect what is in decisions.md.
+  - MCP tool surface stability: parameter names, error codes, and response
+    shapes are part of the contract design agents depend on.
 
 reviewers:
   - name: codex
