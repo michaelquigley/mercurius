@@ -22,12 +22,12 @@ type Artifact struct {
 
 // Request contains runtime values for the standard review prompt.
 type Request struct {
-	Artifacts       []Artifact
-	PriorDecisions  []reviewer.PriorDecision
-	ReviewContext   string
-	DecisionsLog    string
-	PromptOverrides string
-	MaxFindings     int
+	Artifacts      []Artifact
+	PriorDecisions []reviewer.PriorDecision
+	ReviewContext  string
+	DecisionsLog   string
+	ReviewFocus    string
+	MaxFindings    int
 }
 
 // Build assembles the standard review prompt and schema payload.
@@ -45,24 +45,36 @@ func Build(req Request) (string, json.RawMessage) {
 	}
 	b.WriteString("Weight every finding against this review context. Suppress concerns that do not realistically apply under the stated deployment constraints, implementation model, locked decisions, or out-of-scope boundaries. When a point is useful but not readiness-blocking, put it in `advisory_notes`, not `concerns` or `questions`.\n\n")
 
-	b.WriteString("## Review criteria\n\n")
-	b.WriteString("For the design document, look for:\n")
-	b.WriteString("- Decisions that are described but not actually made (handwaves like \"decided at scaffold time\").\n")
-	b.WriteString("- Internal contradictions between sections.\n")
-	b.WriteString("- Affordances claimed but not specified (e.g., \"the system supports X\" without saying how).\n")
-	b.WriteString("- Architectural ambiguity that two implementers would resolve differently.\n\n")
-	b.WriteString("For the work order, look for:\n")
-	b.WriteString("- Scope items whose definition of done is not testable.\n")
-	b.WriteString("- Dependencies between milestones that are not stated.\n")
-	b.WriteString("- Concrete decisions deferred to implementation rather than settled.\n")
-	b.WriteString("- Test coverage gaps for the architectural commitments in the design.\n\n")
-	b.WriteString("For both, separate readiness blockers from polish. Only use `concerns` or `questions` for items that block shipping/building under the stated context; put non-blocking small improvements, missed opportunities, or downstream considerations in `advisory_notes`.\n\n")
+	b.WriteString("## What to flag\n\n")
+	b.WriteString("You are looking for SUBTLE issues — things an implementer (LLM or human) would not catch on their own through normal implementation friction. The implementer will discover obvious problems through compile errors, runtime errors, failing tests, and fail-fast preconditions. Your value is finding what those normal feedback loops will miss.\n\n")
+	b.WriteString("Flag an issue if it would:\n")
+	b.WriteString("- silently produce wrong numbers, wrong attribution, or wrong visibility\n")
+	b.WriteString("- let two implementers land on incompatible interpretations of the same spec without either hitting a clear error\n")
+	b.WriteString("- violate a non-trivial invariant that is not obvious from the surrounding schema, code, or prose\n")
+	b.WriteString("- defer work in a way that stays silently absent until a specific deployment moment fails\n")
+	b.WriteString("- claim an affordance that is not actually specified, such that the implementer would have to invent the missing detail\n\n")
+	b.WriteString("Do NOT flag an issue if any of these are true:\n")
+	b.WriteString("- it would cause a compile error, codegen failure, or type mismatch\n")
+	b.WriteString("- it would fail with a clear, directed runtime error during testing\n")
+	b.WriteString("- a fail-fast precondition or assertion already documented in the spec catches it\n")
+	b.WriteString("- it is a stale reference that other prose in the same doc contradicts\n")
+	b.WriteString("- it is a wording bug that does not change implementation behavior\n")
+	b.WriteString("- it is a missing entry on a list whose absence would be immediately apparent when the implementer wires the feature\n\n")
+	b.WriteString("Common locations for subtle issues:\n")
+	b.WriteString("- Design: decisions described but not actually made (handwaves like \"decided at scaffold time\"), internal contradictions between sections, architectural ambiguity that two implementers would resolve differently.\n")
+	b.WriteString("- Work order: scope items whose definition of done is not testable, dependencies between milestones that are not stated, concrete decisions deferred to implementation rather than settled, test coverage gaps for architectural commitments in the design.\n\n")
+	b.WriteString("Prefer fewer, more material findings over comprehensive checklists. Any review can always find more to say. The question is whether saying it adds value over the implementer's own attention.\n\n")
+	b.WriteString("Separate readiness blockers from polish. Use `concerns` or `questions` only for items that block shipping or building under the stated context; put non-blocking small improvements, missed opportunities, or downstream considerations in `advisory_notes`. Emitting fewer than the finding budget is normal and expected. Emitting zero blocking findings when the artifacts are genuinely implementation-ready is a valid, useful result.\n\n")
 
-	b.WriteString("## Project-specific guidance\n\n")
-	if strings.TrimSpace(req.PromptOverrides) == "" {
-		b.WriteString("(no project-specific guidance)\n\n")
+	b.WriteString("## Fix sizing\n\n")
+	b.WriteString("When proposing a fix or suggestion, prefer the smallest-shaped fix that resolves the subtle issue. Do not propose new schemas, new mechanisms, or new work units when an existing pattern can absorb the fix. Over-engineered fixes are themselves a subtle harm — they ship as permanent doc surface that constrains future work.\n\n")
+
+	b.WriteString("## Project-specific focus\n\n")
+	b.WriteString("In addition to the universal what-to-flag criteria above, give particular attention to:\n\n")
+	if strings.TrimSpace(req.ReviewFocus) == "" {
+		b.WriteString("(no project-specific focus)\n\n")
 	} else {
-		b.WriteString(strings.TrimRight(req.PromptOverrides, "\n"))
+		b.WriteString(strings.TrimRight(req.ReviewFocus, "\n"))
 		b.WriteString("\n\n")
 	}
 

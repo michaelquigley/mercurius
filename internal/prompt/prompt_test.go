@@ -26,8 +26,10 @@ func TestBuildIncludesRequiredSectionsInOrder(t *testing.T) {
 	sections := []string{
 		"You are reviewing project artifacts",
 		"## Review context",
-		"## Review criteria",
-		"## Project-specific guidance",
+		"## What to flag",
+		"## Fix sizing",
+		"## Project-specific focus",
+		"In addition to the universal what-to-flag criteria above",
 		"## Artifacts under review",
 		"## Prior decisions",
 		"## Verdict and severity",
@@ -44,16 +46,16 @@ func TestBuildIncludesRequiredSectionsInOrder(t *testing.T) {
 		}
 		last = index
 	}
-	if !strings.Contains(prompt, "(no project-specific guidance)") {
-		t.Fatal("expected empty guidance placeholder")
+	if !strings.Contains(prompt, "(no project-specific focus)") {
+		t.Fatal("expected empty focus placeholder")
 	}
 }
 
-func TestBuildRendersPromptOverridesAndPriorDecisions(t *testing.T) {
+func TestBuildRendersReviewFocusAndPriorDecisions(t *testing.T) {
 	prompt, _ := Build(Request{
-		ReviewContext:   "deployment: personal one-shot",
-		DecisionsLog:    "# session decisions log\n\n## round 2\n- C-1 (accepted): fix it.\n",
-		PromptOverrides: "flag ad-hoc logging.",
+		ReviewContext: "deployment: personal one-shot",
+		DecisionsLog:  "# session decisions log\n\n## round 2\n- C-1 (accepted): fix it.\n",
+		ReviewFocus:   "flag ad-hoc logging.",
 		PriorDecisions: []reviewer.PriorDecision{
 			{RoundNumber: 2, Ref: "C-1", Disposition: "accepted", Note: "fix it."},
 		},

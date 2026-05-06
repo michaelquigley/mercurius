@@ -62,8 +62,9 @@ default_budget: 4
 max_findings: 10
 review_context: |
   Add project/session constraints that should calibrate reviewer rigor.
-prompt_overrides: |
-  Add project-specific review guidance here.
+review_focus: |
+  Add project-specific things to look for that the base review philosophy
+  does not already cover.
 reviewers:
   - name: codex
     impl: codex

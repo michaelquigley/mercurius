@@ -5,9 +5,10 @@ max_findings: 6
 review_context: |
   Deployment context and constraints go here. Suppress findings that do not
   materially affect readiness under this context.
-prompt_overrides: |
-  Focus on design clarity, missing acceptance criteria, and risks that would
-  block a straightforward implementation.
+review_focus: |
+  Pay particular attention to invariants specific to this project that the
+  universal what-to-flag criteria do not already cover. Replace this with
+  one or two project-specific concerns.
 reviewers:
   - name: codex
     impl: codex

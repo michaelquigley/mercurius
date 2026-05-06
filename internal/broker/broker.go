@@ -67,7 +67,7 @@ type session struct {
 	rounds              []*round
 	reviewContext       string
 	reviewContextSource string
-	promptOverrides     string
+	reviewFocus         string
 	lastError           *ErrorInfo
 	activeJob           *roundJob
 	lastRoundJob        *roundJob
@@ -92,29 +92,29 @@ type snapshotResult struct {
 }
 
 type roundJob struct {
-	sessionID       string
-	sessionDir      string
-	roundNumber     int
-	state           string
-	reviewerName    string
-	reviewer        reviewer.Reviewer
-	artifacts       []Artifact
-	hasOverride     bool
-	priorDecisions  []reviewer.PriorDecision
-	reviewContext   string
-	decisionsLog    string
-	promptOverrides string
-	maxFindings     int
-	startedAt       time.Time
-	updatedAt       time.Time
-	completedAt     *time.Time
-	logPath         string
-	statusPath      string
-	eventsPath      string
-	result          CollectedRoundResponse
-	err             error
-	errorInfo       *ErrorInfo
-	done            chan struct{}
+	sessionID      string
+	sessionDir     string
+	roundNumber    int
+	state          string
+	reviewerName   string
+	reviewer       reviewer.Reviewer
+	artifacts      []Artifact
+	hasOverride    bool
+	priorDecisions []reviewer.PriorDecision
+	reviewContext  string
+	decisionsLog   string
+	reviewFocus    string
+	maxFindings    int
+	startedAt      time.Time
+	updatedAt      time.Time
+	completedAt    *time.Time
+	logPath        string
+	statusPath     string
+	eventsPath     string
+	result         CollectedRoundResponse
+	err            error
+	errorInfo      *ErrorInfo
+	done           chan struct{}
 }
 
 // New creates an in-memory broker.
@@ -193,7 +193,7 @@ func (b *Broker) OpenSession(ctx context.Context, req OpenSessionRequest) (OpenS
 		reviewer:            reviewerImpl,
 		reviewContext:       reviewContext,
 		reviewContextSource: reviewContextSource,
-		promptOverrides:     b.options.PromptOverrides,
+		reviewFocus:         b.options.ReviewFocus,
 	}
 	b.sessions[id] = s
 
@@ -283,24 +283,24 @@ func (b *Broker) StartReviewRound(ctx context.Context, req StartRoundRequest) (S
 	roundNumber := len(s.rounds) + 1
 	startedAt := time.Now().UTC()
 	job := &roundJob{
-		sessionID:       s.id,
-		sessionDir:      s.dir,
-		roundNumber:     roundNumber,
-		state:           roundStateRunning,
-		reviewerName:    s.reviewerName,
-		reviewer:        s.reviewer,
-		artifacts:       artifacts,
-		hasOverride:     hasOverride,
-		priorDecisions:  s.priorDecisions(),
-		reviewContext:   s.reviewContext,
-		decisionsLog:    s.decisionsLogText(),
-		promptOverrides: s.promptOverrides,
-		maxFindings:     s.maxFindings,
-		startedAt:       startedAt,
-		updatedAt:       startedAt,
-		statusPath:      monitor.StatusPath(s.dir),
-		eventsPath:      monitor.EventsPath(s.dir),
-		done:            make(chan struct{}),
+		sessionID:      s.id,
+		sessionDir:     s.dir,
+		roundNumber:    roundNumber,
+		state:          roundStateRunning,
+		reviewerName:   s.reviewerName,
+		reviewer:       s.reviewer,
+		artifacts:      artifacts,
+		hasOverride:    hasOverride,
+		priorDecisions: s.priorDecisions(),
+		reviewContext:  s.reviewContext,
+		decisionsLog:   s.decisionsLogText(),
+		reviewFocus:    s.reviewFocus,
+		maxFindings:    s.maxFindings,
+		startedAt:      startedAt,
+		updatedAt:      startedAt,
+		statusPath:     monitor.StatusPath(s.dir),
+		eventsPath:     monitor.EventsPath(s.dir),
+		done:           make(chan struct{}),
 	}
 	s.activeJob = job
 	s.lastRoundJob = job
@@ -357,13 +357,20 @@ func (b *Broker) executeRoundJob(job *roundJob) {
 	b.markRoundEvent(job, "artifacts_snapshotted", "")
 
 	promptText, schemaBytes := prompt.Build(prompt.Request{
-		Artifacts:       snapshots.promptArtifacts,
-		PriorDecisions:  job.priorDecisions,
-		ReviewContext:   job.reviewContext,
-		DecisionsLog:    job.decisionsLog,
-		PromptOverrides: job.promptOverrides,
-		MaxFindings:     job.maxFindings,
+		Artifacts:      snapshots.promptArtifacts,
+		PriorDecisions: job.priorDecisions,
+		ReviewContext:  job.reviewContext,
+		DecisionsLog:   job.decisionsLog,
+		ReviewFocus:    job.reviewFocus,
+		MaxFindings:    job.maxFindings,
 	})
+
+	promptLogPath := filepath.Join(snapshots.snapshotDir, "_prompt.md")
+	if err := os.WriteFile(promptLogPath, []byte(promptText), 0o600); err != nil {
+		cleanupSnapshot(snapshots.snapshotDir)
+		b.finishRoundFailure(job, brokerError(CodeInternalError, "write prompt log", err, map[string]any{"prompt_path": promptLogPath}))
+		return
+	}
 
 	b.markRoundEvent(job, "reviewer_started", "")
 	resp, err := job.reviewer.Review(context.Background(), reviewer.ReviewRequest{
@@ -418,6 +425,7 @@ func (b *Broker) executeRoundJob(job *roundJob) {
 		RoundNumber: job.roundNumber,
 		OpenedAt:    job.startedAt,
 		Verdict:     output.Verdict,
+		PromptPath:  filepath.ToSlash(filepath.Join("snapshots", fmt.Sprintf("round-%02d", job.roundNumber), "_prompt.md")),
 		Manifest:    toRoundlogManifest(snapshots.manifest),
 		Reviewers:   toRoundlogReviewers(results),
 	}); err != nil {
@@ -1120,6 +1128,9 @@ func validateArtifactName(name string) error {
 	}
 	if name == "." || name == ".." {
 		return fmt.Errorf("artifact name '%s' is not allowed", name)
+	}
+	if strings.HasPrefix(name, "_") {
+		return fmt.Errorf("artifact name '%s' cannot begin with '_' (reserved for broker meta files in the snapshot directory)", name)
 	}
 	if !safeArtifactName.MatchString(name) {
 		return fmt.Errorf("artifact name '%s' is unsafe", name)

@@ -1,0 +1,21 @@
+name: mercurius
+log_destination: .mercurius
+default_budget: 4
+max_findings: 6
+
+review_context: |
+  mercurius is a small Go tool for design-agent review loops. it is pre-1.0
+  with one known user (the author). the codebase is a few thousand lines,
+  there are no production users, and breaking config changes are acceptable.
+  prefer simplicity over hardening; single supervised implementer.
+
+review_focus: |
+  pay particular attention to broker invariants that are not obvious from
+  surrounding code: atomic round-failure cleanup (no log, no snapshot dir,
+  no budget consumption on failed rounds), single-reviewer-per-session,
+  and broker-owned prompt assembly.
+
+reviewers:
+  - name: codex
+    impl: codex
+    model: gpt-5.5

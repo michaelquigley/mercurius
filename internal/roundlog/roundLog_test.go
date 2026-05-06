@@ -16,6 +16,7 @@ func TestWriteInitialAndUpdateNotes(t *testing.T) {
 		RoundNumber: 1,
 		OpenedAt:    time.Date(2026, 5, 4, 18, 32, 14, 0, time.UTC),
 		Verdict:     "ready_to_build",
+		PromptPath:  "snapshots/round-01/_prompt.md",
 		Manifest: []ArtifactManifestEntry{
 			{Name: "design", SourcePath: "/tmp/design.md", SnapshotPath: "/tmp/session/snapshots/round-01/design", Size: 10, Hash: "sha256:abc"},
 			{Name: "context", SnapshotPath: "/tmp/session/snapshots/round-01/context", Size: 6, Hash: "sha256:def", Inline: true},
@@ -32,6 +33,7 @@ func TestWriteInitialAndUpdateNotes(t *testing.T) {
 	for _, want := range []string{
 		"session_id: s_test",
 		"round_number: 1",
+		"prompt_path: snapshots/round-01/_prompt.md",
 		"notes_recorded: false",
 		"| context | null |",
 		"### dummy",

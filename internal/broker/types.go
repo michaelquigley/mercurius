@@ -20,13 +20,13 @@ type ReviewerSpec struct {
 
 // Options configures a broker instance.
 type Options struct {
-	LogDestination  string
-	ConfigPath      string
-	DefaultBudget   int
-	MaxFindings     int
-	ReviewContext   string
-	PromptOverrides string
-	Reviewers       []ReviewerSpec
+	LogDestination string
+	ConfigPath     string
+	DefaultBudget  int
+	MaxFindings    int
+	ReviewContext  string
+	ReviewFocus    string
+	Reviewers      []ReviewerSpec
 }
 
 // Artifact identifies one source artifact at the broker boundary.

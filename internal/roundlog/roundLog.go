@@ -45,6 +45,7 @@ type Entry struct {
 	RoundNumber int
 	OpenedAt    time.Time
 	Verdict     string
+	PromptPath  string
 	Manifest    []ArtifactManifestEntry
 	Reviewers   []ReviewerOutput
 }
@@ -58,6 +59,9 @@ func WriteInitial(path string, entry Entry) error {
 	b.WriteString(fmt.Sprintf("round_number: %d\n", entry.RoundNumber))
 	b.WriteString(fmt.Sprintf("opened_at: %s\n", entry.OpenedAt.UTC().Format(time.RFC3339)))
 	b.WriteString(fmt.Sprintf("verdict: %s\n", entry.Verdict))
+	if entry.PromptPath != "" {
+		b.WriteString(fmt.Sprintf("prompt_path: %s\n", entry.PromptPath))
+	}
 	b.WriteString("reviewers:\n")
 	for _, reviewer := range entry.Reviewers {
 		b.WriteString(fmt.Sprintf("  - %s\n", reviewer.Name))

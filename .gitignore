@@ -5,6 +5,7 @@
 .store
 .claude
 .codex
+.mercurius
 *.db
 CODEX-*.md
 node_modules

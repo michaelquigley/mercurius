@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/michaelquigley/df/dd"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -23,14 +24,14 @@ var knownImpls = map[string]struct{}{
 
 // Config is the resolved Mercurius project configuration.
 type Config struct {
-	Name            string
-	ConfigPath      string
-	LogDestination  string
-	DefaultBudget   int
-	MaxFindings     int
-	ReviewContext   string
-	PromptOverrides string
-	Reviewers       []*ReviewerConfig
+	Name           string
+	ConfigPath     string
+	LogDestination string
+	DefaultBudget  int
+	MaxFindings    int
+	ReviewContext  string
+	ReviewFocus    string
+	Reviewers      []*ReviewerConfig
 }
 
 // ReviewerConfig configures one named reviewer.
@@ -58,6 +59,9 @@ func Load(path string) (*Config, error) {
 		MaxFindings:   DefaultMaxFindings,
 	}
 	if err := dd.MergeYAMLFile(cfg, absPath); err != nil {
+		return nil, err
+	}
+	if err := checkRenamedFields(absPath); err != nil {
 		return nil, err
 	}
 
@@ -110,6 +114,26 @@ func (c *Config) Validate() error {
 	}
 	if err := ensureLogDestination(c.LogDestination); err != nil {
 		return fmt.Errorf("log_destination: %w", err)
+	}
+	return nil
+}
+
+// checkRenamedFields rejects configs that still use renamed YAML keys. dd
+// silently drops unknown fields, so a stale key would otherwise produce
+// confusing review behavior with no error.
+func checkRenamedFields(absPath string) error {
+	raw, err := os.ReadFile(absPath)
+	if err != nil {
+		return err
+	}
+	var generic map[string]any
+	if err := yaml.Unmarshal(raw, &generic); err != nil {
+		// dd already validated the YAML; ignore parse errors here so this
+		// guard does not produce a different error than the primary load.
+		return nil
+	}
+	if _, ok := generic["prompt_overrides"]; ok {
+		return fmt.Errorf("config '%s': field 'prompt_overrides' has been renamed to 'review_focus'; update the YAML key", absPath)
 	}
 	return nil
 }

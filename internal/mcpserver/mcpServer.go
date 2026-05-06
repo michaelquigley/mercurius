@@ -287,13 +287,13 @@ func BrokerOptions(cfg *config.Config) (broker.Options, error) {
 	}
 
 	options := broker.Options{
-		LogDestination:  cfg.LogDestination,
-		ConfigPath:      cfg.ConfigPath,
-		DefaultBudget:   cfg.DefaultBudget,
-		MaxFindings:     cfg.MaxFindings,
-		ReviewContext:   cfg.ReviewContext,
-		PromptOverrides: cfg.PromptOverrides,
-		Reviewers:       make([]broker.ReviewerSpec, 0, len(cfg.Reviewers)),
+		LogDestination: cfg.LogDestination,
+		ConfigPath:     cfg.ConfigPath,
+		DefaultBudget:  cfg.DefaultBudget,
+		MaxFindings:    cfg.MaxFindings,
+		ReviewContext:  cfg.ReviewContext,
+		ReviewFocus:    cfg.ReviewFocus,
+		Reviewers:      make([]broker.ReviewerSpec, 0, len(cfg.Reviewers)),
 	}
 
 	for _, reviewerConfig := range cfg.Reviewers {

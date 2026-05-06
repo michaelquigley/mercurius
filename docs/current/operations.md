@@ -38,6 +38,7 @@ Each session directory contains:
 
 - `status.json`: latest session state, active/latest round job, last error, and convergence signal.
 - `events.ndjson`: append-only event stream.
+- `snapshots/round-NN/_prompt.md`: assembled prompt the reviewer received for round NN. Useful for iterating on prompt prose. The round log frontmatter's `prompt_path` field points at this file.
 
 Events include:
 

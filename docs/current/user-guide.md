@@ -21,8 +21,9 @@ review_context: |
   Deployment: personal project, single supervised implementer.
   Preference: simple over highly defensive when both are correct.
   Out of scope: production-grade observability and multi-tenant concerns.
-prompt_overrides: |
-  Focus on design clarity, testability, and implementation blockers.
+review_focus: |
+  Pay particular attention to invariants specific to this project that the
+  universal what-to-flag criteria do not already cover.
 reviewers:
   - name: codex
     impl: codex
@@ -30,6 +31,8 @@ reviewers:
 ```
 
 Use `review_context` to calibrate reviewer rigor. This is where you say whether the work is a one-shot migration, production infrastructure, a personal tool, a security-sensitive change, or something else. Good context reduces over-polishing and helps the reviewer suppress findings that do not apply.
+
+Use `review_focus` to direct the reviewer at project-specific surfaces that the base review philosophy does not already cover. The base prompt already carries the universal subtle-vs-obvious filter, so `review_focus` is typically just one paragraph naming the invariants or risks unique to this project. The two fields divide labor cleanly: `review_context` calibrates rigor; `review_focus` directs attention.
 
 ## Run the Server
 
@@ -67,7 +70,7 @@ Ask the design agent to open a Mercurius session for the artifacts:
 }
 ```
 
-Artifact paths must be absolute and readable by the Mercurius server. Artifact names become snapshot filenames, so keep them short and safe.
+Artifact paths must be absolute and readable by the Mercurius server. Artifact names become snapshot filenames, so keep them short and safe. Artifact names cannot begin with `_`; that prefix is reserved for broker-emitted meta files inside the snapshot directory (`_prompt.md` today, future meta files may follow).
 
 You can override the config-level review context per session:
 

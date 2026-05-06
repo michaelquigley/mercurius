@@ -70,6 +70,11 @@ func TestSessionRoundsNotesPriorDecisionsAndClose(t *testing.T) {
 	if req.SessionMeta.SessionID != open.SessionID || req.SessionMeta.RoundNumber != 1 {
 		t.Fatalf("unexpected session metadata: %+v", req.SessionMeta)
 	}
+	promptLogPath := filepath.Join(open.SessionDir, "snapshots", "round-01", "_prompt.md")
+	loggedPrompt := readFile(t, promptLogPath)
+	if loggedPrompt != req.Prompt {
+		t.Fatalf("logged prompt does not match prompt sent to reviewer")
+	}
 
 	notes, err := b.RecordRoundNotes(ctx, RecordRoundNotesRequest{
 		SessionID:   open.SessionID,
@@ -133,10 +138,10 @@ func TestReviewContextDecisionsLogAndConvergence(t *testing.T) {
 	ctx := context.Background()
 	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithRefs()}, scriptedResponse{raw: validReviewOutput("ready_to_build")})
 	b := New(Options{
-		LogDestination:  filepath.Join(t.TempDir(), "reviews"),
-		DefaultBudget:   3,
-		ReviewContext:   "config context should be overridden",
-		PromptOverrides: "flag unclear acceptance criteria.",
+		LogDestination: filepath.Join(t.TempDir(), "reviews"),
+		DefaultBudget:  3,
+		ReviewContext:  "config context should be overridden",
+		ReviewFocus:    "flag unclear acceptance criteria.",
 		Reviewers: []ReviewerSpec{{
 			Name:    "dummy",
 			Factory: func(string) reviewer.Reviewer { return r },
@@ -391,6 +396,9 @@ func TestAtomicFailuresReuseRoundAndBudget(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(open.SessionDir, "snapshots", "round-01")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("expected snapshot cleanup, got err=%v", err)
+			}
+			if _, err := os.Stat(filepath.Join(open.SessionDir, "snapshots", "round-01", "_prompt.md")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("expected prompt log cleanup, got err=%v", err)
 			}
 			status, err := b.SessionStatus(ctx, open.SessionID)
 			if err != nil {
@@ -661,6 +669,7 @@ func TestOpenSessionArtifactAndLogDestinationValidation(t *testing.T) {
 		{name: "duplicate", artifacts: []Artifact{{Name: "design", Path: validPath}, {Name: "design", Path: validPath}}},
 		{name: "slash", artifacts: []Artifact{{Name: "bad/name", Path: validPath}}},
 		{name: "dot", artifacts: []Artifact{{Name: ".", Path: validPath}}},
+		{name: "underscore prefix", artifacts: []Artifact{{Name: "_secret", Path: validPath}}},
 		{name: "non absolute", artifacts: []Artifact{{Name: "design", Path: "design.md"}}},
 		{name: "missing", artifacts: []Artifact{{Name: "design", Path: filepath.Join(t.TempDir(), "missing.md")}}},
 	}
@@ -887,9 +896,9 @@ func testBroker(t *testing.T, r *scriptedReviewer, budget int) *Broker {
 	t.Helper()
 
 	return New(Options{
-		LogDestination:  filepath.Join(t.TempDir(), "reviews"),
-		DefaultBudget:   budget,
-		PromptOverrides: "flag unclear acceptance criteria.",
+		LogDestination: filepath.Join(t.TempDir(), "reviews"),
+		DefaultBudget:  budget,
+		ReviewFocus:    "flag unclear acceptance criteria.",
 		Reviewers: []ReviewerSpec{{
 			Name:    "dummy",
 			Factory: func(string) reviewer.Reviewer { return r },
@@ -940,6 +949,10 @@ func assertRoundLogStructure(t *testing.T, path string, sessionID string, roundN
 	if frontmatter["notes_recorded"] != "false" {
 		t.Fatalf("frontmatter notes_recorded = %q, want false", frontmatter["notes_recorded"])
 	}
+	wantPromptPath := filepath.ToSlash(filepath.Join("snapshots", "round-"+padded(roundNumber), "_prompt.md"))
+	if frontmatter["prompt_path"] != wantPromptPath {
+		t.Fatalf("frontmatter prompt_path = %q, want %q", frontmatter["prompt_path"], wantPromptPath)
+	}
 	if !strings.Contains(parts[2], "## Artifact manifest\n\n| name | source_path | snapshot_path | size | hash |") {
 		t.Fatal("round log missing artifact manifest table")
 	}
@@ -970,6 +983,13 @@ func parseFrontmatter(frontmatter string) map[string]string {
 		}
 	}
 	return values
+}
+
+func padded(n int) string {
+	if n < 10 {
+		return "0" + strconv.Itoa(n)
+	}
+	return strconv.Itoa(n)
 }
 
 func readFile(t *testing.T, path string) string {

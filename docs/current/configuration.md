@@ -22,8 +22,9 @@ max_findings: 8
 review_context: |
   Deployment: personal tool, single supervised implementer.
   Preference: simple over highly defensive when both achieve correctness.
-prompt_overrides: |
-  Focus on blockers in design clarity, work-order testability, and scope.
+review_focus: |
+  Pay particular attention to invariants specific to this project that the
+  universal what-to-flag criteria do not already cover.
 reviewers:
   - name: codex
     impl: codex
@@ -45,8 +46,8 @@ reviewers:
 
 - `default_budget`: default maximum successful rounds per session. Default is `4`. `open_session.budget` can override it.
 - `max_findings`: maximum blocking findings across `concerns` plus `questions` in a successful round. Default is `10`. Advisory notes do not count.
-- `review_context`: free-form markdown inserted before review criteria. Use it to calibrate reviewer rigor.
-- `prompt_overrides`: free-form markdown inserted in the project-specific guidance section of the prompt.
+- `review_context`: free-form markdown describing project posture and constraints. Calibrates reviewer rigor.
+- `review_focus`: free-form markdown for project-specific things to look for that the base review philosophy does not already cover (typically one paragraph). Inserted in the project-specific focus section of the prompt.
 - `reviewers[].binary_path`: reviewer binary path. For `codex`, omitted means use normal executable lookup.
 - `reviewers[].model`: reviewer model string passed to the reviewer implementation.
 - `reviewers[].extra_args`: additional reviewer-specific CLI arguments.

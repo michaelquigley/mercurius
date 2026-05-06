@@ -13,7 +13,7 @@ func TestLoadResolvesDefaultsAndPaths(t *testing.T) {
 	writeConfig(t, cfgPath, `
 name: test-project
 log_destination: ./reviews
-prompt_overrides: |
+review_focus: |
   flag unclear logging.
 review_context: |
   deployment: personal one-shot
@@ -48,8 +48,33 @@ reviewers:
 	if !strings.Contains(cfg.ReviewContext, "deployment: personal one-shot") {
 		t.Fatalf("review context = %q", cfg.ReviewContext)
 	}
+	if !strings.Contains(cfg.ReviewFocus, "flag unclear logging.") {
+		t.Fatalf("review focus = %q", cfg.ReviewFocus)
+	}
 	if cfg.Reviewers[0].ExtraArgs[0] != "--ignore-user-config" {
 		t.Fatalf("extra args not loaded: %+v", cfg.Reviewers[0].ExtraArgs)
+	}
+}
+
+func TestLoadRejectsRenamedPromptOverrides(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mercurius.yaml")
+	writeConfig(t, cfgPath, `
+name: test-project
+log_destination: ./reviews
+prompt_overrides: |
+  stale value
+reviewers:
+  - name: dummy
+    impl: dummy
+`)
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected rename-guidance error")
+	}
+	if !strings.Contains(err.Error(), "prompt_overrides") || !strings.Contains(err.Error(), "review_focus") {
+		t.Fatalf("expected error to name both old and new field, got %v", err)
 	}
 }
 
