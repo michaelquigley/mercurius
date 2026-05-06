@@ -38,8 +38,15 @@ reviewers:
 	if cfg.LogDestination != filepath.Join(dir, "reviews") {
 		t.Fatalf("log destination = %s", cfg.LogDestination)
 	}
+	// Load() is pure-validation: the directory must NOT have been created yet.
+	if _, err := os.Stat(cfg.LogDestination); !os.IsNotExist(err) {
+		t.Fatalf("Load() created log destination as a side effect: stat err=%v", err)
+	}
+	if err := cfg.EnsureLogDestination(); err != nil {
+		t.Fatalf("ensure log destination: %v", err)
+	}
 	if _, err := os.Stat(cfg.LogDestination); err != nil {
-		t.Fatalf("expected log destination to be created: %v", err)
+		t.Fatalf("expected log destination to be created by EnsureLogDestination: %v", err)
 	}
 	if cfg.Reviewers[0].BinaryPath != filepath.Join(dir, "bin", "codex") {
 		t.Fatalf("binary path = %s", cfg.Reviewers[0].BinaryPath)
@@ -146,16 +153,6 @@ reviewers:
 `,
 			want: "unknown impl",
 		},
-		{
-			name: "missing parent",
-			body: `
-log_destination: ./missing/reviews
-reviewers:
-  - name: dummy
-    impl: dummy
-`,
-			want: "parent",
-		},
 	}
 
 	for _, test := range tests {
@@ -170,6 +167,49 @@ reviewers:
 				t.Fatalf("expected %q in error, got %v", test.want, err)
 			}
 		})
+	}
+}
+
+func TestEnsureLogDestinationCreatesDirectory(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mercurius.yaml")
+	writeConfig(t, cfgPath, `
+log_destination: ./reviews
+reviewers:
+  - name: dummy
+    impl: dummy
+`)
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := cfg.EnsureLogDestination(); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := os.Stat(cfg.LogDestination); err != nil {
+		t.Fatalf("expected directory to exist: %v", err)
+	}
+}
+
+func TestEnsureLogDestinationRejectsMissingParent(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mercurius.yaml")
+	writeConfig(t, cfgPath, `
+log_destination: ./missing/reviews
+reviewers:
+  - name: dummy
+    impl: dummy
+`)
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	err = cfg.EnsureLogDestination()
+	if err == nil {
+		t.Fatal("expected missing-parent error")
+	}
+	if !strings.Contains(err.Error(), "parent") {
+		t.Fatalf("expected parent in error, got %v", err)
 	}
 }
 

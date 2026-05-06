@@ -11,7 +11,7 @@ Mercurius is a local MCP server that lets a design agent ask a reviewer, usually
 - [MCP tools](mcp-tools.md) is the tool contract.
 - [Reviewer output schema](reviewer-output.md) describes reviewer JSON.
 - [Architecture and storage](architecture.md) explains broker behavior, prompts, snapshots, logs, and reviewer invocation.
-- [Operations and troubleshooting](operations.md) explains monitoring, timeouts, errors, and logs.
+- [Operations and troubleshooting](operations.md) explains monitoring, prompt previewing, timeouts, errors, and logs.
 
 ## Current Capabilities
 
@@ -22,7 +22,7 @@ Mercurius is a local MCP server that lets a design agent ask a reviewer, usually
 - Per-round artifact snapshots and markdown logs.
 - Structured reviewer output with blocking findings and separate advisory notes.
 - Session-level `review_context`, decisions carry-forward, durable `decisions.md`, and convergence hints.
-- CLI monitoring through `mercurius monitor`.
+- CLI monitoring through `mercurius monitor` and unsighted prompt preview through `mercurius preview`.
 
 ## Current Non-Goals
 

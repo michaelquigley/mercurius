@@ -54,10 +54,10 @@ func TestBuildIncludesRequiredSectionsInOrder(t *testing.T) {
 func TestBuildRendersReviewFocusAndPriorDecisions(t *testing.T) {
 	prompt, _ := Build(Request{
 		ReviewContext: "deployment: personal one-shot",
-		DecisionsLog:  "# session decisions log\n\n## round 2\n- C-1 (accepted): fix it.\n",
+		DecisionsLog:  "# session decisions log\n\n## round 2\n- C-1 (fixed): fix it.\n",
 		ReviewFocus:   "flag ad-hoc logging.",
 		PriorDecisions: []reviewer.PriorDecision{
-			{RoundNumber: 2, Ref: "C-1", Disposition: "accepted", Note: "fix it."},
+			{RoundNumber: 2, Ref: "C-1", Disposition: "fixed", Note: "fix it."},
 		},
 	})
 
@@ -65,12 +65,21 @@ func TestBuildRendersReviewFocusAndPriorDecisions(t *testing.T) {
 		"deployment: personal one-shot",
 		"Rendered decisions log:",
 		"flag ad-hoc logging.",
-		"- Round 2, C-1 (accepted): fix it.",
-		"- C-1 (accepted): fix it.",
+		"- Round 2, C-1 (fixed): fix it.",
+		"- C-1 (fixed): fix it.",
+		"Treat fixed, rejected, and deferred decisions as adjudicated session context.",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected prompt to contain %q", want)
 		}
+	}
+}
+
+func TestBuildIncludesCrossArrayUniquenessInstruction(t *testing.T) {
+	prompt, _ := Build(Request{})
+	want := "every id appearing in `concerns`, `questions`, or `advisory_notes` must be unique across all three arrays"
+	if !strings.Contains(prompt, want) {
+		t.Fatalf("expected uniqueness instruction in prompt; got:\n%s", prompt)
 	}
 }
 

@@ -42,6 +42,7 @@ type OpenSessionRequest struct {
 	Reviewers     []string
 	Budget        int
 	ReviewContext string
+	ReviewFocus   string
 }
 
 // OpenSessionResponse describes a newly opened session.
@@ -54,6 +55,8 @@ type OpenSessionResponse struct {
 	MaxFindings          int
 	ReviewContextSource  string
 	ReviewContextPresent bool
+	ReviewFocusSource    string
+	ReviewFocusPresent   bool
 	RoundsUsed           int
 	Reviewers            []ReviewerInfo
 	Artifacts            []RegisteredArtifact
@@ -189,6 +192,8 @@ type SessionStatusResponse struct {
 	MaxFindings          int
 	ReviewContextSource  string
 	ReviewContextPresent bool
+	ReviewFocusSource    string
+	ReviewFocusPresent   bool
 	RoundsUsed           int
 	Reviewers            []ReviewerInfo
 	Artifacts            []RegisteredArtifact

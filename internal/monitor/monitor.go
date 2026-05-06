@@ -78,6 +78,8 @@ type SessionStatus struct {
 	MaxFindings          int                  `json:"max_findings"`
 	ReviewContextSource  string               `json:"review_context_source"`
 	ReviewContextPresent bool                 `json:"review_context_present"`
+	ReviewFocusSource    string               `json:"review_focus_source"`
+	ReviewFocusPresent   bool                 `json:"review_focus_present"`
 	RoundsUsed           int                  `json:"rounds_used"`
 	Reviewers            []ReviewerInfo       `json:"reviewers"`
 	Artifacts            []RegisteredArtifact `json:"artifacts"`

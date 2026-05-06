@@ -266,6 +266,84 @@ func TestValidateFindingLimit(t *testing.T) {
 	}
 }
 
+func TestValidateUniqueIDsRejectsDuplicates(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+		want string
+	}{
+		{
+			name: "duplicate within concerns",
+			raw: json.RawMessage(`{
+				"verdict": "needs_changes",
+				"summary": "x",
+				"concerns": [
+					{"id": "C-1", "severity": "major", "location": "x", "claim": "a", "rationale": "b", "suggestion": null},
+					{"id": "C-1", "severity": "minor", "location": "y", "claim": "c", "rationale": "d", "suggestion": null}
+				],
+				"questions": [],
+				"advisory_notes": [],
+				"proposed_diffs": []
+			}`),
+			want: "within concerns",
+		},
+		{
+			name: "duplicate across concerns and advisory_notes",
+			raw: json.RawMessage(`{
+				"verdict": "needs_changes",
+				"summary": "x",
+				"concerns": [
+					{"id": "X-1", "severity": "major", "location": "x", "claim": "a", "rationale": "b", "suggestion": null}
+				],
+				"questions": [],
+				"advisory_notes": [
+					{"id": "X-1", "location": "y", "note": "polish", "rationale": "tone", "suggestion": null}
+				],
+				"proposed_diffs": []
+			}`),
+			want: "across concerns and advisory_notes",
+		},
+		{
+			name: "duplicate across questions and advisory_notes",
+			raw: json.RawMessage(`{
+				"verdict": "needs_changes",
+				"summary": "x",
+				"concerns": [],
+				"questions": [
+					{"id": "X-1", "topic": "scope", "why_it_blocks": "z"}
+				],
+				"advisory_notes": [
+					{"id": "X-1", "location": "y", "note": "polish", "rationale": "tone", "suggestion": null}
+				],
+				"proposed_diffs": []
+			}`),
+			want: "across questions and advisory_notes",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ParseReviewOutput(test.raw)
+			if err == nil {
+				t.Fatal("expected uniqueness error")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected %q in error, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestValidateUniqueIDsAcceptsAllUnique(t *testing.T) {
+	output := ReviewOutput{
+		Concerns:      []Concern{{ID: "C-1"}, {ID: "C-2"}},
+		Questions:     []Question{{ID: "Q-1"}},
+		AdvisoryNotes: []AdvisoryNote{{ID: "A-1"}},
+	}
+	if err := ValidateUniqueIDs(output); err != nil {
+		t.Fatalf("expected unique-id pass: %v", err)
+	}
+}
+
 func TestParseReviewOutputRejectsReadinessContradictions(t *testing.T) {
 	tests := []struct {
 		name string

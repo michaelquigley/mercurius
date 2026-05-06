@@ -78,7 +78,11 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Validate checks required fields and path writability.
+// Validate checks required fields. It performs pure field validation only and
+// has no filesystem side effects, so callers (preview, monitor) that do not
+// intend to write can rely on Load() being side-effect-free. Callers that do
+// write to log_destination (the MCP server startup path) invoke
+// EnsureLogDestination() separately after Load().
 func (c *Config) Validate() error {
 	if c.DefaultBudget <= 0 {
 		return fmt.Errorf("default_budget must be greater than zero")
@@ -109,6 +113,14 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("reviewer '%s': unknown impl '%s' (known: %s)", reviewer.Name, reviewer.Impl, strings.Join(KnownImpls(), ", "))
 		}
 	}
+	return nil
+}
+
+// EnsureLogDestination creates the configured log_destination directory if it
+// does not already exist and verifies it is writable. Callers that intend to
+// write rounds, status files, or events to the directory must invoke this
+// before opening a session.
+func (c *Config) EnsureLogDestination() error {
 	if err := ensureLogDestination(c.LogDestination); err != nil {
 		return fmt.Errorf("log_destination: %w", err)
 	}

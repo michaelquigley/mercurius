@@ -35,6 +35,9 @@ const (
 	reviewContextSession = "session"
 	reviewContextConfig  = "config"
 	reviewContextNone    = "none"
+	reviewFocusSession   = "session"
+	reviewFocusConfig    = "config"
+	reviewFocusNone      = "none"
 	convergenceNone      = "none"
 	convergenceWatch     = "watch"
 	convergenceClose     = "consider_closing"
@@ -68,6 +71,7 @@ type session struct {
 	reviewContext       string
 	reviewContextSource string
 	reviewFocus         string
+	reviewFocusSource   string
 	lastError           *ErrorInfo
 	activeJob           *roundJob
 	lastRoundJob        *roundJob
@@ -80,9 +84,21 @@ type round struct {
 	hasNotes  bool
 	manifest  []ArtifactManifestEntry
 	results   []ReviewerResult
-	refs      map[string]struct{}
+	refs      map[string]refKind
 	decisions []Decision
 }
+
+// refKind records whether a reviewer-emitted id came from concerns, questions,
+// or advisory_notes. The kind is sourced from the array the id appeared in;
+// id-string parsing is forbidden because the reviewer is autonomous and naming
+// conventions cannot be relied on as contract.
+type refKind string
+
+const (
+	refKindConcern  refKind = "concern"
+	refKindQuestion refKind = "question"
+	refKindAdvisory refKind = "advisory"
+)
 
 type snapshotResult struct {
 	manifest          []ArtifactManifestEntry
@@ -179,6 +195,7 @@ func (b *Broker) OpenSession(ctx context.Context, req OpenSessionRequest) (OpenS
 	}
 
 	reviewContext, reviewContextSource := effectiveReviewContext(req.ReviewContext, b.options.ReviewContext)
+	reviewFocus, reviewFocusSource := effectiveReviewFocus(req.ReviewFocus, b.options.ReviewFocus)
 	openedAt := time.Now().UTC()
 	s := &session{
 		id:                  id,
@@ -193,7 +210,8 @@ func (b *Broker) OpenSession(ctx context.Context, req OpenSessionRequest) (OpenS
 		reviewer:            reviewerImpl,
 		reviewContext:       reviewContext,
 		reviewContextSource: reviewContextSource,
-		reviewFocus:         b.options.ReviewFocus,
+		reviewFocus:         reviewFocus,
+		reviewFocusSource:   reviewFocusSource,
 	}
 	b.sessions[id] = s
 
@@ -222,6 +240,8 @@ func (b *Broker) OpenSession(ctx context.Context, req OpenSessionRequest) (OpenS
 		MaxFindings:          b.options.MaxFindings,
 		ReviewContextSource:  reviewContextSource,
 		ReviewContextPresent: reviewContext != "",
+		ReviewFocusSource:    reviewFocusSource,
+		ReviewFocusPresent:   reviewFocus != "",
 		RoundsUsed:           0,
 		Reviewers:            []ReviewerInfo{reviewerInfo(spec)},
 		Artifacts:            registeredArtifacts(artifacts),
@@ -542,7 +562,7 @@ func (b *Broker) CollectRound(ctx context.Context, req CollectRoundRequest) (Col
 	return CollectedRoundResponse{}, brokerError(CodeUnknownRound, "round not found", nil, map[string]any{"round_number": req.RoundNumber})
 }
 
-func (b *Broker) finishRoundSuccess(job *roundJob, response CollectedRoundResponse, refs map[string]struct{}) {
+func (b *Broker) finishRoundSuccess(job *roundJob, response CollectedRoundResponse, refs map[string]refKind) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -907,6 +927,18 @@ func (s *session) priorDecisions() []reviewer.PriorDecision {
 	return decisions
 }
 
+// EmptySessionDecisionsLogText returns the decisions-log text for a session
+// that has no recorded decisions. Both the broker (round 1 of any new session)
+// and the preview CLI need this exact byte sequence; sharing a single source
+// of truth guarantees the preview prompt is byte-equal to broker round 1's
+// prompt apart from the snapshot path sentinel.
+func EmptySessionDecisionsLogText() string {
+	var b strings.Builder
+	b.WriteString("# session decisions log\n\n")
+	b.WriteString("_no decisions recorded yet_\n")
+	return b.String()
+}
+
 func (s *session) decisionsLogText() string {
 	var b strings.Builder
 	b.WriteString("# session decisions log\n\n")
@@ -927,7 +959,7 @@ func (s *session) decisionsLogText() string {
 		b.WriteString("\n")
 	}
 	if !hasDecisions {
-		b.WriteString("_no decisions recorded yet_\n")
+		return EmptySessionDecisionsLogText()
 	}
 	return b.String()
 }
@@ -965,8 +997,18 @@ func (s *session) convergence() Convergence {
 	}
 	for _, round := range s.rounds {
 		for _, decision := range round.decisions {
+			// advisory dispositions never feed the convergence counters: they
+			// track progress against blocking findings only. counting an
+			// advisory `fixed` would dilute the readiness signal.
+			if round.refs[decision.Ref] == refKindAdvisory {
+				continue
+			}
+			// AcceptedDecisions retains its legacy field name (deferred 1.0
+			// cleanup) and counts `fixed` decisions specifically. agreement
+			// without action is a confused state in mercurius's session-bounded
+			// operation, so the vocabulary is `fixed` / `rejected` / `deferred`.
 			switch decision.Disposition {
-			case "accepted":
+			case "fixed":
 				convergence.AcceptedDecisions++
 			case "rejected", "deferred":
 				convergence.DeclinedOrDeferredDecisions++
@@ -1011,6 +1053,8 @@ func (s *session) status() SessionStatusResponse {
 		MaxFindings:          s.maxFindings,
 		ReviewContextSource:  s.reviewContextSource,
 		ReviewContextPresent: s.reviewContext != "",
+		ReviewFocusSource:    s.reviewFocusSource,
+		ReviewFocusPresent:   s.reviewFocus != "",
 		RoundsUsed:           len(s.rounds),
 		Reviewers:            []ReviewerInfo{s.reviewerInfo},
 		Artifacts:            registeredArtifacts(s.artifacts),
@@ -1235,7 +1279,7 @@ func checkWritable(dir string) error {
 }
 
 func validDisposition(disposition string) bool {
-	return disposition == "accepted" || disposition == "rejected" || disposition == "deferred"
+	return disposition == "fixed" || disposition == "rejected" || disposition == "deferred"
 }
 
 func validCloseVerdict(verdict string) bool {
@@ -1252,13 +1296,26 @@ func effectiveReviewContext(sessionContext string, configContext string) (string
 	return "", reviewContextNone
 }
 
-func refsFromOutput(output schema.ReviewOutput) map[string]struct{} {
-	refs := map[string]struct{}{}
+func effectiveReviewFocus(sessionFocus string, configFocus string) (string, string) {
+	if trimmed := strings.TrimSpace(sessionFocus); trimmed != "" {
+		return trimmed, reviewFocusSession
+	}
+	if trimmed := strings.TrimSpace(configFocus); trimmed != "" {
+		return trimmed, reviewFocusConfig
+	}
+	return "", reviewFocusNone
+}
+
+func refsFromOutput(output schema.ReviewOutput) map[string]refKind {
+	refs := map[string]refKind{}
 	for _, concern := range output.Concerns {
-		refs[concern.ID] = struct{}{}
+		refs[concern.ID] = refKindConcern
 	}
 	for _, question := range output.Questions {
-		refs[question.ID] = struct{}{}
+		refs[question.ID] = refKindQuestion
+	}
+	for _, note := range output.AdvisoryNotes {
+		refs[note.ID] = refKindAdvisory
 	}
 	return refs
 }
@@ -1338,6 +1395,8 @@ func monitorSessionStatus(status SessionStatusResponse) monitor.SessionStatus {
 		MaxFindings:          status.MaxFindings,
 		ReviewContextSource:  status.ReviewContextSource,
 		ReviewContextPresent: status.ReviewContextPresent,
+		ReviewFocusSource:    status.ReviewFocusSource,
+		ReviewFocusPresent:   status.ReviewFocusPresent,
 		RoundsUsed:           status.RoundsUsed,
 		Reviewers:            monitorReviewers(status.Reviewers),
 		Artifacts:            monitorArtifacts(status.Artifacts),

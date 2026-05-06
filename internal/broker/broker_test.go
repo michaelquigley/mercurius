@@ -80,7 +80,7 @@ func TestSessionRoundsNotesPriorDecisionsAndClose(t *testing.T) {
 		SessionID:   open.SessionID,
 		RoundNumber: 1,
 		Commentary:  "commentary",
-		Decisions:   []Decision{{Ref: "C-1", Disposition: "accepted", Note: "fix accepted"}},
+		Decisions:   []Decision{{Ref: "C-1", Disposition: "fixed", Note: "fix landed"}},
 	})
 	if err != nil {
 		t.Fatalf("record notes: %v", err)
@@ -89,7 +89,7 @@ func TestSessionRoundsNotesPriorDecisionsAndClose(t *testing.T) {
 		t.Fatalf("unexpected notes response: %+v", notes)
 	}
 	logContent := readFile(t, round1.LogPath)
-	if !strings.Contains(logContent, "notes_recorded: true") || !strings.Contains(logContent, "- **accepted** (ref: C-1): fix accepted.") {
+	if !strings.Contains(logContent, "notes_recorded: true") || !strings.Contains(logContent, "- **fixed** (ref: C-1): fix landed.") {
 		t.Fatalf("notes not written:\n%s", logContent)
 	}
 
@@ -172,7 +172,7 @@ func TestReviewContextDecisionsLogAndConvergence(t *testing.T) {
 		RoundNumber: round1.RoundNumber,
 		Commentary:  "handled round one",
 		Decisions: []Decision{
-			{Ref: "C-1", Disposition: "accepted", Note: "fix accepted"},
+			{Ref: "C-1", Disposition: "fixed", Note: "fix landed"},
 			{Ref: "Q-1", Disposition: "rejected", Note: "constraint makes it irrelevant"},
 		},
 	}); err != nil {
@@ -181,7 +181,7 @@ func TestReviewContextDecisionsLogAndConvergence(t *testing.T) {
 	decisionsLog := readFile(t, filepath.Join(open.SessionDir, "decisions.md"))
 	for _, want := range []string{
 		"# session decisions log",
-		"- C-1 (accepted): fix accepted",
+		"- C-1 (fixed): fix landed",
 		"- Q-1 (rejected): constraint makes it irrelevant",
 	} {
 		if !strings.Contains(decisionsLog, want) {
@@ -202,7 +202,7 @@ func TestReviewContextDecisionsLogAndConvergence(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Rendered decisions log:",
-		"- C-1 (accepted): fix accepted",
+		"- C-1 (fixed): fix landed",
 		"- Q-1 (rejected): constraint makes it irrelevant",
 	} {
 		if !strings.Contains(reqs[1].Prompt, want) {
@@ -240,6 +240,291 @@ func TestOpenSessionUsesConfigReviewContext(t *testing.T) {
 	}
 	if open.ReviewContextSource != reviewContextConfig || !open.ReviewContextPresent {
 		t.Fatalf("review context metadata = %+v", open)
+	}
+}
+
+func TestReviewFocusOverride(t *testing.T) {
+	ctx := context.Background()
+
+	makeBroker := func(configFocus string) *Broker {
+		return New(Options{
+			LogDestination: filepath.Join(t.TempDir(), "reviews"),
+			DefaultBudget:  1,
+			ReviewFocus:    configFocus,
+			Reviewers: []ReviewerSpec{{
+				Name:    "dummy",
+				Factory: func(string) reviewer.Reviewer { return newScriptedReviewer() },
+			}},
+		})
+	}
+
+	t.Run("session override wins and reaches the prompt", func(t *testing.T) {
+		r := newScriptedReviewer(scriptedResponse{raw: validReviewOutput("ready_to_build")})
+		b := New(Options{
+			LogDestination: filepath.Join(t.TempDir(), "reviews"),
+			DefaultBudget:  1,
+			ReviewFocus:    "config focus should be overridden",
+			Reviewers: []ReviewerSpec{{
+				Name:    "dummy",
+				Factory: func(string) reviewer.Reviewer { return r },
+			}},
+		})
+		open, err := b.OpenSession(ctx, OpenSessionRequest{
+			Artifacts:   []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+			ReviewFocus: "session focus: weigh API ergonomics",
+		})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		if open.ReviewFocusSource != reviewFocusSession || !open.ReviewFocusPresent {
+			t.Fatalf("open focus metadata = %+v", open)
+		}
+		if _, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID}); err != nil {
+			t.Fatalf("round: %v", err)
+		}
+		reqs := r.requests()
+		if !strings.Contains(reqs[0].Prompt, "session focus: weigh API ergonomics") || strings.Contains(reqs[0].Prompt, "config focus should be overridden") {
+			t.Fatalf("unexpected review focus in prompt:\n%s", reqs[0].Prompt)
+		}
+		status, err := b.SessionStatus(ctx, open.SessionID)
+		if err != nil {
+			t.Fatalf("status: %v", err)
+		}
+		if status.ReviewFocusSource != reviewFocusSession || !status.ReviewFocusPresent {
+			t.Fatalf("status focus metadata = %+v", status)
+		}
+	})
+
+	t.Run("config focus used when override is absent", func(t *testing.T) {
+		b := makeBroker("config focus")
+		open, err := b.OpenSession(ctx, OpenSessionRequest{
+			Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+		})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		if open.ReviewFocusSource != reviewFocusConfig || !open.ReviewFocusPresent {
+			t.Fatalf("focus metadata = %+v", open)
+		}
+	})
+
+	t.Run("whitespace-only override falls back to config", func(t *testing.T) {
+		b := makeBroker("config focus")
+		open, err := b.OpenSession(ctx, OpenSessionRequest{
+			Artifacts:   []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+			ReviewFocus: "   \n",
+		})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		if open.ReviewFocusSource != reviewFocusConfig || !open.ReviewFocusPresent {
+			t.Fatalf("focus metadata = %+v", open)
+		}
+	})
+
+	t.Run("none reported when neither config nor session has focus", func(t *testing.T) {
+		b := makeBroker("")
+		open, err := b.OpenSession(ctx, OpenSessionRequest{
+			Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+		})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		if open.ReviewFocusSource != reviewFocusNone || open.ReviewFocusPresent {
+			t.Fatalf("focus metadata = %+v", open)
+		}
+	})
+}
+
+func TestAdvisoryRefDecisionsAndConvergence(t *testing.T) {
+	ctx := context.Background()
+	r := newScriptedReviewer(
+		scriptedResponse{raw: reviewOutputWithAdvisoryRefs("A-1")},
+		scriptedResponse{raw: validReviewOutput("ready_to_build")},
+	)
+	b := testBroker(t, r, 3)
+	open, err := b.OpenSession(ctx, OpenSessionRequest{
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	round1, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
+	if err != nil {
+		t.Fatalf("round 1: %v", err)
+	}
+
+	if _, err := b.RecordRoundNotes(ctx, RecordRoundNotesRequest{
+		SessionID:   open.SessionID,
+		RoundNumber: round1.RoundNumber,
+		Commentary:  "took the polish suggestion",
+		Decisions: []Decision{
+			{Ref: "C-1", Disposition: "fixed", Note: "fix landed in artifacts"},
+			{Ref: "A-1", Disposition: "fixed", Note: "polished"},
+		},
+	}); err != nil {
+		t.Fatalf("record notes: %v", err)
+	}
+
+	decisionsLog := readFile(t, filepath.Join(open.SessionDir, "decisions.md"))
+	for _, want := range []string{
+		"- C-1 (fixed): fix landed in artifacts",
+		"- A-1 (fixed): polished",
+	} {
+		if !strings.Contains(decisionsLog, want) {
+			t.Fatalf("decisions log missing %q:\n%s", want, decisionsLog)
+		}
+	}
+
+	round2, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
+	if err != nil {
+		t.Fatalf("round 2: %v", err)
+	}
+	// advisory dispositions must NOT inflate the convergence counters; only the
+	// blocking C-1 disposition counts.
+	if round2.Convergence.AcceptedDecisions != 1 || round2.Convergence.DeclinedOrDeferredDecisions != 0 {
+		t.Fatalf("convergence counts = %+v", round2.Convergence)
+	}
+
+	reqs := r.requests()
+	for _, want := range []string{
+		"- C-1 (fixed): fix landed in artifacts",
+		"- A-1 (fixed): polished",
+	} {
+		if !strings.Contains(reqs[1].Prompt, want) {
+			t.Fatalf("round 2 prompt missing %q:\n%s", want, reqs[1].Prompt)
+		}
+	}
+}
+
+func TestAdvisoryRefDispositionedFixedDoesNotCountInConvergence(t *testing.T) {
+	// cross-case: even when an advisory ref is dispositioned with the
+	// "agreed-and-acted" value, it must not increment AcceptedDecisions.
+	ctx := context.Background()
+	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithAdvisoryRefs("A-1")})
+	b := testBroker(t, r, 2)
+	open, err := b.OpenSession(ctx, OpenSessionRequest{
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	round1, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
+	if err != nil {
+		t.Fatalf("round 1: %v", err)
+	}
+	if _, err := b.RecordRoundNotes(ctx, RecordRoundNotesRequest{
+		SessionID:   open.SessionID,
+		RoundNumber: round1.RoundNumber,
+		Commentary:  "polished",
+		Decisions:   []Decision{{Ref: "A-1", Disposition: "fixed", Note: "polished"}},
+	}); err != nil {
+		t.Fatalf("record notes: %v", err)
+	}
+	status, err := b.SessionStatus(ctx, open.SessionID)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.Convergence.AcceptedDecisions != 0 || status.Convergence.DeclinedOrDeferredDecisions != 0 {
+		t.Fatalf("advisory-only counters = %+v", status.Convergence)
+	}
+}
+
+func TestAdvisoryKindClassifiedByArrayNotName(t *testing.T) {
+	// kind classification must be array-based: an advisory id named like a
+	// concern (e.g. "note-1" with no "a" prefix) still classifies as advisory
+	// because of where it appeared in the reviewer output.
+	ctx := context.Background()
+	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithAdvisoryRefs("note-1")})
+	b := testBroker(t, r, 2)
+	open, err := b.OpenSession(ctx, OpenSessionRequest{
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	round1, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
+	if err != nil {
+		t.Fatalf("round 1: %v", err)
+	}
+	if _, err := b.RecordRoundNotes(ctx, RecordRoundNotesRequest{
+		SessionID:   open.SessionID,
+		RoundNumber: round1.RoundNumber,
+		Commentary:  "ack",
+		Decisions:   []Decision{{Ref: "note-1", Disposition: "fixed", Note: "polished"}},
+	}); err != nil {
+		t.Fatalf("record notes: %v", err)
+	}
+	status, err := b.SessionStatus(ctx, open.SessionID)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.Convergence.AcceptedDecisions != 0 {
+		t.Fatalf("note-1 classified as concern instead of advisory: %+v", status.Convergence)
+	}
+}
+
+func TestReviewerOutputDuplicateIdsRejected(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{
+			name: "duplicate within concerns",
+			raw: func() json.RawMessage {
+				raw, err := json.Marshal(schema.ReviewOutput{
+					Verdict: "needs_changes",
+					Summary: "reviewed",
+					Concerns: []schema.Concern{
+						{ID: "C-1", Severity: "major", Location: "x", Claim: "a", Rationale: "b"},
+						{ID: "C-1", Severity: "minor", Location: "y", Claim: "c", Rationale: "d"},
+					},
+					Questions:     []schema.Question{},
+					AdvisoryNotes: []schema.AdvisoryNote{},
+					ProposedDiffs: []schema.ProposedDiff{},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return raw
+			}(),
+		},
+		{
+			name: "id reused across concerns and advisory_notes",
+			raw: func() json.RawMessage {
+				raw, err := json.Marshal(schema.ReviewOutput{
+					Verdict: "needs_changes",
+					Summary: "reviewed",
+					Concerns: []schema.Concern{
+						{ID: "C-1", Severity: "major", Location: "x", Claim: "a", Rationale: "b"},
+					},
+					Questions: []schema.Question{},
+					AdvisoryNotes: []schema.AdvisoryNote{
+						{ID: "C-1", Location: "y", Note: "polish", Rationale: "tone"},
+					},
+					ProposedDiffs: []schema.ProposedDiff{},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return raw
+			}(),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newScriptedReviewer(scriptedResponse{raw: tc.raw})
+			b := testBroker(t, r, 2)
+			open, err := b.OpenSession(ctx, OpenSessionRequest{
+				Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+			})
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			_, err = startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID})
+			assertBrokerCode(t, err, CodeSchemaViolation)
+		})
 	}
 }
 
@@ -626,7 +911,7 @@ func TestRecordRoundNotesValidationAndReplacement(t *testing.T) {
 	_, err = b.RecordRoundNotes(ctx, RecordRoundNotesRequest{
 		SessionID:   open.SessionID,
 		RoundNumber: 1,
-		Decisions:   []Decision{{Ref: "missing", Disposition: "accepted", Note: "nope"}},
+		Decisions:   []Decision{{Ref: "missing", Disposition: "fixed", Note: "nope"}},
 	})
 	assertBrokerCode(t, err, CodeUnknownRef)
 
@@ -655,6 +940,43 @@ func TestRecordRoundNotesValidationAndReplacement(t *testing.T) {
 	if strings.Count(content, roundlog.NotesBeginMarker) != 1 || strings.Count(content, roundlog.NotesEndMarker) != 1 {
 		t.Fatal("expected one notes region")
 	}
+}
+
+func TestEmptySessionDecisionsLogText(t *testing.T) {
+	// the exported function must match what (s *session).decisionsLogText
+	// returns for an empty session, otherwise broker round 1 and `mercurius
+	// preview` would drift apart.
+	s := &session{}
+	if got, want := s.decisionsLogText(), EmptySessionDecisionsLogText(); got != want {
+		t.Fatalf("empty-session text differs:\n  session: %q\n  exported: %q", got, want)
+	}
+	if !strings.Contains(EmptySessionDecisionsLogText(), "_no decisions recorded yet_") {
+		t.Fatalf("expected placeholder text, got %q", EmptySessionDecisionsLogText())
+	}
+}
+
+func TestRecordRoundNotesRejectsLegacyAcceptedDisposition(t *testing.T) {
+	// regression-protection for the M3 vocabulary swap. `accepted` is now
+	// invalid; the only "agreed-and-acted" disposition is `fixed`.
+	ctx := context.Background()
+	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithRefs()})
+	b := testBroker(t, r, 2)
+	open, err := b.OpenSession(ctx, OpenSessionRequest{
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := startAndCollectRound(t, b, ctx, StartRoundRequest{SessionID: open.SessionID}); err != nil {
+		t.Fatalf("round: %v", err)
+	}
+	_, err = b.RecordRoundNotes(ctx, RecordRoundNotesRequest{
+		SessionID:   open.SessionID,
+		RoundNumber: 1,
+		Commentary:  "x",
+		Decisions:   []Decision{{Ref: "C-1", Disposition: "accepted", Note: "should fail"}},
+	})
+	assertBrokerCode(t, err, CodeInvalidDecision)
 }
 
 func TestOpenSessionArtifactAndLogDestinationValidation(t *testing.T) {
@@ -1040,6 +1362,27 @@ func reviewOutputWithRefs() json.RawMessage {
 			{ID: "Q-1", Topic: "budget", WhyItBlocks: "cannot judge loop length"},
 		},
 		AdvisoryNotes: []schema.AdvisoryNote{},
+		ProposedDiffs: []schema.ProposedDiff{},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+
+func reviewOutputWithAdvisoryRefs(advisoryID string) json.RawMessage {
+	suggestion := "clarify the work order"
+	noteSuggestion := "polish the wording"
+	raw, err := json.Marshal(schema.ReviewOutput{
+		Verdict: "needs_changes",
+		Summary: "reviewed",
+		Concerns: []schema.Concern{
+			{ID: "C-1", Severity: "major", Location: "work-order:M3", Claim: "missing detail", Rationale: "implementation would diverge", Suggestion: &suggestion},
+		},
+		Questions: []schema.Question{},
+		AdvisoryNotes: []schema.AdvisoryNote{
+			{ID: advisoryID, Location: "design:summary", Note: "tone could be tighter", Rationale: "polish", Suggestion: &noteSuggestion},
+		},
 		ProposedDiffs: []schema.ProposedDiff{},
 	})
 	if err != nil {

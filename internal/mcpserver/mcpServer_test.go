@@ -316,6 +316,62 @@ func TestOpenSessionReviewContextMetadata(t *testing.T) {
 	}
 }
 
+func TestOpenSessionReviewFocusMetadata(t *testing.T) {
+	cfg := testConfig(t, dummyReviewer())
+	cfg.ReviewFocus = "config focus"
+	ctx, client := newTestClient(t, cfg)
+	artifactPath := writeArtifact(t, "design.md", "# design\n")
+
+	result, err := client.CallTool(ctx, &mcp.CallToolParams{
+		Name: "open_session",
+		Arguments: map[string]any{
+			"artifacts": []map[string]any{{
+				"name": "design.md",
+				"path": artifactPath,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	configOutput := decodeStructured[OpenSessionOutput](t, result)
+	if configOutput.ReviewFocusSource != "config" || !configOutput.ReviewFocusPresent {
+		t.Fatalf("config focus output = %+v", configOutput)
+	}
+
+	result, err = client.CallTool(ctx, &mcp.CallToolParams{
+		Name: "open_session",
+		Arguments: map[string]any{
+			"artifacts": []map[string]any{{
+				"name": "design.md",
+				"path": artifactPath,
+			}},
+			"review_focus": "session focus",
+		},
+	})
+	if err != nil {
+		t.Fatalf("open session with override: %v", err)
+	}
+	sessionOutput := decodeStructured[OpenSessionOutput](t, result)
+	if sessionOutput.ReviewFocusSource != "session" || !sessionOutput.ReviewFocusPresent {
+		t.Fatalf("session focus output = %+v", sessionOutput)
+	}
+
+	statusResult, err := client.CallTool(ctx, &mcp.CallToolParams{
+		Name: "session_status",
+		Arguments: map[string]any{
+			"session_id": sessionOutput.SessionID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("session status: %v", err)
+	}
+	status := decodeStructured[SessionStatusOutput](t, statusResult)
+	if status.ReviewFocusSource != "session" || !status.ReviewFocusPresent {
+		t.Fatalf("status focus = %+v", status)
+	}
+}
+
 func TestArtifactNameValidation(t *testing.T) {
 	ctx, client := newTestClient(t, testConfig(t, dummyReviewer()))
 	artifactPath := writeArtifact(t, "design.md", "# design\n")
@@ -558,6 +614,72 @@ func TestCollectRoundTriageQuestionOnly(t *testing.T) {
 	}
 	if finding.Severity != nil || finding.Location != nil || finding.Suggestion != nil {
 		t.Fatalf("question should not have concern-only fields: %+v", finding)
+	}
+}
+
+func TestSelectNextFindingBySeverity(t *testing.T) {
+	mk := func(ref string, kind string, severity *string) TriageFindingOutput {
+		return TriageFindingOutput{Ref: ref, Kind: kind, Severity: severity}
+	}
+	sev := func(s string) *string { return &s }
+
+	tests := []struct {
+		name     string
+		findings []TriageFindingOutput
+		wantRef  string
+	}{
+		{
+			name: "blocker beats major even when major is first",
+			findings: []TriageFindingOutput{
+				mk("C-1", "concern", sev("major")),
+				mk("C-2", "concern", sev("blocker")),
+				mk("C-3", "concern", sev("minor")),
+			},
+			wantRef: "C-2",
+		},
+		{
+			name: "all-major picks lowest id",
+			findings: []TriageFindingOutput{
+				mk("C-3", "concern", sev("major")),
+				mk("C-1", "concern", sev("major")),
+				mk("C-2", "concern", sev("major")),
+			},
+			wantRef: "C-1",
+		},
+		{
+			name: "concern wins over question even when question is first in array",
+			findings: []TriageFindingOutput{
+				mk("Q-1", "question", nil),
+				mk("C-9", "concern", sev("minor")),
+			},
+			wantRef: "C-9",
+		},
+		{
+			name: "questions sort by id when no concerns are present",
+			findings: []TriageFindingOutput{
+				mk("Q-3", "question", nil),
+				mk("Q-1", "question", nil),
+				mk("Q-2", "question", nil),
+			},
+			wantRef: "Q-1",
+		},
+		{
+			name: "blocker beats minor with id ordering as tiebreak between blockers",
+			findings: []TriageFindingOutput{
+				mk("C-2", "concern", sev("blocker")),
+				mk("C-1", "concern", sev("blocker")),
+				mk("C-3", "concern", sev("minor")),
+			},
+			wantRef: "C-1",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := selectNextFinding(test.findings)
+			if got.Ref != test.wantRef {
+				t.Fatalf("next finding ref = %q, want %q", got.Ref, test.wantRef)
+			}
+		})
 	}
 }
 

@@ -28,6 +28,29 @@ log: '/abs/path/to/reviews/s_.../round-01.md'
 next: ask the design agent to call collect_round for session 's_...' round 1
 ```
 
+## Preview the Round-1 Prompt
+
+`mercurius preview` renders the prompt that broker round 1 would send to the reviewer, without creating a session, dispatching a reviewer, consuming a round, or writing any state under `log_destination`. Use it to iterate on `review_focus` (or other config-shaped content) before paying the cost of a real round.
+
+```sh
+mercurius preview --config /abs/path/to/mercurius.yaml \
+  --artifact design=/abs/path/to/design.md \
+  --artifact work-order=/abs/path/to/work-order.md
+```
+
+Repeat `--artifact name=path` for each artifact. Names follow the same rules as `open_session.artifacts.name`: 1-64 characters, no leading underscore, no path separators. Paths can be absolute or relative to the process working directory; the parser splits on the first `=` only, so paths containing `=` are handled correctly.
+
+Optional flags:
+
+- `--review-context "..."`: override the configured `review_context` for the preview only.
+- `--review-focus "..."`: override the configured `review_focus` for the preview only.
+- `--max-findings N`: override the configured `max_findings` for the preview only.
+- `--output <file>`: write the assembled prompt to this file instead of stdout.
+
+The output is the assembled prompt verbatim. Two preview invocations with the same inputs produce byte-equal output. The prompt is the same one broker round 1 would have produced for an empty session, except the artifact `Snapshot path:` line uses the literal sentinel `(preview)` because preview does not snapshot artifacts.
+
+For previewing a later round (with prior decisions in the prompt), read the corresponding session's `snapshots/round-NN/_prompt.md` log file directly; `mercurius preview` is for the unsighted round-1 case.
+
 ## Long Reviews and MCP Timeouts
 
 Real reviewer runs can outlive an MCP client's tool timeout. Use `start_review_round` rather than expecting a synchronous response. If `collect_round` returns `round_in_progress`, the design agent should pause, tell the user to keep monitoring, and collect later.
@@ -69,8 +92,8 @@ Common broker error codes:
 - `schema_violation`: raw reviewer output failed schema, readiness consistency, or finding-limit validation.
 - `unknown_round`: requested round does not exist.
 - `empty_notes`: `record_round_notes` had no commentary and no decisions.
-- `unknown_ref`: a decision ref does not match a concern or question in the round.
-- `invalid_decision`: decision disposition is not accepted, rejected, or deferred.
+- `unknown_ref`: a decision ref does not match a concern, question, or advisory_note in the round.
+- `invalid_decision`: decision disposition is not `fixed`, `rejected`, or `deferred`.
 - `invalid_verdict`: close verdict is not ready_to_build, paused, or abandoned.
 
 ## Interpreting Convergence

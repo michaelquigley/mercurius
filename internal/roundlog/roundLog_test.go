@@ -45,14 +45,14 @@ func TestWriteInitialAndUpdateNotes(t *testing.T) {
 		}
 	}
 
-	if err := UpdateNotes(path, "integrated feedback", []Decision{{Ref: "C-1", Disposition: "accepted", Note: "fixed."}}); err != nil {
+	if err := UpdateNotes(path, "integrated feedback", []Decision{{Ref: "C-1", Disposition: "fixed", Note: "fix landed."}}); err != nil {
 		t.Fatalf("update notes: %v", err)
 	}
 	updated := readLog(t, path)
 	for _, want := range []string{
 		"notes_recorded: true",
 		"integrated feedback",
-		"- **accepted** (ref: C-1): fixed.",
+		"- **fixed** (ref: C-1): fix landed.",
 	} {
 		if !strings.Contains(updated, want) {
 			t.Fatalf("expected updated log to contain %q\n%s", want, updated)
@@ -66,7 +66,7 @@ func TestWriteInitialAndUpdateNotes(t *testing.T) {
 		t.Fatalf("replace notes: %v", err)
 	}
 	replaced := readLog(t, path)
-	if strings.Contains(replaced, "integrated feedback") || strings.Contains(replaced, "accepted") {
+	if strings.Contains(replaced, "integrated feedback") || strings.Contains(replaced, "fix landed.") {
 		t.Fatal("expected previous notes to be replaced")
 	}
 	if !strings.Contains(replaced, "_no commentary recorded yet_") || !strings.Contains(replaced, "_no decisions recorded yet_") {

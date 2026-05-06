@@ -123,6 +123,9 @@ func ParseReviewOutput(raw json.RawMessage) (ReviewOutput, error) {
 	if err := json.Unmarshal(raw, &output); err != nil {
 		return ReviewOutput{}, fmt.Errorf("parse review output: %w", err)
 	}
+	if err := ValidateUniqueIDs(output); err != nil {
+		return ReviewOutput{}, err
+	}
 	if err := ValidateReviewConsistency(output); err != nil {
 		return ReviewOutput{}, err
 	}
@@ -144,6 +147,44 @@ func ValidateFindingLimit(output ReviewOutput, maxFindings int) error {
 		return nil
 	}
 	return fmt.Errorf("review output has %d findings (concerns=%d, questions=%d), maximum is %d", count, len(output.Concerns), len(output.Questions), maxFindings)
+}
+
+// ValidateUniqueIDs rejects reviewer output that reuses an id within or across
+// the concerns, questions, and advisory_notes arrays. JSON Schema cannot express
+// cross-array uniqueness, so the broker enforces it here. Duplicate ids would
+// otherwise make ref-kind classification ambiguous and let reviewer drift slip
+// past validation silently.
+func ValidateUniqueIDs(output ReviewOutput) error {
+	seen := make(map[string]string, len(output.Concerns)+len(output.Questions)+len(output.AdvisoryNotes))
+	check := func(kind string, id string) error {
+		if id == "" {
+			return nil
+		}
+		if previous, ok := seen[id]; ok {
+			if previous == kind {
+				return fmt.Errorf("review output reuses id '%s' within %s", id, kind)
+			}
+			return fmt.Errorf("review output reuses id '%s' across %s and %s", id, previous, kind)
+		}
+		seen[id] = kind
+		return nil
+	}
+	for _, concern := range output.Concerns {
+		if err := check("concerns", concern.ID); err != nil {
+			return err
+		}
+	}
+	for _, question := range output.Questions {
+		if err := check("questions", question.ID); err != nil {
+			return err
+		}
+	}
+	for _, note := range output.AdvisoryNotes {
+		if err := check("advisory_notes", note.ID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ValidateReviewConsistency checks cross-field readiness invariants.

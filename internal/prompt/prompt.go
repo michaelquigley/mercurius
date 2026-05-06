@@ -101,7 +101,7 @@ func Build(req Request) (string, json.RawMessage) {
 		b.WriteString(strings.TrimRight(strings.TrimSpace(req.DecisionsLog), "\n"))
 		b.WriteString("\n\n")
 	}
-	b.WriteString("Treat accepted, rejected, and deferred decisions as adjudicated session context. Do not re-raise rejected or deferred items unless the artifacts now make the decision concretely broken or there is a genuinely new angle.\n\n")
+	b.WriteString("Treat fixed, rejected, and deferred decisions as adjudicated session context. Do not re-raise these items unless the artifacts now make the prior decision concretely broken or there is a genuinely new angle.\n\n")
 
 	b.WriteString("## Verdict and severity\n\n")
 	b.WriteString("Apply these definitions precisely.\n\n")
@@ -124,7 +124,8 @@ func Build(req Request) (string, json.RawMessage) {
 	b.WriteString("```json\n")
 	b.WriteString(prettySchema(req.MaxFindings))
 	b.WriteString("\n```\n\n")
-	b.WriteString("Required fields must be present even when empty (e.g., `concerns: []`, `advisory_notes: []`). Do not include fields not defined in the schema.\n")
+	b.WriteString("Required fields must be present even when empty (e.g., `concerns: []`, `advisory_notes: []`). Do not include fields not defined in the schema.\n\n")
+	b.WriteString("Within a single review output, every id appearing in `concerns`, `questions`, or `advisory_notes` must be unique across all three arrays. Never reuse an id - not within a single array, and not across arrays.\n")
 
 	return b.String(), schema.ReviewOutputSchemaWithMaxFindings(req.MaxFindings)
 }

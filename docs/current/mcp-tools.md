@@ -40,11 +40,14 @@ Request:
   ],
   "reviewers": ["codex"],
   "budget": 4,
-  "review_context": "optional session-specific constraints"
+  "review_context": "optional session-specific constraints",
+  "review_focus": "optional session-specific focus"
 }
 ```
 
-Response includes `session_id`, budget state, `max_findings`, selected reviewer, artifacts, `review_context_source`, and `review_context_present`.
+`review_context` and `review_focus` are optional and override the corresponding values from `mercurius.yaml` for this session only. Whitespace-only values are treated as absent and the config value is used.
+
+Response includes `session_id`, budget state, `max_findings`, selected reviewer, artifacts, `review_context_source`, `review_context_present`, `review_focus_source`, and `review_focus_present`. Each `_source` field is one of `"config"`, `"session"`, or `"none"`.
 
 Common errors: `invalid_artifacts`, `unknown_reviewer`, `panel_mode_unsupported`, `invalid_budget`, `invalid_log_destination`.
 
@@ -121,14 +124,14 @@ Request:
   "decisions": [
     {
       "ref": "C-1",
-      "disposition": "accepted",
-      "note": "fixed in the work order"
+      "disposition": "fixed",
+      "note": "fix landed in the work order"
     }
   ]
 }
 ```
 
-Dispositions are `accepted`, `rejected`, or `deferred`. Decision refs must match concern or question ids from the round.
+Dispositions are `fixed`, `rejected`, or `deferred`. Decision refs must match a concern, question, or advisory_note id from the round. Advisory dispositions are recorded in `decisions.md` and flow into the prior-decisions block of the next round's prompt the same way blocking dispositions do, but they do not contribute to the convergence counters (`accepted_decisions`, `declined_or_deferred_decisions`), which track blocking-finding triage progress only. The `accepted_decisions` field name is retained for backward compatibility (a 1.0 cleanup); under the current vocabulary it counts `fixed` decisions specifically.
 
 The tool updates the round log, writes `<session_dir>/decisions.md`, and feeds decisions into future reviewer prompts.
 
@@ -146,11 +149,13 @@ Request:
 
 Valid verdicts are `ready_to_build`, `paused`, and `abandoned`.
 
+`ready_to_build` does not require zero findings. It means the remaining findings - including any deferred or rejected ones - are below the noise floor for the implementer the artifacts are written for, under the stated `review_context`. Advisory notes never block readiness.
+
 Common errors: `unknown_session`, `already_closed`, `round_in_progress`, `invalid_verdict`.
 
 ## `session_status`
 
-Returns a read-only session view, including budget state, selected reviewer, artifacts, last error, active/latest round job, completed rounds, review context metadata, and convergence.
+Returns a read-only session view, including budget state, selected reviewer, artifacts, last error, active/latest round job, completed rounds, review-context and review-focus metadata, and convergence. The response includes `review_context_source` / `review_context_present` and `review_focus_source` / `review_focus_present`, parallel to the `open_session` response, so an agent can confirm which override is in effect at any point during the session.
 
 Request:
 

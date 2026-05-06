@@ -117,9 +117,9 @@ func NextAction(code string) string {
 	case CodeEmptyNotes:
 		return "provide commentary or at least one decision before recording round notes"
 	case CodeUnknownRef:
-		return "use a concern or question id from the round review output"
+		return "use a concern, question, or advisory_note id from the round review output"
 	case CodeInvalidDecision:
-		return "use disposition accepted, rejected, or deferred"
+		return "use disposition fixed, rejected, or deferred"
 	case CodeAlreadyClosed:
 		return "no further cleanup is needed for this session"
 	case CodeInvalidVerdict:

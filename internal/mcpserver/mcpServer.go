@@ -31,6 +31,7 @@ type OpenSessionInput struct {
 	Reviewers     []string        `json:"reviewers,omitempty"`
 	Budget        int             `json:"budget,omitempty"`
 	ReviewContext string          `json:"review_context,omitempty"`
+	ReviewFocus   string          `json:"review_focus,omitempty"`
 }
 
 type OpenSessionOutput struct {
@@ -41,6 +42,8 @@ type OpenSessionOutput struct {
 	MaxFindings          int                        `json:"max_findings"`
 	ReviewContextSource  string                     `json:"review_context_source"`
 	ReviewContextPresent bool                       `json:"review_context_present"`
+	ReviewFocusSource    string                     `json:"review_focus_source"`
+	ReviewFocusPresent   bool                       `json:"review_focus_present"`
 	RoundsUsed           int                        `json:"rounds_used"`
 	Reviewers            []ReviewerInfoOutput       `json:"reviewers"`
 	Artifacts            []RegisteredArtifactOutput `json:"artifacts"`
@@ -201,6 +204,8 @@ type SessionStatusOutput struct {
 	MaxFindings          int                        `json:"max_findings"`
 	ReviewContextSource  string                     `json:"review_context_source"`
 	ReviewContextPresent bool                       `json:"review_context_present"`
+	ReviewFocusSource    string                     `json:"review_focus_source"`
+	ReviewFocusPresent   bool                       `json:"review_focus_present"`
 	RoundsUsed           int                        `json:"rounds_used"`
 	Reviewers            []ReviewerInfoOutput       `json:"reviewers"`
 	Artifacts            []RegisteredArtifactOutput `json:"artifacts"`
@@ -313,13 +318,14 @@ func BrokerOptions(cfg *config.Config) (broker.Options, error) {
 func RegisterTools(server *mcp.Server, b *broker.Broker) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "open_session",
-		Description: "start a new Mercurius review session. artifacts must use unique safe names and absolute paths readable by the Mercurius server. budget defaults to the project default_budget when omitted. review_context can override the config's review_context for this session. the response includes the configured max_findings cap for each review round.",
+		Description: "start a new Mercurius review session. artifacts must use unique safe names and absolute paths readable by the Mercurius server. budget defaults to the project default_budget when omitted. review_context and review_focus can override the corresponding config values for this session. the response includes the configured max_findings cap for each review round.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input OpenSessionInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.OpenSession(ctx, broker.OpenSessionRequest{
 			Artifacts:     artifactsFromInput(input.Artifacts),
 			Reviewers:     append([]string(nil), input.Reviewers...),
 			Budget:        input.Budget,
 			ReviewContext: input.ReviewContext,
+			ReviewFocus:   input.ReviewFocus,
 		})
 		if err != nil {
 			return toolErrorResult(err)
@@ -332,6 +338,8 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 			MaxFindings:          response.MaxFindings,
 			ReviewContextSource:  response.ReviewContextSource,
 			ReviewContextPresent: response.ReviewContextPresent,
+			ReviewFocusSource:    response.ReviewFocusSource,
+			ReviewFocusPresent:   response.ReviewFocusPresent,
 			RoundsUsed:           response.RoundsUsed,
 			Reviewers:            reviewerInfoOutput(response.Reviewers, false),
 			Artifacts:            registeredArtifactOutput(response.Artifacts),
@@ -667,12 +675,77 @@ func triageOutput(results []broker.ReviewerResult) RoundTriageOutput {
 	}
 	triage.TotalFindings = len(triage.Findings)
 	if triage.TotalFindings > 0 {
-		first := triage.Findings[0]
-		triage.NextFinding = &first
+		// triage.findings preserves the reviewer's emitted order; only
+		// next_finding is sorted by severity. The design agent can re-sort
+		// findings itself if needed.
+		next := selectNextFinding(triage.Findings)
+		triage.NextFinding = &next
 		triage.RemainingFindings = triage.TotalFindings - 1
 		triage.Guidance = oneFindingTriageGuidance()
 	}
 	return triage
+}
+
+// selectNextFinding picks the highest-severity concern first
+// (blocker > major > minor), ties broken by lexicographic id order.
+// Questions follow concerns. Severity is only meaningful on concerns;
+// questions sort among themselves by id alone.
+func selectNextFinding(findings []TriageFindingOutput) TriageFindingOutput {
+	best := -1
+	for i, f := range findings {
+		if best < 0 {
+			best = i
+			continue
+		}
+		if compareTriageFindings(f, findings[best]) < 0 {
+			best = i
+		}
+	}
+	return findings[best]
+}
+
+func compareTriageFindings(a, b TriageFindingOutput) int {
+	// concerns rank ahead of questions.
+	aIsConcern := a.Kind == "concern"
+	bIsConcern := b.Kind == "concern"
+	if aIsConcern != bIsConcern {
+		if aIsConcern {
+			return -1
+		}
+		return 1
+	}
+	// among concerns, severity rank decides; lower rank value sorts first.
+	if aIsConcern {
+		ra := severityRank(a.Severity)
+		rb := severityRank(b.Severity)
+		if ra != rb {
+			return ra - rb
+		}
+	}
+	// final tiebreak is lexicographic id order.
+	if a.Ref < b.Ref {
+		return -1
+	}
+	if a.Ref > b.Ref {
+		return 1
+	}
+	return 0
+}
+
+func severityRank(severity *string) int {
+	if severity == nil {
+		return 99
+	}
+	switch *severity {
+	case "blocker":
+		return 0
+	case "major":
+		return 1
+	case "minor":
+		return 2
+	default:
+		return 99
+	}
 }
 
 func oneFindingTriageGuidance() string {
@@ -702,6 +775,8 @@ func sessionStatusOutput(status broker.SessionStatusResponse) SessionStatusOutpu
 		MaxFindings:          status.MaxFindings,
 		ReviewContextSource:  status.ReviewContextSource,
 		ReviewContextPresent: status.ReviewContextPresent,
+		ReviewFocusSource:    status.ReviewFocusSource,
+		ReviewFocusPresent:   status.ReviewFocusPresent,
 		RoundsUsed:           status.RoundsUsed,
 		Reviewers:            reviewerInfoOutput(status.Reviewers, false),
 		Artifacts:            registeredArtifactOutput(status.Artifacts),

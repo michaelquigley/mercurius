@@ -46,6 +46,12 @@ func newRootCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Load() is now side-effect-free; the server startup path is the
+			// caller responsible for creating log_destination before any
+			// session opens.
+			if err := cfg.EnsureLogDestination(); err != nil {
+				return err
+			}
 			server, _, err := mcpserver.New(cfg)
 			if err != nil {
 				return err
@@ -61,6 +67,7 @@ func newRootCommand() *cobra.Command {
 	root.PersistentFlags().StringVar(&configPath, "config", "./mercurius.yaml", "path to mercurius.yaml")
 	root.Flags().BoolVar(&verbose, "verbose", false, "enable verbose stderr logging")
 	root.AddCommand(newMonitorCommand(&configPath))
+	root.AddCommand(newPreviewCommand(&configPath))
 	return root
 }
 
