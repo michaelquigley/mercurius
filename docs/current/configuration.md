@@ -5,8 +5,6 @@ Mercurius is configured by one YAML file per running server. By default the CLI 
 ## Minimal Config
 
 ```yaml
-name: my-project
-log_destination: ./reviews
 reviewers:
   - name: codex
     impl: codex
@@ -15,7 +13,6 @@ reviewers:
 ## Full Example
 
 ```yaml
-name: my-project
 log_destination: ./reviews
 default_budget: 4
 max_findings: 8
@@ -36,21 +33,24 @@ reviewers:
 
 ## Required Fields
 
-- `name`: human-readable project name.
-- `log_destination`: directory where session logs, status files, and snapshots are written.
 - `reviewers`: non-empty reviewer list.
 - `reviewers[].name`: unique reviewer name.
 - `reviewers[].impl`: reviewer implementation. Current implementations are `codex` and `dummy`.
 
 ## Optional Fields
 
+- `log_destination`: directory where session logs, status files, and snapshots are written. Default is `.mercurius` (relative to the config file's directory).
 - `default_budget`: default maximum successful rounds per session. Default is `4`. `open_session.budget` can override it.
-- `max_findings`: maximum blocking findings across `concerns` plus `questions` in a successful round. Default is `10`. Advisory notes do not count.
+- `max_findings`: maximum blocking findings across `concerns` plus `questions` in a successful round. Default is `6`. Advisory notes do not count.
 - `review_context`: free-form markdown describing project posture and constraints. Calibrates reviewer rigor.
 - `review_focus`: free-form markdown for project-specific things to look for that the base review philosophy does not already cover (typically one paragraph). Inserted in the project-specific focus section of the prompt.
 - `reviewers[].binary_path`: reviewer binary path. For `codex`, omitted means use normal executable lookup.
 - `reviewers[].model`: reviewer model string passed to the reviewer implementation.
 - `reviewers[].extra_args`: additional reviewer-specific CLI arguments.
+
+## Project Name
+
+The project name is derived from the basename of the directory containing the config file (e.g., a config at `~/work/archive/mercurius.yaml` produces project name `archive`). This name is what the MCP server reports in its handshake; rename the directory to rename the server identity. There is no `name` field in the YAML.
 
 ## Path Resolution
 

@@ -1,19 +1,28 @@
-name: mercurius
-log_destination: .mercurius
+# example mercurius.yaml. copy this into a project directory as
+# `mercurius.yaml` and edit the fields below. fields omitted here fall back to
+# sane defaults (log_destination: .mercurius, default_budget: 4,
+# max_findings: 6). the project name is derived from the directory holding
+# the config file.
+
 default_budget: 4
 max_findings: 6
 
+# review_context describes project posture and constraints. it calibrates
+# reviewer rigor by stating what's true about the project: deployment model,
+# stakes, scope, locked decisions, simplicity-vs-defensiveness preference. the
+# reviewer suppresses findings that do not materially apply under this context.
 review_context: |
-  mercurius is a small Go tool for design-agent review loops. it is pre-1.0
-  with one known user (the author). the codebase is a few thousand lines,
-  there are no production users, and breaking config changes are acceptable.
-  prefer simplicity over hardening; single supervised implementer.
+  personal tool, single supervised implementer. pre-1.0; breaking changes are
+  acceptable. prefer simple over highly defensive when both achieve correctness.
+  out of scope: production-grade observability and multi-tenant concerns.
 
+# review_focus directs the reviewer at project-specific surfaces that the base
+# review philosophy does not already cover. the base prompt already carries
+# the universal subtle-vs-obvious filter, so this field is typically just one
+# paragraph naming the invariants or risks unique to this project.
 review_focus: |
-  pay particular attention to broker invariants that are not obvious from
-  surrounding code: atomic round-failure cleanup (no log, no snapshot dir,
-  no budget consumption on failed rounds), single-reviewer-per-session,
-  and broker-owned prompt assembly.
+  pay particular attention to invariants specific to this project that the
+  universal what-to-flag criteria do not already cover.
 
 reviewers:
   - name: codex

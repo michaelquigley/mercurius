@@ -56,10 +56,8 @@ Logs go to stderr because stdout is reserved for MCP transport messages.
 Minimal config:
 
 ```yaml
-name: my-project
-log_destination: ./reviews
 default_budget: 4
-max_findings: 10
+max_findings: 6
 review_context: |
   Add project/session constraints that should calibrate reviewer rigor.
 review_focus: |

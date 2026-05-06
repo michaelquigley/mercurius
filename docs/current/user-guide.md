@@ -13,8 +13,6 @@ The key rule is that Mercurius is a reviewer broker, not an editor. It reads art
 Create a `mercurius.yaml` in the project you want reviewed:
 
 ```yaml
-name: archive
-log_destination: ./reviews
 default_budget: 4
 max_findings: 8
 review_context: |

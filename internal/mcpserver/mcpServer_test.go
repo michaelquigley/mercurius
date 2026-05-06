@@ -803,7 +803,6 @@ func testConfig(t *testing.T, reviewers ...*config.ReviewerConfig) *config.Confi
 	t.Helper()
 
 	return &config.Config{
-		Name:           "test-project",
 		LogDestination: filepath.Join(t.TempDir(), "reviews"),
 		DefaultBudget:  2,
 		MaxFindings:    config.DefaultMaxFindings,

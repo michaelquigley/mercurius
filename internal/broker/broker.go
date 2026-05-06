@@ -26,7 +26,7 @@ import (
 
 const (
 	defaultBudget        = 4
-	defaultMaxFindings   = 10
+	defaultMaxFindings   = 6
 	stateActive          = "active"
 	stateClosed          = "closed"
 	roundStateRunning    = "running"

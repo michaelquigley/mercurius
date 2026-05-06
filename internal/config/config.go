@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	DefaultBudget      = 4
-	DefaultMaxFindings = 10
+	DefaultBudget         = 4
+	DefaultMaxFindings    = 6
+	DefaultLogDestination = ".mercurius"
 )
 
 var knownImpls = map[string]struct{}{
@@ -55,8 +56,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		DefaultBudget: DefaultBudget,
-		MaxFindings:   DefaultMaxFindings,
+		DefaultBudget:  DefaultBudget,
+		MaxFindings:    DefaultMaxFindings,
+		LogDestination: DefaultLogDestination,
 	}
 	if err := dd.MergeYAMLFile(cfg, absPath); err != nil {
 		return nil, err
@@ -64,6 +66,7 @@ func Load(path string) (*Config, error) {
 	if err := checkRenamedFields(absPath); err != nil {
 		return nil, err
 	}
+	cfg.Name = filepath.Base(filepath.Dir(absPath))
 
 	if err := cfg.resolve(filepath.Dir(absPath)); err != nil {
 		return nil, err
@@ -77,12 +80,6 @@ func Load(path string) (*Config, error) {
 
 // Validate checks required fields and path writability.
 func (c *Config) Validate() error {
-	if c.Name == "" {
-		return errors.New("name is required")
-	}
-	if c.LogDestination == "" {
-		return errors.New("log_destination is required")
-	}
 	if c.DefaultBudget <= 0 {
 		return fmt.Errorf("default_budget must be greater than zero")
 	}

@@ -11,7 +11,6 @@ func TestLoadResolvesDefaultsAndPaths(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfig(t, cfgPath, `
-name: test-project
 log_destination: ./reviews
 review_focus: |
   flag unclear logging.
@@ -60,7 +59,6 @@ func TestLoadRejectsRenamedPromptOverrides(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfig(t, cfgPath, `
-name: test-project
 log_destination: ./reviews
 prompt_overrides: |
   stale value
@@ -82,7 +80,6 @@ func TestLoadConfiguresMaxFindings(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfig(t, cfgPath, `
-name: test-project
 log_destination: ./reviews
 max_findings: 6
 reviewers:
@@ -106,19 +103,8 @@ func TestLoadValidatesConfig(t *testing.T) {
 		want string
 	}{
 		{
-			name: "missing name",
-			body: `
-log_destination: ./reviews
-reviewers:
-  - name: dummy
-    impl: dummy
-`,
-			want: "name is required",
-		},
-		{
 			name: "invalid budget",
 			body: `
-name: test
 log_destination: ./reviews
 default_budget: -1
 reviewers:
@@ -130,7 +116,6 @@ reviewers:
 		{
 			name: "invalid max findings",
 			body: `
-name: test
 log_destination: ./reviews
 max_findings: 0
 reviewers:
@@ -142,7 +127,6 @@ reviewers:
 		{
 			name: "duplicate reviewer",
 			body: `
-name: test
 log_destination: ./reviews
 reviewers:
   - name: dummy
@@ -155,7 +139,6 @@ reviewers:
 		{
 			name: "unknown impl",
 			body: `
-name: test
 log_destination: ./reviews
 reviewers:
   - name: nope
@@ -166,7 +149,6 @@ reviewers:
 		{
 			name: "missing parent",
 			body: `
-name: test
 log_destination: ./missing/reviews
 reviewers:
   - name: dummy
