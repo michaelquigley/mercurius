@@ -881,7 +881,6 @@ func waitBlockingStarted(t *testing.T, r *blockingReviewer) {
 
 func validReviewOutput() json.RawMessage {
 	raw, err := json.Marshal(schema.ReviewOutput{
-		ReadyToShip:   true,
 		Verdict:       "ready_to_build",
 		Summary:       "ready",
 		Concerns:      []schema.Concern{},
@@ -900,9 +899,8 @@ func reviewOutputWithConcernAndQuestion(t *testing.T) json.RawMessage {
 
 	suggestion := "make the acceptance criteria explicit"
 	raw, err := json.Marshal(schema.ReviewOutput{
-		ReadyToShip: false,
-		Verdict:     "needs_changes",
-		Summary:     "needs one clarification and one answer",
+		Verdict: "needs_changes",
+		Summary: "needs one clarification and one answer",
 		Concerns: []schema.Concern{{
 			ID:         "C-1",
 			Severity:   "major",
@@ -929,10 +927,9 @@ func reviewOutputWithQuestionOnly(t *testing.T) json.RawMessage {
 	t.Helper()
 
 	raw, err := json.Marshal(schema.ReviewOutput{
-		ReadyToShip: false,
-		Verdict:     "needs_discussion",
-		Summary:     "needs one answer",
-		Concerns:    []schema.Concern{},
+		Verdict:  "needs_discussion",
+		Summary:  "needs one answer",
+		Concerns: []schema.Concern{},
 		Questions: []schema.Question{{
 			ID:          "Q-7",
 			Topic:       "deployment order",
@@ -952,11 +949,10 @@ func reviewOutputWithAdvisoryOnly(t *testing.T) json.RawMessage {
 
 	suggestion := "trim the second paragraph"
 	raw, err := json.Marshal(schema.ReviewOutput{
-		ReadyToShip: true,
-		Verdict:     "ready_to_build",
-		Summary:     "ready with optional polish",
-		Concerns:    []schema.Concern{},
-		Questions:   []schema.Question{},
+		Verdict:   "ready_to_build",
+		Summary:   "ready with optional polish",
+		Concerns:  []schema.Concern{},
+		Questions: []schema.Question{},
 		AdvisoryNotes: []schema.AdvisoryNote{{
 			ID:         "A-1",
 			Location:   "docs/design.md",

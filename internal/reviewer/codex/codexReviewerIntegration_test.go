@@ -43,7 +43,7 @@ func TestReviewerIntegration(t *testing.T) {
 		Model:      os.Getenv("MERCURIUS_CODEX_MODEL"),
 	})
 	resp, err := r.Review(ctx, reviewer.ReviewRequest{
-		Prompt: "Return one JSON object matching the supplied schema. Use ready_to_ship true, verdict ready_to_build, summary integration smoke, and empty concerns, questions, advisory_notes, and proposed_diffs arrays.",
+		Prompt: "Return one JSON object matching the supplied schema. Use verdict ready_to_build, summary integration smoke, and empty concerns, questions, advisory_notes, and proposed_diffs arrays.",
 		Schema: schema.ReviewOutputSchema(),
 	})
 	if err != nil {

@@ -974,7 +974,7 @@ func (s *session) convergence() Convergence {
 		}
 	}
 
-	if latestOK && (latestOutput.ReadyToShip || convergence.LatestBlockingFindings == 0) {
+	if latestOK && convergence.LatestBlockingFindings == 0 {
 		convergence.Signal = convergenceClose
 		convergence.Message = "Latest review says the artifacts are ready or has no blocking findings; consider closing the session."
 		return convergence

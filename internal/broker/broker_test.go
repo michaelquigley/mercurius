@@ -1015,7 +1015,6 @@ func assertBrokerCode(t *testing.T, err error, code string) {
 
 func validReviewOutput(verdict string) json.RawMessage {
 	raw, err := json.Marshal(schema.ReviewOutput{
-		ReadyToShip:   verdict == "ready_to_build",
 		Verdict:       verdict,
 		Summary:       "reviewed",
 		Concerns:      []schema.Concern{},
@@ -1032,9 +1031,8 @@ func validReviewOutput(verdict string) json.RawMessage {
 func reviewOutputWithRefs() json.RawMessage {
 	suggestion := "clarify the work order"
 	raw, err := json.Marshal(schema.ReviewOutput{
-		ReadyToShip: false,
-		Verdict:     "needs_changes",
-		Summary:     "reviewed",
+		Verdict: "needs_changes",
+		Summary: "reviewed",
 		Concerns: []schema.Concern{
 			{ID: "C-1", Severity: "major", Location: "work-order:M3", Claim: "missing detail", Rationale: "implementation would diverge", Suggestion: &suggestion},
 		},
@@ -1055,7 +1053,6 @@ func reviewOutputWithFindingCounts(t *testing.T, concernCount int, questionCount
 
 	suggestion := "tighten the artifact"
 	output := schema.ReviewOutput{
-		ReadyToShip:   false,
 		Verdict:       "needs_changes",
 		Summary:       "reviewed",
 		Concerns:      make([]schema.Concern, 0, concernCount),
@@ -1092,7 +1089,6 @@ func reviewOutputWithAdvisory(t *testing.T, concernCount int, advisoryCount int)
 
 	suggestion := "tighten the artifact"
 	output := schema.ReviewOutput{
-		ReadyToShip:   concernCount == 0,
 		Verdict:       "ready_to_build",
 		Summary:       "reviewed",
 		Concerns:      make([]schema.Concern, 0, concernCount),
@@ -1101,7 +1097,6 @@ func reviewOutputWithAdvisory(t *testing.T, concernCount int, advisoryCount int)
 		ProposedDiffs: []schema.ProposedDiff{},
 	}
 	if concernCount > 0 {
-		output.ReadyToShip = false
 		output.Verdict = "needs_changes"
 	}
 	for i := 0; i < concernCount; i++ {

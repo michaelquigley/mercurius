@@ -6,7 +6,6 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "ready_to_ship",
     "verdict",
     "summary",
     "concerns",
@@ -15,10 +14,6 @@
     "proposed_diffs"
   ],
   "properties": {
-    "ready_to_ship": {
-      "description": "true when the artifacts are ready to ship or build under the stated constraints",
-      "type": "boolean"
-    },
     "verdict": {
       "description": "headline judgment for the whole review round",
       "type": "string",
@@ -111,7 +106,7 @@
       }
     },
     "advisory_notes": {
-      "description": "non-blocking polish opportunities or downstream considerations that should not prevent ready_to_ship",
+      "description": "non-blocking polish opportunities or downstream considerations that should not block readiness",
       "type": "array",
       "items": {
         "type": "object",

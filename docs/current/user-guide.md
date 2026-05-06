@@ -142,7 +142,7 @@ Mercurius writes the notes into the round log and updates `<session_dir>/decisio
 
 Run another round when the artifacts changed materially or an open question was answered. Stop when:
 
-- The latest round has `ready_to_ship: true`.
+- The latest round has `verdict: ready_to_build`.
 - `triage.findings` is empty.
 - `convergence.signal` is `consider_closing`.
 - The remaining findings are advisory, rejected, or deferred under the stated context.

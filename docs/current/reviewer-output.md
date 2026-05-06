@@ -6,7 +6,6 @@ Reviewer output is a single JSON object. Mercurius validates it against a strict
 
 ```json
 {
-  "ready_to_ship": true,
   "verdict": "ready_to_build",
   "summary": "one-paragraph assessment",
   "concerns": [],
@@ -18,18 +17,14 @@ Reviewer output is a single JSON object. Mercurius validates it against a strict
 
 ## Readiness Rules
 
-`ready_to_ship: true` requires:
+`verdict: "ready_to_build"` requires:
 
-- `verdict: "ready_to_build"`
 - `concerns: []`
 - `questions: []`
 
-`ready_to_ship: false` requires:
+`verdict: "needs_changes"` or `verdict: "needs_discussion"` requires at least one entry in `concerns` or `questions`.
 
-- `verdict` is `needs_changes` or `needs_discussion`
-- at least one entry in `concerns` or `questions`
-
-`advisory_notes` never make a round unready.
+`advisory_notes` never block readiness regardless of verdict.
 
 ## Concerns
 

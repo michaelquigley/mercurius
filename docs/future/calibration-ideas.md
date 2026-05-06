@@ -1,6 +1,6 @@
 # Future Calibration Ideas
 
-The current implementation includes the highest-leverage calibration changes: review context, explicit `ready_to_ship`, advisory notes, decisions log carry-forward, finding caps, and convergence hints.
+The current implementation includes the highest-leverage calibration changes: review context, explicit `verdict`, advisory notes, decisions log carry-forward, finding caps, and convergence hints.
 
 The ideas below are not implemented.
 

@@ -22,7 +22,7 @@ func TestWriteInitialAndUpdateNotes(t *testing.T) {
 			{Name: "context", SnapshotPath: "/tmp/session/snapshots/round-01/context", Size: 6, Hash: "sha256:def", Inline: true},
 		},
 		Reviewers: []ReviewerOutput{
-			{Name: "dummy", Raw: json.RawMessage(`{"ready_to_ship":true,"verdict":"ready_to_build","summary":"ok","concerns":[],"questions":[],"advisory_notes":[],"proposed_diffs":[]}`), UsageNotes: "dummy"},
+			{Name: "dummy", Raw: json.RawMessage(`{"verdict":"ready_to_build","summary":"ok","concerns":[],"questions":[],"advisory_notes":[],"proposed_diffs":[]}`), UsageNotes: "dummy"},
 		},
 	}
 

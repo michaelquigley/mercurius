@@ -31,7 +31,7 @@ The broker owns session state, prompt assembly, artifact snapshots, reviewer dis
 4. Write the assembled prompt to `<session_dir>/snapshots/round-NN/_prompt.md`.
 5. Dispatch to the selected reviewer.
 6. Validate the raw reviewer output against the JSON schema.
-7. Validate readiness consistency for `ready_to_ship`, `verdict`, `concerns`, and `questions`.
+7. Validate readiness consistency between `verdict`, `concerns`, and `questions`.
 8. Write `<session_dir>/round-NN.md`.
 9. Mark the round completed and make it collectible.
 

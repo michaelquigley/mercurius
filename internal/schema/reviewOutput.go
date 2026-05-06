@@ -12,7 +12,6 @@ import (
 
 // ReviewOutput is the canonical structured response returned by a reviewer.
 type ReviewOutput struct {
-	ReadyToShip   bool           `json:"ready_to_ship"`
 	Verdict       string         `json:"verdict"`
 	Summary       string         `json:"summary"`
 	Concerns      []Concern      `json:"concerns"`
@@ -150,21 +149,14 @@ func ValidateFindingLimit(output ReviewOutput, maxFindings int) error {
 // ValidateReviewConsistency checks cross-field readiness invariants.
 func ValidateReviewConsistency(output ReviewOutput) error {
 	blockingFindings := FindingCount(output)
-	if output.ReadyToShip {
-		if output.Verdict != "ready_to_build" {
-			return fmt.Errorf("review output contradiction: ready_to_ship=true requires verdict ready_to_build")
-		}
+	if output.Verdict == "ready_to_build" {
 		if blockingFindings != 0 {
-			return fmt.Errorf("review output contradiction: ready_to_ship=true requires no concerns or questions")
+			return fmt.Errorf("review output contradiction: verdict ready_to_build requires no concerns or questions")
 		}
 		return nil
 	}
-
-	if output.Verdict == "ready_to_build" {
-		return fmt.Errorf("review output contradiction: ready_to_ship=false cannot use verdict ready_to_build")
-	}
 	if blockingFindings == 0 {
-		return fmt.Errorf("review output contradiction: ready_to_ship=false requires at least one concern or question")
+		return fmt.Errorf("review output contradiction: verdict %s requires at least one concern or question", output.Verdict)
 	}
 	return nil
 }

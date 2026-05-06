@@ -8,7 +8,6 @@ import (
 
 func TestValidateReviewOutputAcceptsMinimalValidOutput(t *testing.T) {
 	raw := json.RawMessage(`{
-		"ready_to_ship": true,
 		"verdict": "ready_to_build",
 		"summary": "ready",
 		"concerns": [],
@@ -34,7 +33,6 @@ func TestValidateReviewOutputRejectsMalformedJSON(t *testing.T) {
 
 func TestValidateReviewOutputRejectsMissingRequiredField(t *testing.T) {
 	raw := json.RawMessage(`{
-		"ready_to_ship": true,
 		"verdict": "ready_to_build",
 		"summary": "ready",
 		"concerns": [],
@@ -48,7 +46,6 @@ func TestValidateReviewOutputRejectsMissingRequiredField(t *testing.T) {
 
 func TestValidateReviewOutputRejectsUnknownTopLevelField(t *testing.T) {
 	raw := json.RawMessage(`{
-		"ready_to_ship": true,
 		"verdict": "ready_to_build",
 		"summary": "ready",
 		"concerns": [],
@@ -65,7 +62,6 @@ func TestValidateReviewOutputRejectsUnknownTopLevelField(t *testing.T) {
 
 func TestValidateReviewOutputRejectsUnknownNestedField(t *testing.T) {
 	raw := json.RawMessage(`{
-		"ready_to_ship": false,
 		"verdict": "needs_changes",
 		"summary": "changes needed",
 		"concerns": [
@@ -91,7 +87,6 @@ func TestValidateReviewOutputRejectsUnknownNestedField(t *testing.T) {
 
 func TestValidateReviewOutputRejectsInvalidVerdict(t *testing.T) {
 	raw := json.RawMessage(`{
-		"ready_to_ship": true,
 		"verdict": "ready",
 		"summary": "ready",
 		"concerns": [],
@@ -107,7 +102,6 @@ func TestValidateReviewOutputRejectsInvalidVerdict(t *testing.T) {
 
 func TestValidateReviewOutputRejectsInvalidSeverity(t *testing.T) {
 	raw := json.RawMessage(`{
-		"ready_to_ship": false,
 		"verdict": "needs_changes",
 		"summary": "changes needed",
 		"concerns": [
@@ -159,8 +153,7 @@ func TestValidateReviewOutputConcernSuggestionVariants(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			raw := json.RawMessage(`{
-				"ready_to_ship": false,
-				"verdict": "needs_changes",
+						"verdict": "needs_changes",
 				"summary": "changes needed",
 				"concerns": [
 					{
@@ -189,7 +182,6 @@ func TestValidateReviewOutputConcernSuggestionVariants(t *testing.T) {
 
 func TestParseReviewOutput(t *testing.T) {
 	raw := json.RawMessage(`{
-		"ready_to_ship": false,
 		"verdict": "needs_changes",
 		"summary": "changes needed",
 		"concerns": [
@@ -281,9 +273,8 @@ func TestParseReviewOutputRejectsReadinessContradictions(t *testing.T) {
 		want string
 	}{
 		{
-			name: "ready with concern",
+			name: "ready_to_build with concern",
 			raw: json.RawMessage(`{
-				"ready_to_ship": true,
 				"verdict": "ready_to_build",
 				"summary": "contradiction",
 				"concerns": [
@@ -300,12 +291,11 @@ func TestParseReviewOutputRejectsReadinessContradictions(t *testing.T) {
 				"advisory_notes": [],
 				"proposed_diffs": []
 			}`),
-			want: "ready_to_ship=true requires no concerns or questions",
+			want: "verdict ready_to_build requires no concerns or questions",
 		},
 		{
-			name: "not ready without blocking finding",
+			name: "needs_discussion without blocking finding",
 			raw: json.RawMessage(`{
-				"ready_to_ship": false,
 				"verdict": "needs_discussion",
 				"summary": "only polish",
 				"concerns": [],
@@ -321,29 +311,7 @@ func TestParseReviewOutputRejectsReadinessContradictions(t *testing.T) {
 				],
 				"proposed_diffs": []
 			}`),
-			want: "ready_to_ship=false requires at least one concern or question",
-		},
-		{
-			name: "not ready with ready verdict",
-			raw: json.RawMessage(`{
-				"ready_to_ship": false,
-				"verdict": "ready_to_build",
-				"summary": "contradiction",
-				"concerns": [
-					{
-						"id": "C-1",
-						"severity": "major",
-						"location": "design",
-						"claim": "missing decision",
-						"rationale": "implementation would diverge",
-						"suggestion": null
-					}
-				],
-				"questions": [],
-				"advisory_notes": [],
-				"proposed_diffs": []
-			}`),
-			want: "ready_to_ship=false cannot use verdict ready_to_build",
+			want: "verdict needs_discussion requires at least one concern or question",
 		},
 	}
 
