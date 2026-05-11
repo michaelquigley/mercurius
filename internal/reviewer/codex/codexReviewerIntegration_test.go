@@ -39,12 +39,12 @@ func TestReviewerIntegration(t *testing.T) {
 
 	r := codex.New(codex.Options{
 		BinaryPath: resolvedBinaryPath,
-		WorkingDir: workingDir,
 		Model:      os.Getenv("MERCURIUS_CODEX_MODEL"),
 	})
 	resp, err := r.Review(ctx, reviewer.ReviewRequest{
-		Prompt: "Return one JSON object matching the supplied schema. Use verdict ready_to_build, summary integration smoke, and empty concerns, questions, and advisory_notes arrays.",
-		Schema: schema.ReviewOutputSchema(),
+		Prompt:     "Return one JSON object matching the supplied schema. Use verdict ready_to_build, summary integration smoke, and empty concerns, questions, and advisory_notes arrays.",
+		Schema:     schema.ReviewOutputSchema(),
+		WorkingDir: workingDir,
 	})
 	if err != nil {
 		t.Fatalf("review failed: %v", err)

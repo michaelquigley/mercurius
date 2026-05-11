@@ -24,13 +24,13 @@ func TestReviewerRunsCodexWithPromptSchemaAndOutputCapture(t *testing.T) {
 
 	r := New(Options{
 		BinaryPath: helper.binaryPath,
-		WorkingDir: workingDir,
 		Model:      "gpt-test",
 		ExtraArgs:  []string{"--ignore-user-config"},
 	})
 	resp, err := r.Review(context.Background(), reviewer.ReviewRequest{
-		Prompt: "review this prompt",
-		Schema: reqSchema,
+		Prompt:     "review this prompt",
+		Schema:     reqSchema,
+		WorkingDir: workingDir,
 	})
 	if err != nil {
 		t.Fatalf("review failed: %v", err)
@@ -102,12 +102,12 @@ func TestReviewerReturnsCommandFailureWithOutput(t *testing.T) {
 	})
 	r := New(Options{
 		BinaryPath: helper.binaryPath,
-		WorkingDir: t.TempDir(),
 	})
 
 	_, err := r.Review(context.Background(), reviewer.ReviewRequest{
-		Prompt: "review this prompt",
-		Schema: schema.ReviewOutputSchema(),
+		Prompt:     "review this prompt",
+		Schema:     schema.ReviewOutputSchema(),
+		WorkingDir: t.TempDir(),
 	})
 	if err == nil {
 		t.Fatal("expected review error")
@@ -137,12 +137,12 @@ func TestReviewerRecoversLastMessageAfterCommandFailure(t *testing.T) {
 	})
 	r := New(Options{
 		BinaryPath: helper.binaryPath,
-		WorkingDir: t.TempDir(),
 	})
 
 	resp, err := r.Review(context.Background(), reviewer.ReviewRequest{
-		Prompt: "review this prompt",
-		Schema: schema.ReviewOutputSchema(),
+		Prompt:     "review this prompt",
+		Schema:     schema.ReviewOutputSchema(),
+		WorkingDir: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("expected recovered review output: %v", err)
@@ -166,12 +166,12 @@ func TestReviewerDoesNotValidateSchema(t *testing.T) {
 	})
 	r := New(Options{
 		BinaryPath: helper.binaryPath,
-		WorkingDir: t.TempDir(),
 	})
 
 	resp, err := r.Review(context.Background(), reviewer.ReviewRequest{
-		Prompt: "review this prompt",
-		Schema: schema.ReviewOutputSchema(),
+		Prompt:     "review this prompt",
+		Schema:     schema.ReviewOutputSchema(),
+		WorkingDir: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("expected json-valid output to be returned: %v", err)
@@ -194,8 +194,9 @@ func TestReviewerRequiresWorkingDirAndSchema(t *testing.T) {
 		t.Fatalf("expected working directory error, got: %v", err)
 	}
 
-	r = New(Options{BinaryPath: "codex", WorkingDir: t.TempDir()})
-	_, err = r.Review(context.Background(), reviewer.ReviewRequest{})
+	_, err = r.Review(context.Background(), reviewer.ReviewRequest{
+		WorkingDir: t.TempDir(),
+	})
 	if err == nil || !strings.Contains(err.Error(), "schema") {
 		t.Fatalf("expected schema error, got: %v", err)
 	}

@@ -19,7 +19,6 @@ const defaultBinaryPath = "codex"
 // Options configures the Codex subprocess reviewer.
 type Options struct {
 	BinaryPath string
-	WorkingDir string
 	Model      string
 	ExtraArgs  []string
 }
@@ -43,7 +42,7 @@ func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (revi
 	if err := ctx.Err(); err != nil {
 		return reviewer.ReviewResponse{}, err
 	}
-	if r.options.WorkingDir == "" {
+	if req.WorkingDir == "" {
 		return reviewer.ReviewResponse{}, errors.New("codex reviewer working directory is required")
 	}
 	if len(req.Schema) == 0 {
@@ -62,7 +61,7 @@ func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (revi
 		return reviewer.ReviewResponse{}, fmt.Errorf("write codex schema file: %w", err)
 	}
 
-	stdout, stderr, runErr := r.run(ctx, req.Prompt, schemaPath, lastMessagePath)
+	stdout, stderr, runErr := r.run(ctx, req.WorkingDir, req.Prompt, schemaPath, lastMessagePath)
 
 	output, err := os.ReadFile(lastMessagePath)
 	if err != nil {
@@ -85,12 +84,12 @@ func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (revi
 	}, nil
 }
 
-func (r *Reviewer) run(ctx context.Context, prompt string, schemaPath string, lastMessagePath string) ([]byte, []byte, error) {
-	args := r.args(schemaPath, lastMessagePath)
+func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string, schemaPath string, lastMessagePath string) ([]byte, []byte, error) {
+	args := r.args(workingDir, schemaPath, lastMessagePath)
 	cmd := exec.CommandContext(ctx, r.options.BinaryPath, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 
-	codexHome, cleanup, err := r.prepareCodexHome()
+	codexHome, cleanup, err := r.prepareCodexHome(workingDir)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -108,13 +107,13 @@ func (r *Reviewer) run(ctx context.Context, prompt string, schemaPath string, la
 	return stdout.Bytes(), stderr.Bytes(), nil
 }
 
-func (r *Reviewer) prepareCodexHome() (string, func(), error) {
+func (r *Reviewer) prepareCodexHome(workingDir string) (string, func(), error) {
 	originalHome, err := codexHome()
 	if err != nil {
 		return "", func() {}, err
 	}
 
-	dir, err := os.MkdirTemp(r.options.WorkingDir, ".codex-home-*")
+	dir, err := os.MkdirTemp(workingDir, ".codex-home-*")
 	if err != nil {
 		return "", func() {}, fmt.Errorf("create codex home: %w", err)
 	}
@@ -137,10 +136,10 @@ func (r *Reviewer) prepareCodexHome() (string, func(), error) {
 	return dir, cleanup, nil
 }
 
-func (r *Reviewer) args(schemaPath string, lastMessagePath string) []string {
+func (r *Reviewer) args(workingDir string, schemaPath string, lastMessagePath string) []string {
 	args := []string{
 		"exec",
-		"-C", r.options.WorkingDir,
+		"-C", workingDir,
 		"--ephemeral",
 		"--skip-git-repo-check",
 		"--sandbox", "read-only",

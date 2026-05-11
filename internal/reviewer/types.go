@@ -14,6 +14,7 @@ type ReviewRequest struct {
 	Prompt      string
 	Artifacts   []Artifact
 	Schema      json.RawMessage
+	WorkingDir  string
 	SessionMeta SessionMetadata
 }
 

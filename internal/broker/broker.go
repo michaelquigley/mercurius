@@ -279,9 +279,10 @@ func (b *Broker) executeRoundJob(job *roundJob) {
 
 	b.touchRoundStatus(job)
 	resp, err := job.reviewer.Review(context.Background(), reviewer.ReviewRequest{
-		Prompt:    promptText,
-		Artifacts: snapshots.reviewerArtifacts,
-		Schema:    schemaBytes,
+		Prompt:     promptText,
+		Artifacts:  snapshots.reviewerArtifacts,
+		Schema:     schemaBytes,
+		WorkingDir: snapshots.roundDir,
 		SessionMeta: reviewer.SessionMetadata{
 			SessionID:   job.sessionID,
 			RoundNumber: job.roundNumber,
