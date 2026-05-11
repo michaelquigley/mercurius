@@ -16,13 +16,13 @@ review_focus: |
   flag unclear logging.
 review_context: |
   deployment: personal one-shot
-reviewers:
-  - name: codex
-    impl: codex
-    binary_path: ./bin/codex
-    model: gpt-test
-    extra_args:
-      - --ignore-user-config
+reviewer:
+  name: codex
+  impl: codex
+  binary_path: ./bin/codex
+  model: gpt-test
+  extra_args:
+    - --ignore-user-config
 `)
 
 	cfg, err := Load(cfgPath)
@@ -35,7 +35,6 @@ reviewers:
 	if cfg.LogDestination != filepath.Join(dir, "reviews") {
 		t.Fatalf("log destination = %s", cfg.LogDestination)
 	}
-	// Load() is pure-validation: the directory must NOT have been created yet.
 	if _, err := os.Stat(cfg.LogDestination); !os.IsNotExist(err) {
 		t.Fatalf("Load() created log destination as a side effect: stat err=%v", err)
 	}
@@ -45,8 +44,11 @@ reviewers:
 	if _, err := os.Stat(cfg.LogDestination); err != nil {
 		t.Fatalf("expected log destination to be created by EnsureLogDestination: %v", err)
 	}
-	if cfg.Reviewers[0].BinaryPath != filepath.Join(dir, "bin", "codex") {
-		t.Fatalf("binary path = %s", cfg.Reviewers[0].BinaryPath)
+	if cfg.Reviewer == nil {
+		t.Fatal("expected reviewer to be populated")
+	}
+	if cfg.Reviewer.BinaryPath != filepath.Join(dir, "bin", "codex") {
+		t.Fatalf("binary path = %s", cfg.Reviewer.BinaryPath)
 	}
 	if !strings.Contains(cfg.ReviewContext, "deployment: personal one-shot") {
 		t.Fatalf("review context = %q", cfg.ReviewContext)
@@ -54,8 +56,8 @@ reviewers:
 	if !strings.Contains(cfg.ReviewFocus, "flag unclear logging.") {
 		t.Fatalf("review focus = %q", cfg.ReviewFocus)
 	}
-	if cfg.Reviewers[0].ExtraArgs[0] != "--ignore-user-config" {
-		t.Fatalf("extra args not loaded: %+v", cfg.Reviewers[0].ExtraArgs)
+	if cfg.Reviewer.ExtraArgs[0] != "--ignore-user-config" {
+		t.Fatalf("extra args not loaded: %+v", cfg.Reviewer.ExtraArgs)
 	}
 }
 
@@ -66,9 +68,9 @@ func TestLoadRejectsRenamedPromptOverrides(t *testing.T) {
 log_destination: ./reviews
 prompt_overrides: |
   stale value
-reviewers:
-  - name: dummy
-    impl: dummy
+reviewer:
+  name: dummy
+  impl: dummy
 `)
 
 	_, err := Load(cfgPath)
@@ -80,15 +82,34 @@ reviewers:
 	}
 }
 
+func TestLoadRejectsRenamedReviewers(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mercurius.yaml")
+	writeConfig(t, cfgPath, `
+log_destination: ./reviews
+reviewers:
+  - name: dummy
+    impl: dummy
+`)
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected rename-guidance error")
+	}
+	if !strings.Contains(err.Error(), "reviewers") || !strings.Contains(err.Error(), "reviewer") {
+		t.Fatalf("expected error to name both old and new field, got %v", err)
+	}
+}
+
 func TestLoadConfiguresMaxFindings(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfig(t, cfgPath, `
 log_destination: ./reviews
 max_findings: 6
-reviewers:
-  - name: dummy
-    impl: dummy
+reviewer:
+  name: dummy
+  impl: dummy
 `)
 
 	cfg, err := Load(cfgPath)
@@ -111,9 +132,9 @@ func TestLoadValidatesConfig(t *testing.T) {
 			body: `
 log_destination: ./reviews
 default_budget: 4
-reviewers:
-  - name: dummy
-    impl: dummy
+reviewer:
+  name: dummy
+  impl: dummy
 `,
 			want: "default_budget",
 		},
@@ -122,33 +143,28 @@ reviewers:
 			body: `
 log_destination: ./reviews
 max_findings: 0
-reviewers:
-  - name: dummy
-    impl: dummy
+reviewer:
+  name: dummy
+  impl: dummy
 `,
 			want: "max_findings",
-		},
-		{
-			name: "duplicate reviewer",
-			body: `
-log_destination: ./reviews
-reviewers:
-  - name: dummy
-    impl: dummy
-  - name: dummy
-    impl: dummy
-`,
-			want: "duplicate reviewer",
 		},
 		{
 			name: "unknown impl",
 			body: `
 log_destination: ./reviews
-reviewers:
-  - name: nope
-    impl: nope
+reviewer:
+  name: nope
+  impl: nope
 `,
 			want: "unknown impl",
+		},
+		{
+			name: "missing reviewer",
+			body: `
+log_destination: ./reviews
+`,
+			want: "reviewer is required",
 		},
 	}
 
@@ -172,9 +188,9 @@ func TestEnsureLogDestinationCreatesDirectory(t *testing.T) {
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfig(t, cfgPath, `
 log_destination: ./reviews
-reviewers:
-  - name: dummy
-    impl: dummy
+reviewer:
+  name: dummy
+  impl: dummy
 `)
 	cfg, err := Load(cfgPath)
 	if err != nil {
@@ -193,9 +209,9 @@ func TestEnsureLogDestinationRejectsMissingParent(t *testing.T) {
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfig(t, cfgPath, `
 log_destination: ./missing/reviews
-reviewers:
-  - name: dummy
-    impl: dummy
+reviewer:
+  name: dummy
+  impl: dummy
 `)
 	cfg, err := Load(cfgPath)
 	if err != nil {

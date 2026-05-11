@@ -5,22 +5,14 @@ import (
 	"fmt"
 )
 
+// Stable error codes. Five classes cover the operational surface: caller
+// inputs, addressing, state conflicts, reviewer failures, and broker bugs.
 const (
-	CodeInvalidArtifacts      = "invalid_artifacts"
-	CodeInvalidLogDestination = "invalid_log_destination"
-	CodePanelModeUnsupported  = "panel_mode_unsupported"
-	CodeUnknownReviewer       = "unknown_reviewer"
-	CodeUnknownSession        = "unknown_session"
-	CodeSessionClosed         = "session_closed"
-	CodeRoundInProgress       = "round_in_progress"
-	CodeReviewerFailed        = "reviewer_failed"
-	CodeSchemaViolation       = "schema_violation"
-	CodeUnknownRound          = "unknown_round"
-	CodeEmptyNotes            = "empty_notes"
-	CodeUnknownRef            = "unknown_ref"
-	CodeInvalidDecision       = "invalid_decision"
-	CodeAlreadyClosed         = "already_closed"
-	CodeInternalError         = "internal_error"
+	CodeUserError      = "user_error"
+	CodeNotFound       = "not_found"
+	CodeConflict       = "conflict"
+	CodeReviewerFailed = "reviewer_failed"
+	CodeInternalError  = "internal_error"
 )
 
 // Error is a structured broker error ready for MCP wrapping.
@@ -63,60 +55,15 @@ func ErrorInfoFrom(err error) *ErrorInfo {
 			details["cause"] = e.Err.Error()
 		}
 		return &ErrorInfo{
-			Code:       e.Code,
-			Message:    e.Message,
-			Details:    details,
-			Retryable:  Retryable(e.Code),
-			NextAction: NextAction(e.Code),
+			Code:    e.Code,
+			Message: e.Message,
+			Details: details,
 		}
 	}
 	return &ErrorInfo{
-		Code:       CodeInternalError,
-		Message:    "internal error",
-		Details:    map[string]any{"cause": err.Error()},
-		Retryable:  Retryable(CodeInternalError),
-		NextAction: NextAction(CodeInternalError),
-	}
-}
-
-// Retryable reports whether retrying the same operation may reasonably succeed.
-func Retryable(code string) bool {
-	return code == CodeReviewerFailed || code == CodeSchemaViolation || code == CodeRoundInProgress
-}
-
-// NextAction returns agent-facing guidance for an error code.
-func NextAction(code string) string {
-	switch code {
-	case CodeInvalidArtifacts:
-		return "fix artifact names and absolute readable paths, then retry the request"
-	case CodeInvalidLogDestination:
-		return "fix the configured log_destination and restart the Mercurius server"
-	case CodePanelModeUnsupported:
-		return "call list_reviewers and open a new session with exactly one reviewer"
-	case CodeUnknownReviewer:
-		return "call list_reviewers and retry with one configured reviewer name"
-	case CodeUnknownSession:
-		return "call list_sessions to find an active session or open a new session"
-	case CodeSessionClosed:
-		return "open a new session before starting another review round"
-	case CodeRoundInProgress:
-		return "monitor the active round and collect it after it completes"
-	case CodeReviewerFailed:
-		return "inspect details.cause; retry if it looks transient, otherwise escalate to the user or server operator"
-	case CodeSchemaViolation:
-		return "retry the round once; if it repeats, escalate with the schema violation details"
-	case CodeUnknownRound:
-		return "call session_status and record notes for an existing round number"
-	case CodeEmptyNotes:
-		return "provide commentary or at least one decision before recording round notes"
-	case CodeUnknownRef:
-		return "use a concern, question, or advisory_note id from this round's review output"
-	case CodeInvalidDecision:
-		return "use disposition fixed, rejected, or deferred"
-	case CodeAlreadyClosed:
-		return "no further cleanup is needed for this session"
-	default:
-		return "inspect details and escalate if the issue is not clear"
+		Code:    CodeInternalError,
+		Message: "internal error",
+		Details: map[string]any{"cause": err.Error()},
 	}
 }
 

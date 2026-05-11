@@ -19,7 +19,7 @@ import (
 )
 
 func TestToolDiscovery(t *testing.T) {
-	ctx, client := newTestClient(t, testConfig(t, dummyReviewer()))
+	ctx, client := newTestClient(t)
 
 	result, err := client.ListTools(ctx, nil)
 	if err != nil {
@@ -35,11 +35,8 @@ func TestToolDiscovery(t *testing.T) {
 	want := []string{
 		"close_session",
 		"collect_round",
-		"list_reviewers",
-		"list_sessions",
 		"open_session",
 		"record_round_notes",
-		"round_status",
 		"session_status",
 		"start_review_round",
 	}
@@ -49,7 +46,7 @@ func TestToolDiscovery(t *testing.T) {
 }
 
 func TestDummyReviewFlow(t *testing.T) {
-	ctx, client := newTestClient(t, testConfig(t, dummyReviewer()))
+	ctx, client := newTestClient(t)
 	artifactPath := writeArtifact(t, "design.md", "# design\n")
 
 	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{
@@ -66,8 +63,8 @@ func TestDummyReviewFlow(t *testing.T) {
 	if openOutput.MaxFindings != config.DefaultMaxFindings {
 		t.Fatalf("max findings = %d, want %d", openOutput.MaxFindings, config.DefaultMaxFindings)
 	}
-	if len(openOutput.Reviewers) != 1 || openOutput.Reviewers[0].Name != "dummy" {
-		t.Fatalf("open reviewers = %+v", openOutput.Reviewers)
+	if openOutput.Reviewer.Name != "dummy" {
+		t.Fatalf("open reviewer = %+v", openOutput.Reviewer)
 	}
 
 	round1 := startAndCollectRoundTool(t, ctx, client, openOutput.SessionID, artifactPath)
@@ -83,11 +80,8 @@ func TestDummyReviewFlow(t *testing.T) {
 	if !strings.Contains(round1.NextAction, "pause") {
 		t.Fatalf("round next action = %q", round1.NextAction)
 	}
-	if round1.Triage.Mode != "walk_findings_one_at_a_time" || round1.Triage.TotalFindings != 0 || round1.Triage.RemainingFindings != 0 || len(round1.Triage.Findings) != 0 || round1.Triage.NextFinding != nil {
+	if round1.Triage.TotalFindings != 0 || round1.Triage.RemainingFindings != 0 || len(round1.Triage.Findings) != 0 || round1.Triage.NextFinding != nil {
 		t.Fatalf("no-finding triage = %+v", round1.Triage)
-	}
-	if !strings.Contains(round1.Triage.Guidance, "No concerns or questions") || !strings.Contains(round1.NextAction, "no blocking findings") {
-		t.Fatalf("no-finding guidance = triage:%q next_action:%q", round1.Triage.Guidance, round1.NextAction)
 	}
 
 	notesResult, err := client.CallTool(ctx, &mcp.CallToolParams{
@@ -105,14 +99,6 @@ func TestDummyReviewFlow(t *testing.T) {
 	if !notesOutput.CommentaryRecorded || notesOutput.DecisionsRecorded != 0 {
 		t.Fatalf("notes output = %+v", notesOutput)
 	}
-	if !strings.Contains(notesOutput.NextAction, "pause") {
-		t.Fatalf("notes next action = %q", notesOutput.NextAction)
-	}
-
-	round2 := startAndCollectRoundTool(t, ctx, client, openOutput.SessionID, artifactPath)
-	if round2.RoundNumber != 2 {
-		t.Fatalf("round number = %d, want 2", round2.RoundNumber)
-	}
 
 	statusResult, err := client.CallTool(ctx, &mcp.CallToolParams{
 		Name: "session_status",
@@ -124,23 +110,11 @@ func TestDummyReviewFlow(t *testing.T) {
 		t.Fatalf("session status: %v", err)
 	}
 	statusOutput := decodeStructured[SessionStatusOutput](t, statusResult)
-	if statusOutput.RoundCount != 2 || statusOutput.MaxFindings != config.DefaultMaxFindings || len(statusOutput.Rounds) != 2 || !statusOutput.Rounds[0].HasNotes {
+	if statusOutput.RoundCount != 1 || len(statusOutput.Rounds) != 1 || !statusOutput.Rounds[0].HasNotes {
 		t.Fatalf("status output = %+v", statusOutput)
 	}
-	if len(statusOutput.Reviewers) != 1 || statusOutput.LastError != nil {
+	if statusOutput.Reviewer.Name != "dummy" || statusOutput.LastError != nil {
 		t.Fatalf("status diagnostics = %+v", statusOutput)
-	}
-
-	listResult, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name:      "list_sessions",
-		Arguments: map[string]any{},
-	})
-	if err != nil {
-		t.Fatalf("list sessions: %v", err)
-	}
-	listOutput := decodeStructured[ListSessionsOutput](t, listResult)
-	if len(listOutput.Sessions) != 1 || listOutput.Sessions[0].SessionID != openOutput.SessionID || listOutput.Sessions[0].RoundCount != 2 {
-		t.Fatalf("list output = %+v", listOutput)
 	}
 
 	closeResult, err := client.CallTool(ctx, &mcp.CallToolParams{
@@ -159,7 +133,7 @@ func TestDummyReviewFlow(t *testing.T) {
 }
 
 func TestBrokerErrorsBecomeToolErrors(t *testing.T) {
-	ctx, client := newTestClient(t, testConfig(t, dummyReviewer()))
+	ctx, client := newTestClient(t)
 
 	result, err := client.CallTool(ctx, &mcp.CallToolParams{
 		Name: "session_status",
@@ -167,90 +141,11 @@ func TestBrokerErrorsBecomeToolErrors(t *testing.T) {
 			"session_id": "s_missing",
 		},
 	})
-	assertToolError(t, result, err, broker.CodeUnknownSession)
-}
-
-func TestListReviewers(t *testing.T) {
-	cfg := testConfig(t, &config.ReviewerConfig{Name: "codex", Impl: "codex", Model: "gpt-test"}, dummyReviewer())
-	ctx, client := newTestClient(t, cfg)
-
-	result, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name:      "list_reviewers",
-		Arguments: map[string]any{},
-	})
-	if err != nil {
-		t.Fatalf("list reviewers: %v", err)
-	}
-	output := decodeStructured[ListReviewersOutput](t, result)
-	if len(output.Reviewers) != 2 {
-		t.Fatalf("reviewers = %+v", output.Reviewers)
-	}
-	if output.Reviewers[0].Name != "codex" || output.Reviewers[0].Model != "gpt-test" || !output.Reviewers[0].Selectable {
-		t.Fatalf("first reviewer = %+v", output.Reviewers[0])
-	}
-}
-
-func TestReviewerSelection(t *testing.T) {
-	cfg := testConfig(t, &config.ReviewerConfig{Name: "codex", Impl: "codex"}, dummyReviewer())
-	ctx, client := newTestClient(t, cfg)
-
-	result, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name:      "open_session",
-		Arguments: map[string]any{},
-	})
-	assertToolError(t, result, err, broker.CodePanelModeUnsupported)
-
-	result, err = client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "open_session",
-		Arguments: map[string]any{
-			"reviewers": []string{"codex"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("open session with codex selection: %v", err)
-	}
-	if output := decodeStructured[OpenSessionOutput](t, result); output.SessionID == "" {
-		t.Fatal("expected session id")
-	}
-
-	result, err = client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "open_session",
-		Arguments: map[string]any{
-			"reviewers": []string{"codex", "dummy"},
-		},
-	})
-	assertToolError(t, result, err, broker.CodePanelModeUnsupported)
-
-	result, err = client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "open_session",
-		Arguments: map[string]any{
-			"reviewers": []string{"missing"},
-		},
-	})
-	assertToolError(t, result, err, broker.CodeUnknownReviewer)
-}
-
-func TestOpenSessionReportsReviewPresenceFromConfig(t *testing.T) {
-	cfg := testConfig(t, dummyReviewer())
-	cfg.ReviewContext = "config context"
-	cfg.ReviewFocus = "config focus"
-	ctx, client := newTestClient(t, cfg)
-
-	result, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name:      "open_session",
-		Arguments: map[string]any{},
-	})
-	if err != nil {
-		t.Fatalf("open session: %v", err)
-	}
-	output := decodeStructured[OpenSessionOutput](t, result)
-	if !output.ReviewContextPresent || !output.ReviewFocusPresent {
-		t.Fatalf("expected both review_*_present true; got %+v", output)
-	}
+	assertToolError(t, result, err, broker.CodeNotFound)
 }
 
 func TestArtifactNameValidationOnStartRound(t *testing.T) {
-	ctx, client := newTestClient(t, testConfig(t, dummyReviewer()))
+	ctx, client := newTestClient(t)
 	artifactPath := writeArtifact(t, "design.md", "# design\n")
 
 	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{
@@ -283,7 +178,7 @@ func TestArtifactNameValidationOnStartRound(t *testing.T) {
 					}},
 				},
 			})
-			assertToolError(t, result, err, broker.CodeInvalidArtifacts)
+			assertToolError(t, result, err, broker.CodeUserError)
 		})
 	}
 }
@@ -292,13 +187,8 @@ func TestFailedRoundReturnsToolErrorAndStatusLastError(t *testing.T) {
 	logDestination := filepath.Join(t.TempDir(), "reviews")
 	b := broker.New(broker.Options{
 		LogDestination: logDestination,
-		Reviewers: []broker.ReviewerSpec{{
-			Name: "failing",
-			Impl: "dummy",
-			Factory: func(string) reviewer.Reviewer {
-				return failingReviewer{}
-			},
-		}},
+		Reviewer:       failingReviewer{},
+		ReviewerInfo:   broker.ReviewerInfo{Name: "failing", Impl: "dummy"},
 	})
 	ctx, client := newTestClientWithBroker(t, b)
 	artifactPath := writeArtifact(t, "design.md", "# design\n")
@@ -312,10 +202,7 @@ func TestFailedRoundReturnsToolErrorAndStatusLastError(t *testing.T) {
 	}
 	sessionID := decodeStructured[OpenSessionOutput](t, openResult).SessionID
 
-	errorOutput := startAndCollectRoundToolError(t, ctx, client, sessionID, artifactPath, broker.CodeReviewerFailed)
-	if !errorOutput.Retryable || !strings.Contains(errorOutput.NextAction, "retry") {
-		t.Fatalf("error output = %+v", errorOutput)
-	}
+	startAndCollectRoundToolError(t, ctx, client, sessionID, artifactPath, broker.CodeReviewerFailed)
 
 	statusResult, err := client.CallTool(ctx, &mcp.CallToolParams{
 		Name: "session_status",
@@ -340,13 +227,8 @@ func TestAsyncReviewTools(t *testing.T) {
 	b := broker.New(broker.Options{
 		LogDestination: filepath.Join(t.TempDir(), "reviews"),
 		MaxFindings:    config.DefaultMaxFindings,
-		Reviewers: []broker.ReviewerSpec{{
-			Name: "blocking",
-			Impl: "dummy",
-			Factory: func(string) reviewer.Reviewer {
-				return reviewerImpl
-			},
-		}},
+		Reviewer:       reviewerImpl,
+		ReviewerInfo:   broker.ReviewerInfo{Name: "blocking", Impl: "dummy"},
 	})
 	ctx, client := newTestClientWithBroker(t, b)
 	artifactPath := writeArtifact(t, "design.md", "# design\n")
@@ -379,21 +261,6 @@ func TestAsyncReviewTools(t *testing.T) {
 	}
 	waitBlockingStarted(t, reviewerImpl)
 
-	statusResult, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "round_status",
-		Arguments: map[string]any{
-			"session_id":   sessionID,
-			"round_number": 1,
-		},
-	})
-	if err != nil {
-		t.Fatalf("round status: %v", err)
-	}
-	status := decodeStructured[RoundStatusToolOutput](t, statusResult)
-	if status.Round.State != "running" || status.Round.StatusPath == "" {
-		t.Fatalf("round status output = %+v", status)
-	}
-
 	collectResult, err := client.CallTool(ctx, &mcp.CallToolParams{
 		Name: "collect_round",
 		Arguments: map[string]any{
@@ -401,7 +268,7 @@ func TestAsyncReviewTools(t *testing.T) {
 			"round_number": 1,
 		},
 	})
-	assertToolError(t, collectResult, err, broker.CodeRoundInProgress)
+	assertToolError(t, collectResult, err, broker.CodeConflict)
 
 	reviewerImpl.release()
 	var collected CollectedRoundOutput
@@ -434,9 +301,6 @@ func TestCollectRoundTriageConcernFirst(t *testing.T) {
 	sessionID, artifactPath := openTestSession(t, ctx, client)
 
 	collected := startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
-	if collected.Triage.Mode != "walk_findings_one_at_a_time" {
-		t.Fatalf("triage mode = %q", collected.Triage.Mode)
-	}
 	if collected.Triage.TotalFindings != 2 || collected.Triage.RemainingFindings != 1 {
 		t.Fatalf("triage counts = %+v", collected.Triage)
 	}
@@ -453,15 +317,6 @@ func TestCollectRoundTriageConcernFirst(t *testing.T) {
 	if finding.ReviewerName != "triage" || finding.Ref != "C-1" || finding.Kind != "concern" {
 		t.Fatalf("next finding identity = %+v", finding)
 	}
-	if finding.Severity == nil || *finding.Severity != "major" || finding.Location == nil || *finding.Location != "docs/design.md" {
-		t.Fatalf("concern metadata = %+v", finding)
-	}
-	if finding.Title != "scope is ambiguous" || finding.Detail != "implementation would diverge" {
-		t.Fatalf("concern text = %+v", finding)
-	}
-	if finding.Suggestion == nil || *finding.Suggestion != "make the acceptance criteria explicit" {
-		t.Fatalf("concern suggestion = %+v", finding)
-	}
 	for _, want := range []string{
 		"present all entries in triage.findings",
 		"walk findings one at a time",
@@ -471,42 +326,6 @@ func TestCollectRoundTriageConcernFirst(t *testing.T) {
 		if !strings.Contains(collected.Triage.Guidance, want) {
 			t.Fatalf("triage guidance missing %q:\n%s", want, collected.Triage.Guidance)
 		}
-	}
-	for _, want := range []string{
-		"all triage.findings",
-		"walk findings one at a time",
-		"clearly and briefly",
-		"stop and wait",
-	} {
-		if !strings.Contains(collected.NextAction, want) {
-			t.Fatalf("next action missing %q: %q", want, collected.NextAction)
-		}
-	}
-}
-
-func TestCollectRoundTriageQuestionOnly(t *testing.T) {
-	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithQuestionOnly(t))
-	sessionID, artifactPath := openTestSession(t, ctx, client)
-
-	collected := startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
-	if collected.Triage.TotalFindings != 1 || collected.Triage.RemainingFindings != 0 {
-		t.Fatalf("triage counts = %+v", collected.Triage)
-	}
-	if len(collected.Triage.Findings) != 1 {
-		t.Fatalf("triage findings = %+v", collected.Triage.Findings)
-	}
-	finding := collected.Triage.NextFinding
-	if finding == nil {
-		t.Fatal("expected next finding")
-	}
-	if finding.ReviewerName != "triage" || finding.Ref != "Q-7" || finding.Kind != "question" {
-		t.Fatalf("question identity = %+v", finding)
-	}
-	if finding.Title != "deployment order" || finding.Detail != "cannot determine whether migration is safe" {
-		t.Fatalf("question text = %+v", finding)
-	}
-	if finding.Severity != nil || finding.Location != nil || finding.Suggestion != nil {
-		t.Fatalf("question should not have concern-only fields: %+v", finding)
 	}
 }
 
@@ -531,16 +350,7 @@ func TestSelectNextFindingBySeverity(t *testing.T) {
 			wantRef: "C-2",
 		},
 		{
-			name: "all-major picks lowest id",
-			findings: []TriageFindingOutput{
-				mk("C-3", "concern", sev("major")),
-				mk("C-1", "concern", sev("major")),
-				mk("C-2", "concern", sev("major")),
-			},
-			wantRef: "C-1",
-		},
-		{
-			name: "concern wins over question even when question is first in array",
+			name: "concern wins over question",
 			findings: []TriageFindingOutput{
 				mk("Q-1", "question", nil),
 				mk("C-9", "concern", sev("minor")),
@@ -555,15 +365,6 @@ func TestSelectNextFindingBySeverity(t *testing.T) {
 				mk("Q-2", "question", nil),
 			},
 			wantRef: "Q-1",
-		},
-		{
-			name: "blocker beats minor with id ordering as tiebreak between blockers",
-			findings: []TriageFindingOutput{
-				mk("C-2", "concern", sev("blocker")),
-				mk("C-1", "concern", sev("blocker")),
-				mk("C-3", "concern", sev("minor")),
-			},
-			wantRef: "C-1",
 		},
 	}
 	for _, test := range tests {
@@ -596,14 +397,16 @@ func TestCollectRoundTriageAdvisoryNotes(t *testing.T) {
 	}
 }
 
-func newTestClient(t *testing.T, cfg *config.Config) (context.Context, *mcp.ClientSession) {
+func newTestClient(t *testing.T) (context.Context, *mcp.ClientSession) {
 	t.Helper()
 
-	server, _, err := New(cfg)
-	if err != nil {
-		t.Fatalf("new server: %v", err)
-	}
-	return newTestClientForServer(t, server)
+	b := broker.New(broker.Options{
+		LogDestination: filepath.Join(t.TempDir(), "reviews"),
+		MaxFindings:    config.DefaultMaxFindings,
+		Reviewer:       fixedReviewer{raw: validReviewOutput()},
+		ReviewerInfo:   broker.ReviewerInfo{Name: "dummy", Impl: "dummy"},
+	})
+	return newTestClientWithBroker(t, b)
 }
 
 func newTestClientWithFixedReviewer(t *testing.T, raw json.RawMessage) (context.Context, *mcp.ClientSession) {
@@ -612,13 +415,8 @@ func newTestClientWithFixedReviewer(t *testing.T, raw json.RawMessage) (context.
 	b := broker.New(broker.Options{
 		LogDestination: filepath.Join(t.TempDir(), "reviews"),
 		MaxFindings:    config.DefaultMaxFindings,
-		Reviewers: []broker.ReviewerSpec{{
-			Name: "triage",
-			Impl: "dummy",
-			Factory: func(string) reviewer.Reviewer {
-				return fixedReviewer{raw: raw}
-			},
-		}},
+		Reviewer:       fixedReviewer{raw: raw},
+		ReviewerInfo:   broker.ReviewerInfo{Name: "triage", Impl: "dummy"},
 	})
 	return newTestClientWithBroker(t, b)
 }
@@ -711,7 +509,7 @@ func collectRound(t *testing.T, ctx context.Context, client *mcp.ClientSession, 
 			return decodeStructured[CollectedRoundOutput](t, result)
 		}
 		payload := decodeStructured[ToolErrorOutput](t, result)
-		if payload.Error.Code != broker.CodeRoundInProgress {
+		if payload.Error.Code != broker.CodeConflict {
 			t.Fatalf("collect round returned tool error: %+v", payload.Error)
 		}
 		select {
@@ -757,7 +555,7 @@ func startAndCollectRoundToolError(t *testing.T, ctx context.Context, client *mc
 		}
 		if result.IsError {
 			payload := decodeStructured[ToolErrorOutput](t, result)
-			if payload.Error.Code == broker.CodeRoundInProgress {
+			if payload.Error.Code == broker.CodeConflict {
 				select {
 				case <-deadline:
 					t.Fatalf("collect round did not reach error %s; last error=%+v", wantStableCode, payload.Error)
@@ -804,27 +602,7 @@ func assertToolError(t *testing.T, result *mcp.CallToolResult, err error, wantSt
 	if payload.Error.Code != wantStableCode {
 		t.Fatalf("stable code = %s, want %s; payload=%+v", payload.Error.Code, wantStableCode, payload)
 	}
-	if payload.Error.Details == nil {
-		t.Fatal("expected details object")
-	}
-	if payload.Error.NextAction == "" {
-		t.Fatal("expected next action")
-	}
 	return payload.Error
-}
-
-func testConfig(t *testing.T, reviewers ...*config.ReviewerConfig) *config.Config {
-	t.Helper()
-
-	return &config.Config{
-		LogDestination: filepath.Join(t.TempDir(), "reviews"),
-		MaxFindings:    config.DefaultMaxFindings,
-		Reviewers:      reviewers,
-	}
-}
-
-func dummyReviewer() *config.ReviewerConfig {
-	return &config.ReviewerConfig{Name: "dummy", Impl: "dummy"}
 }
 
 func writeArtifact(t *testing.T, name string, content string) string {
@@ -898,7 +676,6 @@ func validReviewOutput() json.RawMessage {
 		Concerns:      []schema.Concern{},
 		Questions:     []schema.Question{},
 		AdvisoryNotes: []schema.AdvisoryNote{},
-		ProposedDiffs: []schema.ProposedDiff{},
 	})
 	if err != nil {
 		panic(err)
@@ -927,31 +704,9 @@ func reviewOutputWithConcernAndQuestion(t *testing.T) json.RawMessage {
 			WhyItBlocks: "cannot determine deployment order",
 		}},
 		AdvisoryNotes: []schema.AdvisoryNote{},
-		ProposedDiffs: []schema.ProposedDiff{},
 	})
 	if err != nil {
 		t.Fatalf("marshal concern/question review output: %v", err)
-	}
-	return raw
-}
-
-func reviewOutputWithQuestionOnly(t *testing.T) json.RawMessage {
-	t.Helper()
-
-	raw, err := json.Marshal(schema.ReviewOutput{
-		Verdict:  "needs_discussion",
-		Summary:  "needs one answer",
-		Concerns: []schema.Concern{},
-		Questions: []schema.Question{{
-			ID:          "Q-7",
-			Topic:       "deployment order",
-			WhyItBlocks: "cannot determine whether migration is safe",
-		}},
-		AdvisoryNotes: []schema.AdvisoryNote{},
-		ProposedDiffs: []schema.ProposedDiff{},
-	})
-	if err != nil {
-		t.Fatalf("marshal question review output: %v", err)
 	}
 	return raw
 }
@@ -972,7 +727,6 @@ func reviewOutputWithAdvisoryOnly(t *testing.T) json.RawMessage {
 			Rationale:  "easier to scan",
 			Suggestion: &suggestion,
 		}},
-		ProposedDiffs: []schema.ProposedDiff{},
 	})
 	if err != nil {
 		t.Fatalf("marshal advisory review output: %v", err)

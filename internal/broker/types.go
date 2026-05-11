@@ -7,17 +7,6 @@ import (
 	"github.com/michaelquigley/mercurius/internal/reviewer"
 )
 
-// ReviewerFactory creates a session-bound reviewer.
-type ReviewerFactory func(sessionDir string) reviewer.Reviewer
-
-// ReviewerSpec names one configured reviewer implementation.
-type ReviewerSpec struct {
-	Name    string
-	Impl    string
-	Model   string
-	Factory ReviewerFactory
-}
-
 // Options configures a broker instance.
 type Options struct {
 	LogDestination string
@@ -25,20 +14,18 @@ type Options struct {
 	MaxFindings    int
 	ReviewContext  string
 	ReviewFocus    string
-	Reviewers      []ReviewerSpec
+	Reviewer       reviewer.Reviewer
+	ReviewerInfo   ReviewerInfo
 }
 
 // Artifact identifies one source artifact at the broker boundary.
 type Artifact struct {
-	Name    string
-	Path    string
-	Content []byte
+	Name string
+	Path string
 }
 
 // OpenSessionRequest starts a new review session.
-type OpenSessionRequest struct {
-	Reviewers []string
-}
+type OpenSessionRequest struct{}
 
 // OpenSessionResponse describes a newly opened session.
 type OpenSessionResponse struct {
@@ -48,7 +35,7 @@ type OpenSessionResponse struct {
 	MaxFindings          int
 	ReviewContextPresent bool
 	ReviewFocusPresent   bool
-	Reviewers            []ReviewerInfo
+	Reviewer             ReviewerInfo
 }
 
 // StartRoundRequest runs a new round in the named session.
@@ -78,13 +65,8 @@ type CollectedRoundResponse struct {
 	Reviewers   []ReviewerResult
 }
 
-// RoundStatusRequest asks for a round job status.
-type RoundStatusRequest struct {
-	SessionID   string
-	RoundNumber int
-}
-
-// RoundStatusResponse describes a running or terminal review job.
+// RoundStatusResponse describes a running or terminal review job. Embedded in
+// SessionStatusResponse; not exposed as an MCP tool.
 type RoundStatusResponse struct {
 	SessionID   string
 	RoundNumber int
@@ -112,7 +94,6 @@ type ArtifactManifestEntry struct {
 	SnapshotPath string
 	Size         int64
 	Hash         string
-	Inline       bool
 }
 
 // ReviewerResult records one reviewer response.
@@ -166,10 +147,9 @@ type SessionStatusResponse struct {
 	ReviewContextPresent bool
 	ReviewFocusPresent   bool
 	RoundCount           int
-	Reviewers            []ReviewerInfo
+	Reviewer             ReviewerInfo
 	LastError            *ErrorInfo
 	ActiveRound          *RoundStatusResponse
-	LastRoundJob         *RoundStatusResponse
 	Rounds               []RoundStatus
 }
 
@@ -182,20 +162,7 @@ type RoundStatus struct {
 	DecisionCount int
 }
 
-// ListSessionsResponse enumerates sessions known to the broker.
-type ListSessionsResponse struct {
-	Sessions []SessionSummary
-}
-
-// SessionSummary is a compact read-only session summary.
-type SessionSummary struct {
-	SessionID  string
-	State      string
-	OpenedAt   time.Time
-	RoundCount int
-}
-
-// ReviewerInfo describes a configured or selected reviewer.
+// ReviewerInfo describes the configured reviewer.
 type ReviewerInfo struct {
 	Name  string
 	Impl  string
@@ -204,15 +171,8 @@ type ReviewerInfo struct {
 
 // ErrorInfo is a durable session-visible broker error summary.
 type ErrorInfo struct {
-	Code       string
-	Message    string
-	Details    map[string]any
-	Retryable  bool
-	NextAction string
-	At         time.Time
-}
-
-// ListReviewersResponse enumerates configured reviewers.
-type ListReviewersResponse struct {
-	Reviewers []ReviewerInfo
+	Code    string
+	Message string
+	Details map[string]any
+	At      time.Time
 }

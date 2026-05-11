@@ -26,17 +26,15 @@ type ArtifactInput struct {
 	Path string `json:"path,omitempty"`
 }
 
-type OpenSessionInput struct {
-	Reviewers []string `json:"reviewers,omitempty"`
-}
+type OpenSessionInput struct{}
 
 type OpenSessionOutput struct {
-	SessionID            string               `json:"session_id"`
-	OpenedAt             string               `json:"opened_at"`
-	MaxFindings          int                  `json:"max_findings"`
-	ReviewContextPresent bool                 `json:"review_context_present"`
-	ReviewFocusPresent   bool                 `json:"review_focus_present"`
-	Reviewers            []ReviewerInfoOutput `json:"reviewers"`
+	SessionID            string             `json:"session_id"`
+	OpenedAt             string             `json:"opened_at"`
+	MaxFindings          int                `json:"max_findings"`
+	ReviewContextPresent bool               `json:"review_context_present"`
+	ReviewFocusPresent   bool               `json:"review_focus_present"`
+	Reviewer             ReviewerInfoOutput `json:"reviewer"`
 }
 
 type StartRoundInput struct {
@@ -54,11 +52,10 @@ type CollectedRoundOutput struct {
 }
 
 type RoundTriageOutput struct {
-	Mode              string                 `json:"mode"`
 	TotalFindings     int                    `json:"total_findings"`
 	RemainingFindings int                    `json:"remaining_findings"`
 	Findings          []TriageFindingOutput  `json:"findings"`
-	AdvisoryNotes    []TriageAdvisoryOutput `json:"advisory_notes"`
+	AdvisoryNotes     []TriageAdvisoryOutput `json:"advisory_notes"`
 	NextFinding       *TriageFindingOutput   `json:"next_finding"`
 	Guidance          string                 `json:"guidance"`
 }
@@ -90,14 +87,8 @@ type StartReviewRoundOutput struct {
 	Reviewer       string `json:"reviewer"`
 	StartedAt      string `json:"started_at"`
 	StatusPath     string `json:"status_path"`
-	EventsPath     string `json:"events_path"`
 	MonitorCommand string `json:"monitor_command"`
 	NextAction     string `json:"next_action"`
-}
-
-type RoundStatusInput struct {
-	SessionID   string `json:"session_id,omitempty"`
-	RoundNumber int    `json:"round_number,omitempty"`
 }
 
 type RoundJobOutput struct {
@@ -110,12 +101,7 @@ type RoundJobOutput struct {
 	CompletedAt *string      `json:"completed_at"`
 	LogPath     string       `json:"log_path,omitempty"`
 	StatusPath  string       `json:"status_path"`
-	EventsPath  string       `json:"events_path"`
 	Error       *ErrorOutput `json:"error"`
-}
-
-type RoundStatusToolOutput struct {
-	Round RoundJobOutput `json:"round"`
 }
 
 type CollectRoundInput struct {
@@ -180,10 +166,9 @@ type SessionStatusOutput struct {
 	ReviewContextPresent bool                `json:"review_context_present"`
 	ReviewFocusPresent   bool                `json:"review_focus_present"`
 	RoundCount           int                 `json:"round_count"`
-	Reviewers            []ReviewerInfoOutput `json:"reviewers"`
+	Reviewer             ReviewerInfoOutput  `json:"reviewer"`
 	LastError            *ErrorOutput        `json:"last_error"`
 	ActiveRound          *RoundJobOutput     `json:"active_round"`
-	LastRoundJob         *RoundJobOutput     `json:"last_round_job"`
 	Rounds               []RoundStatusOutput `json:"rounds"`
 }
 
@@ -195,26 +180,10 @@ type RoundStatusOutput struct {
 	DecisionCount int    `json:"decision_count"`
 }
 
-type ListSessionsOutput struct {
-	Sessions []SessionSummaryOutput `json:"sessions"`
-}
-
-type SessionSummaryOutput struct {
-	SessionID  string `json:"session_id"`
-	State      string `json:"state"`
-	OpenedAt   string `json:"opened_at"`
-	RoundCount int    `json:"round_count"`
-}
-
-type ListReviewersOutput struct {
-	Reviewers []ReviewerInfoOutput `json:"reviewers"`
-}
-
 type ReviewerInfoOutput struct {
-	Name       string `json:"name"`
-	Impl       string `json:"impl"`
-	Model      string `json:"model,omitempty"`
-	Selectable bool   `json:"selectable,omitempty"`
+	Name  string `json:"name"`
+	Impl  string `json:"impl"`
+	Model string `json:"model,omitempty"`
 }
 
 type ToolErrorOutput struct {
@@ -222,12 +191,10 @@ type ToolErrorOutput struct {
 }
 
 type ErrorOutput struct {
-	Code       string         `json:"code"`
-	Message    string         `json:"message"`
-	Details    map[string]any `json:"details"`
-	Retryable  bool           `json:"retryable"`
-	NextAction string         `json:"next_action"`
-	At         string         `json:"at,omitempty"`
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details"`
+	At      string         `json:"at,omitempty"`
 }
 
 // New creates a configured MCP server and its backing broker.
@@ -249,43 +216,38 @@ func New(cfg *config.Config) (*mcp.Server, *broker.Broker, error) {
 	return server, b, nil
 }
 
-// BrokerOptions turns project config into broker reviewer factories.
+// BrokerOptions builds broker options from a project config.
 func BrokerOptions(cfg *config.Config) (broker.Options, error) {
 	if cfg == nil {
 		return broker.Options{}, errors.New("config is nil")
 	}
+	if cfg.Reviewer == nil {
+		return broker.Options{}, errors.New("reviewer is required")
+	}
 
-	options := broker.Options{
+	r, info, err := buildReviewer(cfg.Reviewer)
+	if err != nil {
+		return broker.Options{}, err
+	}
+
+	return broker.Options{
 		LogDestination: cfg.LogDestination,
 		ConfigPath:     cfg.ConfigPath,
 		MaxFindings:    cfg.MaxFindings,
 		ReviewContext:  cfg.ReviewContext,
 		ReviewFocus:    cfg.ReviewFocus,
-		Reviewers:      make([]broker.ReviewerSpec, 0, len(cfg.Reviewers)),
-	}
-
-	for _, reviewerConfig := range cfg.Reviewers {
-		if reviewerConfig == nil {
-			return broker.Options{}, errors.New("reviewer entry is nil")
-		}
-		spec, err := reviewerSpec(reviewerConfig)
-		if err != nil {
-			return broker.Options{}, err
-		}
-		options.Reviewers = append(options.Reviewers, spec)
-	}
-	return options, nil
+		Reviewer:       r,
+		ReviewerInfo:   info,
+	}, nil
 }
 
 // RegisterTools installs the Mercurius MCP tool surface.
 func RegisterTools(server *mcp.Server, b *broker.Broker) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "open_session",
-		Description: "open a new Mercurius review session. review_context and review_focus are read from mercurius.yaml; edit the YAML before opening a session if you want different review calibration. when the config has multiple reviewers, pass the chosen name in reviewers. artifacts are not registered at session open; pass them to each start_round call.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input OpenSessionInput) (*mcp.CallToolResult, any, error) {
-		response, err := b.OpenSession(ctx, broker.OpenSessionRequest{
-			Reviewers: append([]string(nil), input.Reviewers...),
-		})
+		Description: "open a new Mercurius review session. review_context and review_focus are read from mercurius.yaml; edit the YAML before opening a session if you want different review calibration. artifacts are not registered at session open; pass them to each start_review_round call.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ OpenSessionInput) (*mcp.CallToolResult, any, error) {
+		response, err := b.OpenSession(ctx, broker.OpenSessionRequest{})
 		if err != nil {
 			return toolErrorResult(err)
 		}
@@ -295,7 +257,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 			MaxFindings:          response.MaxFindings,
 			ReviewContextPresent: response.ReviewContextPresent,
 			ReviewFocusPresent:   response.ReviewFocusPresent,
-			Reviewers:            reviewerInfoOutput(response.Reviewers, false),
+			Reviewer:             reviewerInfoOutput(response.Reviewer),
 		}, nil
 	})
 
@@ -317,29 +279,14 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 			Reviewer:       response.Reviewer,
 			StartedAt:      formatTime(response.StartedAt),
 			StatusPath:     response.StatusPath,
-			EventsPath:     response.EventsPath,
 			MonitorCommand: response.MonitorCommand,
 			NextAction:     response.NextAction,
 		}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "round_status",
-		Description: "return status for a running or completed Mercurius review round. omit round_number to inspect the active or latest round.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RoundStatusInput) (*mcp.CallToolResult, any, error) {
-		response, err := b.RoundStatus(ctx, broker.RoundStatusRequest{
-			SessionID:   input.SessionID,
-			RoundNumber: input.RoundNumber,
-		})
-		if err != nil {
-			return toolErrorResult(err)
-		}
-		return nil, RoundStatusToolOutput{Round: roundJobOutput(response)}, nil
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
 		Name:        "collect_round",
-		Description: "return a completed review round result with triage guidance. if the round is still running, pause and tell the user to keep monitoring instead of retrying immediately. when findings are present, walk them one at a time, explaining each finding and its proposed solution clearly and briefly.",
+		Description: "return a completed review round result with triage guidance. if the round is still running, this errors with code 'conflict'; tell the user to keep monitoring instead of retrying immediately. when findings are present, walk them one at a time, explaining each finding and its proposed solution clearly and briefly.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input CollectRoundInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.CollectRound(ctx, broker.CollectRoundRequest{
 			SessionID:   input.SessionID,
@@ -361,7 +308,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "record_round_notes",
-		Description: "record commentary and human decisions for a completed round. this implicitly finalizes the round; there is no separate close_round step. after this returns, pause and ask the user whether to start another round, open a new session, or stop; do not immediately call another Mercurius tool unless the user explicitly asks you to continue.",
+		Description: "record commentary and human decisions for a completed round. notes land in a sibling _notes.md file inside the round directory; there is no separate close_round step. after this returns, pause and ask the user whether to start another round, open a new session, or stop; do not immediately call another Mercurius tool unless the user explicitly asks you to continue.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RecordRoundNotesInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.RecordRoundNotes(ctx, broker.RecordRoundNotesRequest{
 			SessionID:   input.SessionID,
@@ -407,62 +354,21 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 		}
 		return nil, sessionStatusOutput(response), nil
 	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_sessions",
-		Description: "list Mercurius sessions known to this server process",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
-		response, err := b.ListSessions(ctx)
-		if err != nil {
-			return toolErrorResult(err)
-		}
-		return nil, listSessionsOutput(response), nil
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_reviewers",
-		Description: "list reviewer names configured for this Mercurius server. use these names in open_session.reviewers when the config has multiple reviewers.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
-		response, err := b.ListReviewers(ctx)
-		if err != nil {
-			return toolErrorResult(err)
-		}
-		return nil, ListReviewersOutput{
-			Reviewers: reviewerInfoOutput(response.Reviewers, true),
-		}, nil
-	})
 }
 
-func reviewerSpec(cfg *config.ReviewerConfig) (broker.ReviewerSpec, error) {
+func buildReviewer(cfg *config.ReviewerConfig) (reviewer.Reviewer, broker.ReviewerInfo, error) {
+	info := broker.ReviewerInfo{Name: cfg.Name, Impl: cfg.Impl, Model: cfg.Model}
 	switch cfg.Impl {
 	case "codex":
-		binaryPath := cfg.BinaryPath
-		model := cfg.Model
-		extraArgs := append([]string(nil), cfg.ExtraArgs...)
-		return broker.ReviewerSpec{
-			Name:  cfg.Name,
-			Impl:  cfg.Impl,
-			Model: cfg.Model,
-			Factory: func(sessionDir string) reviewer.Reviewer {
-				return codex.New(codex.Options{
-					BinaryPath: binaryPath,
-					WorkingDir: sessionDir,
-					Model:      model,
-					ExtraArgs:  append([]string(nil), extraArgs...),
-				})
-			},
-		}, nil
+		return codex.New(codex.Options{
+			BinaryPath: cfg.BinaryPath,
+			Model:      cfg.Model,
+			ExtraArgs:  append([]string(nil), cfg.ExtraArgs...),
+		}), info, nil
 	case "dummy":
-		return broker.ReviewerSpec{
-			Name:  cfg.Name,
-			Impl:  cfg.Impl,
-			Model: cfg.Model,
-			Factory: func(string) reviewer.Reviewer {
-				return dummy.New()
-			},
-		}, nil
+		return dummy.New(), info, nil
 	default:
-		return broker.ReviewerSpec{}, fmt.Errorf("reviewer '%s': unknown impl '%s'", cfg.Name, cfg.Impl)
+		return nil, broker.ReviewerInfo{}, fmt.Errorf("reviewer '%s': unknown impl '%s'", cfg.Name, cfg.Impl)
 	}
 }
 
@@ -485,7 +391,7 @@ func toolErrorResult(err error) (*mcp.CallToolResult, any, error) {
 	}
 
 	output := errorOutput(broker.ErrorInfoFrom(err))
-	text := fmt.Sprintf("%s: %s\nnext_action: %s", output.Code, output.Message, output.NextAction)
+	text := fmt.Sprintf("%s: %s", output.Code, output.Message)
 	if cause, ok := output.Details["cause"].(string); ok && cause != "" {
 		text += "\ncause: " + cause
 	}
@@ -509,15 +415,13 @@ func wireError(code int64, stableCode string, message string, details map[string
 
 	raw, err := json.Marshal(ToolErrorOutput{
 		Error: ErrorOutput{
-			Code:       stableCode,
-			Message:    message,
-			Details:    payloadDetails,
-			Retryable:  broker.Retryable(stableCode),
-			NextAction: broker.NextAction(stableCode),
+			Code:    stableCode,
+			Message: message,
+			Details: payloadDetails,
 		},
 	})
 	if err != nil {
-		raw = json.RawMessage(`{"error":{"code":"internal_error","message":"internal error","details":{"cause":"error payload marshal failed"},"retryable":false,"next_action":"inspect details and escalate if the issue is not clear"}}`)
+		raw = json.RawMessage(`{"error":{"code":"internal_error","message":"internal error","details":{"cause":"error payload marshal failed"}}}`)
 	}
 	return &jsonrpc.Error{
 		Code:    code,
@@ -577,7 +481,6 @@ func reviewerOutput(results []broker.ReviewerResult) []ReviewerOutput {
 
 func triageOutput(results []broker.ReviewerResult) RoundTriageOutput {
 	triage := RoundTriageOutput{
-		Mode:     "walk_findings_one_at_a_time",
 		Guidance: noFindingsTriageGuidance(),
 	}
 	for _, result := range results {
@@ -621,9 +524,6 @@ func triageOutput(results []broker.ReviewerResult) RoundTriageOutput {
 	}
 	triage.TotalFindings = len(triage.Findings)
 	if triage.TotalFindings > 0 {
-		// triage.findings preserves the reviewer's emitted order; only
-		// next_finding is sorted by severity. The design agent can re-sort
-		// findings itself if needed.
 		next := selectNextFinding(triage.Findings)
 		triage.NextFinding = &next
 		triage.RemainingFindings = triage.TotalFindings - 1
@@ -651,7 +551,6 @@ func selectNextFinding(findings []TriageFindingOutput) TriageFindingOutput {
 }
 
 func compareTriageFindings(a, b TriageFindingOutput) int {
-	// concerns rank ahead of questions.
 	aIsConcern := a.Kind == "concern"
 	bIsConcern := b.Kind == "concern"
 	if aIsConcern != bIsConcern {
@@ -660,7 +559,6 @@ func compareTriageFindings(a, b TriageFindingOutput) int {
 		}
 		return 1
 	}
-	// among concerns, severity rank decides; lower rank value sorts first.
 	if aIsConcern {
 		ra := severityRank(a.Severity)
 		rb := severityRank(b.Severity)
@@ -668,7 +566,6 @@ func compareTriageFindings(a, b TriageFindingOutput) int {
 			return ra - rb
 		}
 	}
-	// final tiebreak is lexicographic id order.
 	if a.Ref < b.Ref {
 		return -1
 	}
@@ -719,10 +616,9 @@ func sessionStatusOutput(status broker.SessionStatusResponse) SessionStatusOutpu
 		ReviewContextPresent: status.ReviewContextPresent,
 		ReviewFocusPresent:   status.ReviewFocusPresent,
 		RoundCount:           status.RoundCount,
-		Reviewers:            reviewerInfoOutput(status.Reviewers, false),
+		Reviewer:             reviewerInfoOutput(status.Reviewer),
 		LastError:            errorOutputPtr(status.LastError),
 		ActiveRound:          roundJobOutputPtr(status.ActiveRound),
-		LastRoundJob:         roundJobOutputPtr(status.LastRoundJob),
 		Rounds:               roundStatusOutput(status.Rounds),
 	}
 }
@@ -746,7 +642,6 @@ func roundJobOutput(status broker.RoundStatusResponse) RoundJobOutput {
 		CompletedAt: formatTimePtr(status.CompletedAt),
 		LogPath:     status.LogPath,
 		StatusPath:  status.StatusPath,
-		EventsPath:  status.EventsPath,
 		Error:       errorOutputPtr(status.Error),
 	}
 }
@@ -765,30 +660,8 @@ func roundStatusOutput(rounds []broker.RoundStatus) []RoundStatusOutput {
 	return out
 }
 
-func listSessionsOutput(response broker.ListSessionsResponse) ListSessionsOutput {
-	sessions := make([]SessionSummaryOutput, 0, len(response.Sessions))
-	for _, session := range response.Sessions {
-		sessions = append(sessions, SessionSummaryOutput{
-			SessionID:  session.SessionID,
-			State:      session.State,
-			OpenedAt:   formatTime(session.OpenedAt),
-			RoundCount: session.RoundCount,
-		})
-	}
-	return ListSessionsOutput{Sessions: sessions}
-}
-
-func reviewerInfoOutput(reviewers []broker.ReviewerInfo, selectable bool) []ReviewerInfoOutput {
-	out := make([]ReviewerInfoOutput, 0, len(reviewers))
-	for _, reviewer := range reviewers {
-		out = append(out, ReviewerInfoOutput{
-			Name:       reviewer.Name,
-			Impl:       reviewer.Impl,
-			Model:      reviewer.Model,
-			Selectable: selectable,
-		})
-	}
-	return out
+func reviewerInfoOutput(r broker.ReviewerInfo) ReviewerInfoOutput {
+	return ReviewerInfoOutput{Name: r.Name, Impl: r.Impl, Model: r.Model}
 }
 
 func errorOutputPtr(info *broker.ErrorInfo) *ErrorOutput {
@@ -802,20 +675,16 @@ func errorOutputPtr(info *broker.ErrorInfo) *ErrorOutput {
 func errorOutput(info *broker.ErrorInfo) ErrorOutput {
 	if info == nil {
 		return ErrorOutput{
-			Code:       broker.CodeInternalError,
-			Message:    "internal error",
-			Details:    map[string]any{},
-			Retryable:  broker.Retryable(broker.CodeInternalError),
-			NextAction: broker.NextAction(broker.CodeInternalError),
+			Code:    broker.CodeInternalError,
+			Message: "internal error",
+			Details: map[string]any{},
 		}
 	}
 	return ErrorOutput{
-		Code:       info.Code,
-		Message:    info.Message,
-		Details:    cloneDetails(info.Details),
-		Retryable:  info.Retryable,
-		NextAction: info.NextAction,
-		At:         formatTimeOptional(info.At),
+		Code:    info.Code,
+		Message: info.Message,
+		Details: cloneDetails(info.Details),
+		At:      formatTimeOptional(info.At),
 	}
 }
 

@@ -1,19 +1,13 @@
 package monitor
 
 import (
-	"bufio"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 )
 
-const (
-	StatusFileName = "status.json"
-	EventsFileName = "events.ndjson"
-)
+const StatusFileName = "status.json"
 
 type ReviewerInfo struct {
 	Name  string `json:"name"`
@@ -22,12 +16,10 @@ type ReviewerInfo struct {
 }
 
 type ErrorInfo struct {
-	Code       string         `json:"code"`
-	Message    string         `json:"message"`
-	Details    map[string]any `json:"details"`
-	Retryable  bool           `json:"retryable"`
-	NextAction string         `json:"next_action"`
-	At         time.Time      `json:"at,omitempty"`
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details"`
+	At      time.Time      `json:"at,omitempty"`
 }
 
 type RoundJob struct {
@@ -40,7 +32,6 @@ type RoundJob struct {
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 	LogPath     string     `json:"log_path,omitempty"`
 	StatusPath  string     `json:"status_path"`
-	EventsPath  string     `json:"events_path"`
 	Error       *ErrorInfo `json:"error,omitempty"`
 }
 
@@ -53,30 +44,18 @@ type RoundStatus struct {
 }
 
 type SessionStatus struct {
-	SessionID            string         `json:"session_id"`
-	State                string         `json:"state"`
-	OpenedAt             time.Time      `json:"opened_at"`
-	ClosedAt             *time.Time     `json:"closed_at,omitempty"`
-	MaxFindings          int            `json:"max_findings"`
-	ReviewContextPresent bool           `json:"review_context_present"`
-	ReviewFocusPresent   bool           `json:"review_focus_present"`
-	RoundCount           int            `json:"round_count"`
-	Reviewers            []ReviewerInfo `json:"reviewers"`
-	LastError            *ErrorInfo     `json:"last_error,omitempty"`
-	ActiveRound          *RoundJob      `json:"active_round,omitempty"`
-	LastRoundJob         *RoundJob      `json:"last_round_job,omitempty"`
-	Rounds               []RoundStatus  `json:"rounds"`
-}
-
-type Event struct {
-	At          time.Time  `json:"at"`
-	Event       string     `json:"event"`
-	SessionID   string     `json:"session_id"`
-	RoundNumber int        `json:"round_number,omitempty"`
-	Reviewer    string     `json:"reviewer,omitempty"`
-	State       string     `json:"state,omitempty"`
-	LogPath     string     `json:"log_path,omitempty"`
-	Error       *ErrorInfo `json:"error,omitempty"`
+	SessionID            string        `json:"session_id"`
+	State                string        `json:"state"`
+	OpenedAt             time.Time     `json:"opened_at"`
+	ClosedAt             *time.Time    `json:"closed_at,omitempty"`
+	MaxFindings          int           `json:"max_findings"`
+	ReviewContextPresent bool          `json:"review_context_present"`
+	ReviewFocusPresent   bool          `json:"review_focus_present"`
+	RoundCount           int           `json:"round_count"`
+	Reviewer             ReviewerInfo  `json:"reviewer"`
+	LastError            *ErrorInfo    `json:"last_error,omitempty"`
+	ActiveRound          *RoundJob     `json:"active_round,omitempty"`
+	Rounds               []RoundStatus `json:"rounds"`
 }
 
 func SessionDir(logDestination string, sessionID string) string {
@@ -85,10 +64,6 @@ func SessionDir(logDestination string, sessionID string) string {
 
 func StatusPath(sessionDir string) string {
 	return filepath.Join(sessionDir, StatusFileName)
-}
-
-func EventsPath(sessionDir string) string {
-	return filepath.Join(sessionDir, EventsFileName)
 }
 
 func WriteStatus(path string, status SessionStatus) error {
@@ -122,26 +97,6 @@ func WriteStatus(path string, status SessionStatus) error {
 	return os.Rename(tmpName, path)
 }
 
-func AppendEvent(path string, event Event) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	raw, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	if _, err := file.Write(append(raw, '\n')); err != nil {
-		return err
-	}
-	return nil
-}
-
 func ReadStatus(path string) (SessionStatus, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -152,29 +107,4 @@ func ReadStatus(path string) (SessionStatus, error) {
 		return SessionStatus{}, err
 	}
 	return status, nil
-}
-
-func ReadEvents(path string) ([]Event, error) {
-	file, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	var events []Event
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		var event Event
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return nil, fmt.Errorf("decode event: %w", err)
-		}
-		events = append(events, event)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return events, nil
 }

@@ -118,20 +118,3 @@ func TestBuildUsesDynamicArtifactFences(t *testing.T) {
 	}
 }
 
-func TestBuildRendersInlineSource(t *testing.T) {
-	prompt, _ := Build(Request{
-		Artifacts: []Artifact{
-			{
-				Name:         "context",
-				SnapshotPath: "/tmp/session/round-01/context",
-				Hash:         "sha256:def",
-				Content:      []byte("inline content"),
-				Inline:       true,
-			},
-		},
-	})
-
-	if !strings.Contains(prompt, "Source path: inline") {
-		t.Fatal("expected inline source path")
-	}
-}

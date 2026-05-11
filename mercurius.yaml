@@ -32,7 +32,7 @@ review_focus: |
   - MCP tool surface stability: parameter names, error codes, and response
     shapes are part of the contract design agents depend on.
 
-reviewers:
-  - name: codex
-    impl: codex
-    model: gpt-5.5
+reviewer:
+  name: codex
+  impl: codex
+  model: gpt-5.5

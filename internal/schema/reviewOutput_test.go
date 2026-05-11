@@ -12,8 +12,7 @@ func TestValidateReviewOutputAcceptsMinimalValidOutput(t *testing.T) {
 		"summary": "ready",
 		"concerns": [],
 		"questions": [],
-		"advisory_notes": [],
-		"proposed_diffs": []
+		"advisory_notes": []
 	}`)
 
 	if err := ValidateReviewOutput(raw); err != nil {
@@ -51,7 +50,6 @@ func TestValidateReviewOutputRejectsUnknownTopLevelField(t *testing.T) {
 		"concerns": [],
 		"questions": [],
 		"advisory_notes": [],
-		"proposed_diffs": [],
 		"extra": true
 	}`)
 
@@ -76,8 +74,7 @@ func TestValidateReviewOutputRejectsUnknownNestedField(t *testing.T) {
 			}
 		],
 		"questions": [],
-		"advisory_notes": [],
-		"proposed_diffs": []
+		"advisory_notes": []
 	}`)
 
 	if err := ValidateReviewOutput(raw); err == nil {
@@ -91,8 +88,7 @@ func TestValidateReviewOutputRejectsInvalidVerdict(t *testing.T) {
 		"summary": "ready",
 		"concerns": [],
 		"questions": [],
-		"advisory_notes": [],
-		"proposed_diffs": []
+		"advisory_notes": []
 	}`)
 
 	if err := ValidateReviewOutput(raw); err == nil {
@@ -115,8 +111,7 @@ func TestValidateReviewOutputRejectsInvalidSeverity(t *testing.T) {
 			}
 		],
 		"questions": [],
-		"advisory_notes": [],
-		"proposed_diffs": []
+		"advisory_notes": []
 	}`)
 
 	if err := ValidateReviewOutput(raw); err == nil {
@@ -153,7 +148,7 @@ func TestValidateReviewOutputConcernSuggestionVariants(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			raw := json.RawMessage(`{
-						"verdict": "needs_changes",
+				"verdict": "needs_changes",
 				"summary": "changes needed",
 				"concerns": [
 					{
@@ -165,8 +160,7 @@ func TestValidateReviewOutputConcernSuggestionVariants(t *testing.T) {
 					}
 				],
 				"questions": [],
-				"advisory_notes": [],
-				"proposed_diffs": []
+				"advisory_notes": []
 			}`)
 
 			err := ValidateReviewOutput(raw)
@@ -209,8 +203,7 @@ func TestParseReviewOutput(t *testing.T) {
 				"rationale": "shorter text would be easier to scan",
 				"suggestion": null
 			}
-		],
-		"proposed_diffs": []
+		]
 	}`)
 
 	output, err := ParseReviewOutput(raw)
@@ -238,9 +231,6 @@ func TestReviewOutputSchemaWithMaxFindings(t *testing.T) {
 	}
 	if doc.Properties["questions"].MaxItems != 2 {
 		t.Fatalf("questions maxItems = %d, want 2", doc.Properties["questions"].MaxItems)
-	}
-	if doc.Properties["proposed_diffs"].MaxItems != 0 {
-		t.Fatalf("proposed_diffs maxItems = %d, want unset", doc.Properties["proposed_diffs"].MaxItems)
 	}
 	if doc.Properties["advisory_notes"].MaxItems != 0 {
 		t.Fatalf("advisory_notes maxItems = %d, want unset", doc.Properties["advisory_notes"].MaxItems)
@@ -282,8 +272,7 @@ func TestValidateUniqueIDsRejectsDuplicates(t *testing.T) {
 					{"id": "C-1", "severity": "minor", "location": "y", "claim": "c", "rationale": "d", "suggestion": null}
 				],
 				"questions": [],
-				"advisory_notes": [],
-				"proposed_diffs": []
+				"advisory_notes": []
 			}`),
 			want: "within concerns",
 		},
@@ -298,8 +287,7 @@ func TestValidateUniqueIDsRejectsDuplicates(t *testing.T) {
 				"questions": [],
 				"advisory_notes": [
 					{"id": "X-1", "location": "y", "note": "polish", "rationale": "tone", "suggestion": null}
-				],
-				"proposed_diffs": []
+				]
 			}`),
 			want: "across concerns and advisory_notes",
 		},
@@ -314,8 +302,7 @@ func TestValidateUniqueIDsRejectsDuplicates(t *testing.T) {
 				],
 				"advisory_notes": [
 					{"id": "X-1", "location": "y", "note": "polish", "rationale": "tone", "suggestion": null}
-				],
-				"proposed_diffs": []
+				]
 			}`),
 			want: "across questions and advisory_notes",
 		},
@@ -366,8 +353,7 @@ func TestParseReviewOutputRejectsReadinessContradictions(t *testing.T) {
 					}
 				],
 				"questions": [],
-				"advisory_notes": [],
-				"proposed_diffs": []
+				"advisory_notes": []
 			}`),
 			want: "verdict ready_to_build requires no concerns or questions",
 		},
@@ -386,8 +372,7 @@ func TestParseReviewOutputRejectsReadinessContradictions(t *testing.T) {
 						"rationale": "easier to scan",
 						"suggestion": null
 					}
-				],
-				"proposed_diffs": []
+				]
 			}`),
 			want: "verdict needs_discussion requires at least one concern or question",
 		},

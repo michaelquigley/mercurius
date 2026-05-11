@@ -30,7 +30,7 @@ type Config struct {
 	MaxFindings    int
 	ReviewContext  string
 	ReviewFocus    string
-	Reviewers      []*ReviewerConfig
+	Reviewer       *ReviewerConfig
 }
 
 // ReviewerConfig configures one named reviewer.
@@ -84,28 +84,17 @@ func (c *Config) Validate() error {
 	if c.MaxFindings <= 0 {
 		return fmt.Errorf("max_findings must be greater than zero")
 	}
-	if len(c.Reviewers) == 0 {
-		return errors.New("reviewers is required")
+	if c.Reviewer == nil {
+		return errors.New("reviewer is required")
 	}
-
-	seen := map[string]struct{}{}
-	for _, reviewer := range c.Reviewers {
-		if reviewer == nil {
-			return errors.New("reviewer entry is nil")
-		}
-		if reviewer.Name == "" {
-			return errors.New("reviewer name is required")
-		}
-		if _, ok := seen[reviewer.Name]; ok {
-			return fmt.Errorf("duplicate reviewer name '%s'", reviewer.Name)
-		}
-		seen[reviewer.Name] = struct{}{}
-		if reviewer.Impl == "" {
-			return fmt.Errorf("reviewer '%s': impl is required", reviewer.Name)
-		}
-		if _, ok := knownImpls[reviewer.Impl]; !ok {
-			return fmt.Errorf("reviewer '%s': unknown impl '%s' (known: %s)", reviewer.Name, reviewer.Impl, strings.Join(KnownImpls(), ", "))
-		}
+	if c.Reviewer.Name == "" {
+		return errors.New("reviewer name is required")
+	}
+	if c.Reviewer.Impl == "" {
+		return fmt.Errorf("reviewer '%s': impl is required", c.Reviewer.Name)
+	}
+	if _, ok := knownImpls[c.Reviewer.Impl]; !ok {
+		return fmt.Errorf("reviewer '%s': unknown impl '%s' (known: %s)", c.Reviewer.Name, c.Reviewer.Impl, strings.Join(KnownImpls(), ", "))
 	}
 	return nil
 }
@@ -141,6 +130,9 @@ func checkRenamedFields(absPath string) error {
 	if _, ok := generic["default_budget"]; ok {
 		return fmt.Errorf("config '%s': field 'default_budget' has been removed; rounds are single-shot and no longer share a budget across a session", absPath)
 	}
+	if _, ok := generic["reviewers"]; ok {
+		return fmt.Errorf("config '%s': field 'reviewers' has been renamed to 'reviewer' (singular); update the YAML key", absPath)
+	}
 	return nil
 }
 
@@ -156,13 +148,8 @@ func KnownImpls() []string {
 
 func (c *Config) resolve(baseDir string) error {
 	c.LogDestination = resolvePath(baseDir, c.LogDestination)
-	for _, reviewer := range c.Reviewers {
-		if reviewer == nil {
-			continue
-		}
-		if reviewer.BinaryPath != "" {
-			reviewer.BinaryPath = resolvePath(baseDir, reviewer.BinaryPath)
-		}
+	if c.Reviewer != nil && c.Reviewer.BinaryPath != "" {
+		c.Reviewer.BinaryPath = resolvePath(baseDir, c.Reviewer.BinaryPath)
 	}
 	return nil
 }

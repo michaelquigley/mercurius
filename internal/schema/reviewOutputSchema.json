@@ -10,8 +10,7 @@
     "summary",
     "concerns",
     "questions",
-    "advisory_notes",
-    "proposed_diffs"
+    "advisory_notes"
   ],
   "properties": {
     "verdict": {
@@ -142,33 +141,6 @@
               "null"
             ],
             "minLength": 1
-          }
-        }
-      }
-    },
-    "proposed_diffs": {
-      "description": "optional concrete artifact edits proposed by the reviewer",
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "target",
-          "patch"
-        ],
-        "properties": {
-          "id": {
-            "description": "stable identifier for this proposed diff within the round",
-            "type": "string"
-          },
-          "target": {
-            "description": "artifact name and section targeted by this proposed edit",
-            "type": "string"
-          },
-          "patch": {
-            "description": "concrete replacement text or unified diff",
-            "type": "string"
           }
         }
       }

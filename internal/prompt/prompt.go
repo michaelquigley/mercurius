@@ -16,7 +16,6 @@ type Artifact struct {
 	SnapshotPath string
 	Hash         string
 	Content      []byte
-	Inline       bool
 }
 
 // Request contains runtime values for the standard review prompt.
@@ -109,15 +108,10 @@ func Build(req Request) (string, json.RawMessage) {
 }
 
 func writeArtifact(b *strings.Builder, artifact Artifact) {
-	sourcePath := artifact.SourcePath
-	if artifact.Inline {
-		sourcePath = "inline"
-	}
-
 	fence := dynamicFence(artifact.Content)
 	b.WriteString(fmt.Sprintf("### %s\n\n", artifact.Name))
 	b.WriteString(fmt.Sprintf("Snapshot path: %s\n", artifact.SnapshotPath))
-	b.WriteString(fmt.Sprintf("Source path: %s\n", sourcePath))
+	b.WriteString(fmt.Sprintf("Source path: %s\n", artifact.SourcePath))
 	b.WriteString(fmt.Sprintf("SHA-256: %s\n\n", artifact.Hash))
 	b.WriteString(fence)
 	b.WriteString("\n")

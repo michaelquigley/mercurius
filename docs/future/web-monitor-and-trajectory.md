@@ -21,12 +21,12 @@ File-watch only. No new RPC surface, no daemon protocol with the broker.
 The broker already writes everything important to disk:
 
 - `<session_dir>/status.json` — latest session/round state
-- `<session_dir>/events.ndjson` — append-only event stream
-- `<session_dir>/round-NN/_round.md` — round log with frontmatter, findings, decisions
+- `<session_dir>/round-NN/_round.md` — immutable round log with frontmatter, manifest, reviewer output
 - `<session_dir>/round-NN/_prompt.md` — assembled prompt for that round
+- `<session_dir>/round-NN/_notes.md` — optional sibling file with commentary and decisions for that round
 - `<session_dir>/round-NN/<artifact-name>` — artifact snapshots for that round
 
-Note: after the 2026-05 round-centric rewrite, sessions are light groupings of independent rounds. There is no session-level `decisions.md` or convergence signal anymore - any trajectory analytics this app surfaces are computed by reading the on-disk round logs, not by relying on broker-side aggregation.
+Note: sessions are light groupings of independent rounds. There is no session-level decisions log, convergence signal, or append-only event stream — any trajectory analytics this app surfaces are computed by reading the on-disk round logs.
 
 The web app watches `.mercurius/` directories under a configured root, parses on-disk state, serves a local HTTP UI (port configurable, localhost-bound by default), and pushes updates via SSE or websocket as files change. Brokers stay unchanged. No new protocol to design or version. The web app can be killed and restarted without disturbing in-flight sessions.
 

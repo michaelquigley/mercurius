@@ -17,7 +17,6 @@ type ReviewOutput struct {
 	Concerns      []Concern      `json:"concerns"`
 	Questions     []Question     `json:"questions"`
 	AdvisoryNotes []AdvisoryNote `json:"advisory_notes"`
-	ProposedDiffs []ProposedDiff `json:"proposed_diffs"`
 }
 
 // Concern identifies a problem or improvement found during review.
@@ -44,13 +43,6 @@ type AdvisoryNote struct {
 	Note       string  `json:"note"`
 	Rationale  string  `json:"rationale"`
 	Suggestion *string `json:"suggestion"`
-}
-
-// ProposedDiff records concrete text or patch suggested by the reviewer.
-type ProposedDiff struct {
-	ID     string `json:"id"`
-	Target string `json:"target"`
-	Patch  string `json:"patch"`
 }
 
 //go:embed reviewOutputSchema.json

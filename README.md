@@ -19,7 +19,7 @@ Step 3 is the tax. Moving feedback from one agent to another is mechanical work,
 Mercurius runs as an MCP server that the design agent can call. The design agent opens a session (a light grouping of related rounds), then for each review:
 
 1. Runs the implementing agent against the supplied artifacts under a constrained review prompt.
-2. Returns structured output — readiness verdict, blocking concerns/questions, advisory notes, optional concrete diffs — rather than free-form prose.
+2. Returns structured output — readiness verdict, blocking concerns/questions, advisory notes — rather than free-form prose.
 3. Logs the round to a self-contained per-round directory so the audit trail accumulates without effort.
 
 The design agent then walks the blocking findings one at a time, explaining each finding and its proposed solution clearly and briefly, discussing it with the human, and implementing the fix once aligned. Advisory notes are presented separately as non-blocking polish. The loop continues until the verdict is `ready_to_build` or the human calls it.
@@ -64,10 +64,10 @@ review_context: |
 review_focus: |
   Add project-specific things to look for that the base review philosophy
   does not already cover.
-reviewers:
-  - name: codex
-    impl: codex
-    model: gpt-5.5
+reviewer:
+  name: codex
+  impl: codex
+  model: gpt-5.5
 ```
 
 `review_context` and `review_focus` are read from this file; they are not MCP tool inputs. Edit the YAML before opening a session if you want different calibration. Relative `log_destination` and `binary_path` values resolve relative to the config file, not the process working directory.
@@ -91,13 +91,10 @@ Tools exposed:
 
 - `open_session`
 - `start_review_round`
-- `round_status`
 - `collect_round`
 - `record_round_notes`
 - `close_session`
 - `session_status`
-- `list_reviewers`
-- `list_sessions`
 
 Manual smoke path: connect an MCP client, call `open_session` (no artifacts at this stage), call `start_review_round` with absolute artifact paths for the design/work-order files you want reviewed, monitor it with:
 

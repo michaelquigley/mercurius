@@ -46,9 +46,6 @@ func newRootCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Load() is now side-effect-free; the server startup path is the
-			// caller responsible for creating log_destination before any
-			// session opens.
 			if err := cfg.EnsureLogDestination(); err != nil {
 				return err
 			}
@@ -67,7 +64,6 @@ func newRootCommand() *cobra.Command {
 	root.PersistentFlags().StringVar(&configPath, "config", "./mercurius.yaml", "path to mercurius.yaml")
 	root.Flags().BoolVar(&verbose, "verbose", false, "enable verbose stderr logging")
 	root.AddCommand(newMonitorCommand(&configPath))
-	root.AddCommand(newPreviewCommand(&configPath))
 	return root
 }
 
@@ -99,7 +95,7 @@ func newMonitorCommand(configPath *string) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&sessionID, "session", "", "session id to monitor")
 	cmd.Flags().BoolVar(&all, "all", false, "show all sessions with status files")
-	cmd.Flags().BoolVar(&wait, "wait", false, "stream events until the active round completes or fails")
+	cmd.Flags().BoolVar(&wait, "wait", false, "poll status.json until the active round completes or fails")
 	return cmd
 }
 
@@ -128,34 +124,16 @@ func monitorAll(cmd *cobra.Command, logDestination string) error {
 func monitorSession(cmd *cobra.Command, logDestination string, sessionID string, wait bool) error {
 	sessionDir := monitorpkg.SessionDir(logDestination, sessionID)
 	statusPath := monitorpkg.StatusPath(sessionDir)
-	eventsPath := monitorpkg.EventsPath(sessionDir)
 	status, err := monitorpkg.ReadStatus(statusPath)
 	if err != nil {
 		return err
 	}
 	printStatus(cmd, status)
-
-	events, err := monitorpkg.ReadEvents(eventsPath)
-	if err != nil {
-		return err
-	}
-	if len(events) > 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "events:")
-	}
-	for _, event := range events {
-		printEvent(cmd, event)
-	}
-	if !wait {
-		return nil
-	}
-	waitRound := 0
-	if status.ActiveRound != nil {
-		waitRound = status.ActiveRound.RoundNumber
-	} else {
+	if !wait || status.ActiveRound == nil {
 		return nil
 	}
 
-	seen := len(events)
+	waitRound := status.ActiveRound.RoundNumber
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -163,18 +141,17 @@ func monitorSession(cmd *cobra.Command, logDestination string, sessionID string,
 		case <-cmd.Context().Done():
 			return nil
 		case <-ticker.C:
-			events, err := monitorpkg.ReadEvents(eventsPath)
+			status, err := monitorpkg.ReadStatus(statusPath)
 			if err != nil {
 				return err
 			}
-			for _, event := range events[seen:] {
-				printEvent(cmd, event)
-				if event.RoundNumber == waitRound && (event.Event == "round_completed" || event.Event == "round_failed") {
-					printRoundTerminalAction(cmd, event)
-					return nil
-				}
+			if status.ActiveRound != nil && status.ActiveRound.RoundNumber == waitRound {
+				continue
 			}
-			seen = len(events)
+			// active round either advanced or cleared; pick up the round
+			// status from the rounds list or the lingering active job.
+			printWaitedRoundTerminal(cmd, status, waitRound)
+			return nil
 		}
 	}
 }
@@ -191,69 +168,32 @@ func printStatus(cmd *cobra.Command, status monitorpkg.SessionStatus) {
 	}
 	if status.LastError != nil {
 		fmt.Fprintf(out, "last error: %s - %s\n", status.LastError.Code, status.LastError.Message)
-		if status.LastError.NextAction != "" {
-			fmt.Fprintf(out, "next: %s\n", status.LastError.NextAction)
-		}
 	}
 	if status.ActiveRound != nil {
 		fmt.Fprintf(out, "active round: %d %s reviewer='%s' started=%s\n", status.ActiveRound.RoundNumber, status.ActiveRound.State, status.ActiveRound.Reviewer, formatMonitorTime(status.ActiveRound.StartedAt))
-		fmt.Fprintf(out, "monitor files: status='%s' events='%s'\n", status.ActiveRound.StatusPath, status.ActiveRound.EventsPath)
-	} else if status.LastRoundJob != nil {
-		fmt.Fprintf(out, "last round: %d %s reviewer='%s' updated=%s\n", status.LastRoundJob.RoundNumber, status.LastRoundJob.State, status.LastRoundJob.Reviewer, formatMonitorTime(status.LastRoundJob.UpdatedAt))
-		if status.LastRoundJob.LogPath != "" {
-			fmt.Fprintf(out, "log: '%s'\n", status.LastRoundJob.LogPath)
-		}
-		if status.LastRoundJob.Error != nil {
-			fmt.Fprintf(out, "round error: %s - %s\n", status.LastRoundJob.Error.Code, status.LastRoundJob.Error.Message)
-		}
+		fmt.Fprintf(out, "monitor file: status='%s'\n", status.ActiveRound.StatusPath)
 	}
 }
 
-func printEvent(cmd *cobra.Command, event monitorpkg.Event) {
+func printWaitedRoundTerminal(cmd *cobra.Command, status monitorpkg.SessionStatus, roundNumber int) {
 	out := cmd.OutOrStdout()
-	line := fmt.Sprintf("  %s  %s", formatMonitorTime(event.At), event.Event)
-	if event.RoundNumber != 0 {
-		line += fmt.Sprintf(" round=%d", event.RoundNumber)
-	}
-	if event.Reviewer != "" {
-		line += " reviewer='" + event.Reviewer + "'"
-	}
-	if event.State != "" {
-		line += " state=" + event.State
-	}
-	if event.LogPath != "" {
-		line += " log='" + event.LogPath + "'"
-	}
-	if event.Error != nil {
-		line += " error=" + event.Error.Code
-	}
-	fmt.Fprintln(out, line)
-}
-
-func printRoundTerminalAction(cmd *cobra.Command, event monitorpkg.Event) {
-	out := cmd.OutOrStdout()
-	switch event.Event {
-	case "round_completed":
-		fmt.Fprintf(out, "\nround %d completed\n", event.RoundNumber)
-		if event.LogPath != "" {
-			fmt.Fprintf(out, "log: '%s'\n", event.LogPath)
-		}
-		if event.SessionID != "" {
-			fmt.Fprintf(out, "next: ask the design agent to call collect_round for session '%s' round %d\n", event.SessionID, event.RoundNumber)
-		} else {
-			fmt.Fprintf(out, "next: ask the design agent to call collect_round for round %d\n", event.RoundNumber)
-		}
-	case "round_failed":
-		fmt.Fprintf(out, "\nround %d failed\n", event.RoundNumber)
-		if event.Error != nil {
-			fmt.Fprintf(out, "error: %s - %s\n", event.Error.Code, event.Error.Message)
-			if event.Error.NextAction != "" {
-				fmt.Fprintf(out, "next: %s\n", event.Error.NextAction)
-				return
+	// look up the completed round in the rounds list (success path) or
+	// fall through to last-error reporting if the round failed.
+	for _, r := range status.Rounds {
+		if r.RoundNumber == roundNumber {
+			fmt.Fprintf(out, "\nround %d completed\n", r.RoundNumber)
+			if r.LogPath != "" {
+				fmt.Fprintf(out, "log: '%s'\n", r.LogPath)
 			}
+			fmt.Fprintf(out, "next: ask the design agent to call collect_round for session '%s' round %d\n", status.SessionID, r.RoundNumber)
+			return
 		}
-		fmt.Fprintln(out, "next: inspect session_status.last_error, then decide whether to retry")
 	}
+	fmt.Fprintf(out, "\nround %d failed\n", roundNumber)
+	if status.LastError != nil {
+		fmt.Fprintf(out, "error: %s - %s\n", status.LastError.Code, status.LastError.Message)
+	}
+	fmt.Fprintln(out, "next: inspect session_status.last_error, then decide whether to retry")
 }
 
 func formatMonitorTime(t time.Time) string {

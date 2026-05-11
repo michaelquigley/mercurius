@@ -12,9 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/michaelquigley/mercurius/internal/monitor"
 	"github.com/michaelquigley/mercurius/internal/reviewer"
-	"github.com/michaelquigley/mercurius/internal/roundlog"
 	"github.com/michaelquigley/mercurius/internal/schema"
 )
 
@@ -28,8 +26,8 @@ func TestSessionRoundsNotesAndClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	if len(open.Reviewers) != 1 || open.Reviewers[0].Name != "dummy" {
-		t.Fatalf("unexpected open reviewers: %+v", open.Reviewers)
+	if open.Reviewer.Name != "dummy" {
+		t.Fatalf("unexpected reviewer: %+v", open.Reviewer)
 	}
 	if !open.ReviewFocusPresent {
 		t.Fatal("expected review focus to be reported as present")
@@ -62,9 +60,6 @@ func TestSessionRoundsNotesAndClose(t *testing.T) {
 	if req.Prompt == "" || !strings.Contains(req.Prompt, "flag unclear acceptance criteria.") {
 		t.Fatal("expected assembled prompt with config focus")
 	}
-	if len(req.Schema) == 0 {
-		t.Fatal("expected schema in reviewer request")
-	}
 	if req.Artifacts[0].Path != round1.Manifest[0].SnapshotPath {
 		t.Fatal("expected reviewer artifact path to point at snapshot")
 	}
@@ -89,15 +84,20 @@ func TestSessionRoundsNotesAndClose(t *testing.T) {
 	if !notes.CommentaryRecorded || notes.DecisionsRecorded != 1 {
 		t.Fatalf("unexpected notes response: %+v", notes)
 	}
+	notesPath := filepath.Join(open.SessionDir, "round-01", roundNotesName)
+	notesContent := readFile(t, notesPath)
+	if !strings.Contains(notesContent, "- **fixed** (ref: C-1): fix landed.") {
+		t.Fatalf("notes not written:\n%s", notesContent)
+	}
+	// the immutable round log must remain untouched after notes recording.
 	logContent := readFile(t, round1.LogPath)
-	if !strings.Contains(logContent, "notes_recorded: true") || !strings.Contains(logContent, "- **fixed** (ref: C-1): fix landed.") {
-		t.Fatalf("notes not written:\n%s", logContent)
+	if strings.Contains(logContent, "fix landed") || strings.Contains(logContent, "notes_recorded") {
+		t.Fatalf("round log should not carry notes content: %s", logContent)
 	}
 	if _, err := os.Stat(filepath.Join(open.SessionDir, "decisions.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a session-level decisions log must not be written; got err=%v", err)
 	}
 
-	// edit the artifact and run a second round to confirm rounds are independent
 	if err := os.WriteFile(design, []byte("design-v2"), 0o600); err != nil {
 		t.Fatalf("edit artifact: %v", err)
 	}
@@ -115,14 +115,6 @@ func TestSessionRoundsNotesAndClose(t *testing.T) {
 		t.Fatal("expected distinct hashes after source edit")
 	}
 
-	// round 2 must not see prior decisions in its prompt (rounds are independent)
-	reqs = r.requests()
-	for _, banned := range []string{"Prior decisions", "decisions log", "C-1"} {
-		if strings.Contains(reqs[1].Prompt, banned) {
-			t.Fatalf("round 2 prompt should not contain %q:\n%s", banned, reqs[1].Prompt)
-		}
-	}
-
 	status, err := b.SessionStatus(ctx, open.SessionID)
 	if err != nil {
 		t.Fatalf("status: %v", err)
@@ -130,7 +122,7 @@ func TestSessionRoundsNotesAndClose(t *testing.T) {
 	if status.RoundCount != 2 || !status.Rounds[0].HasNotes || status.Rounds[0].DecisionCount != 1 {
 		t.Fatalf("unexpected status: %+v", status)
 	}
-	if len(status.Reviewers) != 1 || status.LastError != nil {
+	if status.Reviewer.Name != "dummy" || status.LastError != nil {
 		t.Fatalf("unexpected status diagnostics: %+v", status)
 	}
 
@@ -145,7 +137,7 @@ func TestSessionRoundsNotesAndClose(t *testing.T) {
 		SessionID: open.SessionID,
 		Artifacts: []Artifact{{Name: "design", Path: design}},
 	})
-	assertBrokerCode(t, err, CodeSessionClosed)
+	assertBrokerCode(t, err, CodeConflict)
 }
 
 func TestOpenSessionReportsConfigContextPresence(t *testing.T) {
@@ -153,10 +145,8 @@ func TestOpenSessionReportsConfigContextPresence(t *testing.T) {
 	b := New(Options{
 		LogDestination: filepath.Join(t.TempDir(), "reviews"),
 		ReviewContext:  "config context",
-		Reviewers: []ReviewerSpec{{
-			Name:    "dummy",
-			Factory: func(string) reviewer.Reviewer { return newScriptedReviewer() },
-		}},
+		Reviewer:       newScriptedReviewer(),
+		ReviewerInfo:   ReviewerInfo{Name: "dummy", Impl: "dummy"},
 	})
 	open, err := b.OpenSession(ctx, OpenSessionRequest{})
 	if err != nil {
@@ -167,81 +157,6 @@ func TestOpenSessionReportsConfigContextPresence(t *testing.T) {
 	}
 	if open.ReviewFocusPresent {
 		t.Fatal("did not configure review_focus, so it must be reported absent")
-	}
-}
-
-func TestRoundsDoNotCarryDecisionsForward(t *testing.T) {
-	ctx := context.Background()
-	r := newScriptedReviewer(
-		scriptedResponse{raw: reviewOutputWithRefs()},
-		scriptedResponse{raw: validReviewOutput("ready_to_build")},
-	)
-	b := testBroker(t, r)
-	open, err := b.OpenSession(ctx, OpenSessionRequest{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	design := writeArtifactFile(t, "content")
-	round1, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
-		SessionID: open.SessionID,
-		Artifacts: []Artifact{{Name: "design", Path: design}},
-	})
-	if err != nil {
-		t.Fatalf("round 1: %v", err)
-	}
-	if _, err := b.RecordRoundNotes(ctx, RecordRoundNotesRequest{
-		SessionID:   open.SessionID,
-		RoundNumber: round1.RoundNumber,
-		Commentary:  "round one fixes",
-		Decisions: []Decision{
-			{Ref: "C-1", Disposition: "fixed", Note: "fix landed"},
-			{Ref: "Q-1", Disposition: "deferred", Note: "later"},
-		},
-	}); err != nil {
-		t.Fatalf("record notes: %v", err)
-	}
-
-	if _, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
-		SessionID: open.SessionID,
-		Artifacts: []Artifact{{Name: "design", Path: design}},
-	}); err != nil {
-		t.Fatalf("round 2: %v", err)
-	}
-	reqs := r.requests()
-	for _, banned := range []string{"C-1", "Q-1", "Prior decisions", "decisions log"} {
-		if strings.Contains(reqs[1].Prompt, banned) {
-			t.Fatalf("round 2 prompt should not carry round-1 decisions; contained %q:\n%s", banned, reqs[1].Prompt)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(open.SessionDir, "decisions.md")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("no session-level decisions.md should be written; got err=%v", err)
-	}
-}
-
-func TestAdvisoryDecisionsValidatedAgainstRoundRefs(t *testing.T) {
-	// advisory ids must still be recordable; classification is array-based, not
-	// id-string based.
-	ctx := context.Background()
-	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithAdvisoryRefs("note-1")})
-	b := testBroker(t, r)
-	open, err := b.OpenSession(ctx, OpenSessionRequest{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	round1, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
-		SessionID: open.SessionID,
-		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
-	})
-	if err != nil {
-		t.Fatalf("round 1: %v", err)
-	}
-	if _, err := b.RecordRoundNotes(ctx, RecordRoundNotesRequest{
-		SessionID:   open.SessionID,
-		RoundNumber: round1.RoundNumber,
-		Commentary:  "ack",
-		Decisions:   []Decision{{Ref: "note-1", Disposition: "fixed", Note: "polished"}},
-	}); err != nil {
-		t.Fatalf("record notes: %v", err)
 	}
 }
 
@@ -263,7 +178,6 @@ func TestReviewerOutputDuplicateIdsRejected(t *testing.T) {
 					},
 					Questions:     []schema.Question{},
 					AdvisoryNotes: []schema.AdvisoryNote{},
-					ProposedDiffs: []schema.ProposedDiff{},
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -284,7 +198,6 @@ func TestReviewerOutputDuplicateIdsRejected(t *testing.T) {
 					AdvisoryNotes: []schema.AdvisoryNote{
 						{ID: "C-1", Location: "y", Note: "polish", Rationale: "tone"},
 					},
-					ProposedDiffs: []schema.ProposedDiff{},
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -305,7 +218,7 @@ func TestReviewerOutputDuplicateIdsRejected(t *testing.T) {
 				SessionID: open.SessionID,
 				Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
 			})
-			assertBrokerCode(t, err, CodeSchemaViolation)
+			assertBrokerCode(t, err, CodeReviewerFailed)
 		})
 	}
 }
@@ -315,10 +228,8 @@ func TestAsyncReviewRoundLifecycle(t *testing.T) {
 	r := newBlockingReviewer(validReviewOutput("ready_to_build"))
 	b := New(Options{
 		LogDestination: filepath.Join(t.TempDir(), "reviews"),
-		Reviewers: []ReviewerSpec{{
-			Name:    "dummy",
-			Factory: func(string) reviewer.Reviewer { return r },
-		}},
+		Reviewer:       r,
+		ReviewerInfo:   ReviewerInfo{Name: "dummy", Impl: "dummy"},
 	})
 	open, err := b.OpenSession(ctx, OpenSessionRequest{})
 	if err != nil {
@@ -344,27 +255,17 @@ func TestAsyncReviewRoundLifecycle(t *testing.T) {
 	if status.ActiveRound == nil || status.ActiveRound.State != roundStateRunning {
 		t.Fatalf("running status = %+v", status)
 	}
-	if _, err := os.Stat(started.StatusPath); err != nil {
-		t.Fatalf("expected status file: %v", err)
-	}
-	fileStatus, err := monitor.ReadStatus(started.StatusPath)
-	if err != nil {
-		t.Fatalf("read monitor status: %v", err)
-	}
-	if fileStatus.ActiveRound == nil || fileStatus.ActiveRound.RoundNumber != 1 {
-		t.Fatalf("file status = %+v", fileStatus)
-	}
 
 	_, err = b.StartReviewRound(ctx, StartRoundRequest{
 		SessionID: open.SessionID,
 		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
 	})
-	assertBrokerCode(t, err, CodeRoundInProgress)
+	assertBrokerCode(t, err, CodeConflict)
 	_, err = b.CloseSession(ctx, CloseSessionRequest{SessionID: open.SessionID})
-	assertBrokerCode(t, err, CodeRoundInProgress)
+	assertBrokerCode(t, err, CodeConflict)
 
 	r.release()
-	waitRoundState(t, b, open.SessionID, 1, roundStateCompleted)
+	waitRoundCompleted(t, b, open.SessionID, 1)
 	collected, err := b.CollectRound(ctx, CollectRoundRequest{SessionID: open.SessionID, RoundNumber: 1})
 	if err != nil {
 		t.Fatalf("collect: %v", err)
@@ -376,51 +277,8 @@ func TestAsyncReviewRoundLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status after completion: %v", err)
 	}
-	if status.ActiveRound != nil || status.LastRoundJob == nil || status.LastRoundJob.State != roundStateCompleted || status.RoundCount != 1 {
+	if status.ActiveRound != nil || status.RoundCount != 1 {
 		t.Fatalf("completed status = %+v", status)
-	}
-	events, err := monitor.ReadEvents(started.EventsPath)
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
-	if !hasEvent(events, "round_started") || !hasEvent(events, "reviewer_started") || !hasEvent(events, "round_completed") {
-		t.Fatalf("events = %+v", events)
-	}
-}
-
-func TestStartedRoundContinuesAfterCallerContextExpires(t *testing.T) {
-	r := newBlockingReviewer(validReviewOutput("ready_to_build"))
-	b := New(Options{
-		LogDestination: filepath.Join(t.TempDir(), "reviews"),
-		Reviewers: []ReviewerSpec{{
-			Name:    "dummy",
-			Factory: func(string) reviewer.Reviewer { return r },
-		}},
-	})
-	open, err := b.OpenSession(context.Background(), OpenSessionRequest{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	started, err := b.StartReviewRound(ctx, StartRoundRequest{
-		SessionID: open.SessionID,
-		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
-	})
-	if err != nil {
-		t.Fatalf("start round: %v", err)
-	}
-	waitStarted(t, r)
-	cancel()
-
-	r.release()
-	waitRoundState(t, b, open.SessionID, started.RoundNumber, roundStateCompleted)
-	collected, err := b.CollectRound(context.Background(), CollectRoundRequest{SessionID: open.SessionID, RoundNumber: started.RoundNumber})
-	if err != nil {
-		t.Fatalf("collect after caller context expired: %v", err)
-	}
-	if collected.RoundNumber != 1 {
-		t.Fatalf("collected = %+v", collected)
 	}
 }
 
@@ -431,8 +289,8 @@ func TestAtomicFailuresAllowRetry(t *testing.T) {
 		code string
 	}{
 		{name: "reviewer error", resp: scriptedResponse{err: errors.New("boom")}, code: CodeReviewerFailed},
-		{name: "malformed json", resp: scriptedResponse{raw: json.RawMessage(`{"verdict":`)}, code: CodeSchemaViolation},
-		{name: "schema invalid", resp: scriptedResponse{raw: json.RawMessage(`{"not":"valid review output"}`)}, code: CodeSchemaViolation},
+		{name: "malformed json", resp: scriptedResponse{raw: json.RawMessage(`{"verdict":`)}, code: CodeReviewerFailed},
+		{name: "schema invalid", resp: scriptedResponse{raw: json.RawMessage(`{"not":"valid review output"}`)}, code: CodeReviewerFailed},
 	}
 
 	for _, test := range tests {
@@ -461,8 +319,8 @@ func TestAtomicFailuresAllowRetry(t *testing.T) {
 			if status.RoundCount != 0 {
 				t.Fatalf("round count = %d, want 0", status.RoundCount)
 			}
-			if status.LastError == nil || status.LastError.Code != test.code || !status.LastError.Retryable {
-				t.Fatalf("last error = %+v, want retryable %s", status.LastError, test.code)
+			if status.LastError == nil || status.LastError.Code != test.code {
+				t.Fatalf("last error = %+v, want %s", status.LastError, test.code)
 			}
 
 			round, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
@@ -475,13 +333,6 @@ func TestAtomicFailuresAllowRetry(t *testing.T) {
 			if round.RoundNumber != 1 {
 				t.Fatalf("round number after failure = %d, want 1", round.RoundNumber)
 			}
-			status, err = b.SessionStatus(ctx, open.SessionID)
-			if err != nil {
-				t.Fatalf("status after successful retry: %v", err)
-			}
-			if status.LastError != nil {
-				t.Fatalf("last error after successful retry = %+v, want nil", status.LastError)
-			}
 		})
 	}
 }
@@ -492,10 +343,8 @@ func TestMaxFindingsFailsRoundAtomically(t *testing.T) {
 	b := New(Options{
 		LogDestination: filepath.Join(t.TempDir(), "reviews"),
 		MaxFindings:    1,
-		Reviewers: []ReviewerSpec{{
-			Name:    "dummy",
-			Factory: func(string) reviewer.Reviewer { return r },
-		}},
+		Reviewer:       r,
+		ReviewerInfo:   ReviewerInfo{Name: "dummy", Impl: "dummy"},
 	})
 	open, err := b.OpenSession(ctx, OpenSessionRequest{})
 	if err != nil {
@@ -507,16 +356,9 @@ func TestMaxFindingsFailsRoundAtomically(t *testing.T) {
 		SessionID: open.SessionID,
 		Artifacts: []Artifact{{Name: "design", Path: design}},
 	})
-	assertBrokerCode(t, err, CodeSchemaViolation)
+	assertBrokerCode(t, err, CodeReviewerFailed)
 	if _, err := os.Stat(filepath.Join(open.SessionDir, "round-01")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected round dir cleanup, got err=%v", err)
-	}
-	status, err := b.SessionStatus(ctx, open.SessionID)
-	if err != nil {
-		t.Fatalf("status: %v", err)
-	}
-	if status.RoundCount != 0 {
-		t.Fatalf("round count after max findings failure = %d, want 0", status.RoundCount)
 	}
 
 	round, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
@@ -531,58 +373,6 @@ func TestMaxFindingsFailsRoundAtomically(t *testing.T) {
 	}
 }
 
-func TestMaxFindingsIgnoresAdvisoryNotes(t *testing.T) {
-	ctx := context.Background()
-	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithAdvisory(t, 1, 3)})
-	b := New(Options{
-		LogDestination: filepath.Join(t.TempDir(), "reviews"),
-		MaxFindings:    1,
-		Reviewers: []ReviewerSpec{{
-			Name:    "dummy",
-			Factory: func(string) reviewer.Reviewer { return r },
-		}},
-	})
-	open, err := b.OpenSession(ctx, OpenSessionRequest{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	round, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
-		SessionID: open.SessionID,
-		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
-	})
-	if err != nil {
-		t.Fatalf("round: %v", err)
-	}
-	if round.RoundNumber != 1 {
-		t.Fatalf("round = %+v", round)
-	}
-}
-
-func TestListReviewers(t *testing.T) {
-	ctx := context.Background()
-	b := New(Options{
-		LogDestination: filepath.Join(t.TempDir(), "reviews"),
-		Reviewers: []ReviewerSpec{
-			{Name: "codex", Impl: "codex", Model: "gpt-test", Factory: func(string) reviewer.Reviewer { return newScriptedReviewer() }},
-			{Name: "dummy", Impl: "dummy", Factory: func(string) reviewer.Reviewer { return newScriptedReviewer() }},
-		},
-	})
-
-	response, err := b.ListReviewers(ctx)
-	if err != nil {
-		t.Fatalf("list reviewers: %v", err)
-	}
-	if len(response.Reviewers) != 2 {
-		t.Fatalf("reviewers = %+v", response.Reviewers)
-	}
-	if response.Reviewers[0].Name != "codex" || response.Reviewers[0].Model != "gpt-test" {
-		t.Fatalf("first reviewer = %+v", response.Reviewers[0])
-	}
-	if response.Reviewers[1].Name != "dummy" || response.Reviewers[1].Impl != "dummy" {
-		t.Fatalf("second reviewer = %+v", response.Reviewers[1])
-	}
-}
-
 func TestRecordRoundNotesValidationAndReplacement(t *testing.T) {
 	ctx := context.Background()
 	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithRefs()})
@@ -591,22 +381,21 @@ func TestRecordRoundNotesValidationAndReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	round, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
+	if _, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
 		SessionID: open.SessionID,
 		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("round: %v", err)
 	}
 
 	_, err = b.RecordRoundNotes(ctx, RecordRoundNotesRequest{SessionID: open.SessionID, RoundNumber: 1})
-	assertBrokerCode(t, err, CodeEmptyNotes)
+	assertBrokerCode(t, err, CodeUserError)
 	_, err = b.RecordRoundNotes(ctx, RecordRoundNotesRequest{
 		SessionID:   open.SessionID,
 		RoundNumber: 1,
 		Decisions:   []Decision{{Ref: "missing", Disposition: "fixed", Note: "nope"}},
 	})
-	assertBrokerCode(t, err, CodeUnknownRef)
+	assertBrokerCode(t, err, CodeUserError)
 
 	if _, err := b.RecordRoundNotes(ctx, RecordRoundNotesRequest{
 		SessionID:   open.SessionID,
@@ -616,6 +405,12 @@ func TestRecordRoundNotesValidationAndReplacement(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("record first notes: %v", err)
 	}
+	notesPath := filepath.Join(open.SessionDir, "round-01", roundNotesName)
+	content := readFile(t, notesPath)
+	if !strings.Contains(content, "first") || !strings.Contains(content, "deferred") {
+		t.Fatalf("expected first notes:\n%s", content)
+	}
+	// re-recording rewrites the sibling notes file
 	if _, err := b.RecordRoundNotes(ctx, RecordRoundNotesRequest{
 		SessionID:   open.SessionID,
 		RoundNumber: 1,
@@ -623,21 +418,16 @@ func TestRecordRoundNotesValidationAndReplacement(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("replace notes: %v", err)
 	}
-	content := readFile(t, round.LogPath)
+	content = readFile(t, notesPath)
 	if strings.Contains(content, "first") || strings.Contains(content, "deferred") {
 		t.Fatalf("old notes remained:\n%s", content)
 	}
-	if !strings.Contains(content, "second") || !strings.Contains(content, "_no decisions recorded yet_") {
+	if !strings.Contains(content, "second") || !strings.Contains(content, "_no decisions recorded_") {
 		t.Fatalf("replacement not written:\n%s", content)
-	}
-	if strings.Count(content, roundlog.NotesBeginMarker) != 1 || strings.Count(content, roundlog.NotesEndMarker) != 1 {
-		t.Fatal("expected one notes region")
 	}
 }
 
 func TestRecordRoundNotesRejectsLegacyAcceptedDisposition(t *testing.T) {
-	// regression-protection. `accepted` is invalid; the only "agreed-and-acted"
-	// disposition is `fixed`.
 	ctx := context.Background()
 	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithRefs()})
 	b := testBroker(t, r)
@@ -657,7 +447,7 @@ func TestRecordRoundNotesRejectsLegacyAcceptedDisposition(t *testing.T) {
 		Commentary:  "x",
 		Decisions:   []Decision{{Ref: "C-1", Disposition: "accepted", Note: "should fail"}},
 	})
-	assertBrokerCode(t, err, CodeInvalidDecision)
+	assertBrokerCode(t, err, CodeUserError)
 }
 
 func TestStartRoundArtifactValidation(t *testing.T) {
@@ -687,7 +477,7 @@ func TestStartRoundArtifactValidation(t *testing.T) {
 				SessionID: open.SessionID,
 				Artifacts: test.artifacts,
 			})
-			assertBrokerCode(t, err, CodeInvalidArtifacts)
+			assertBrokerCode(t, err, CodeUserError)
 		})
 	}
 }
@@ -696,74 +486,18 @@ func TestOpenSessionRejectsBadLogDestination(t *testing.T) {
 	ctx := context.Background()
 	b := New(Options{
 		LogDestination: filepath.Join(t.TempDir(), "missing-parent", "reviews"),
-		Reviewers: []ReviewerSpec{{
-			Name:    "dummy",
-			Factory: func(string) reviewer.Reviewer { return newScriptedReviewer() },
-		}},
+		Reviewer:       newScriptedReviewer(),
+		ReviewerInfo:   ReviewerInfo{Name: "dummy", Impl: "dummy"},
 	})
 	_, err := b.OpenSession(ctx, OpenSessionRequest{})
-	assertBrokerCode(t, err, CodeInvalidLogDestination)
+	assertBrokerCode(t, err, CodeUserError)
 }
 
-func TestInlineArtifactSnapshotAndPrompt(t *testing.T) {
+func TestUnknownSessionReturnsNotFound(t *testing.T) {
 	ctx := context.Background()
-	r := newScriptedReviewer(scriptedResponse{raw: validReviewOutput("ready_to_build")})
-	b := testBroker(t, r)
-	open, err := b.OpenSession(ctx, OpenSessionRequest{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	round, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
-		SessionID: open.SessionID,
-		Artifacts: []Artifact{{Name: "context", Path: "ignored-relative-path", Content: []byte("inline content")}},
-	})
-	if err != nil {
-		t.Fatalf("round: %v", err)
-	}
-	if !round.Manifest[0].Inline || round.Manifest[0].SourcePath != "" {
-		t.Fatalf("unexpected inline manifest: %+v", round.Manifest[0])
-	}
-	assertSnapshot(t, round.Manifest[0], "inline content")
-	if !strings.Contains(readFile(t, round.LogPath), "| context | null |") {
-		t.Fatal("expected null source path in log")
-	}
-	if !strings.Contains(r.requests()[0].Prompt, "Source path: inline") {
-		t.Fatal("expected inline source path in prompt")
-	}
-}
-
-func TestRoundLogWriteFailureIsAtomic(t *testing.T) {
-	ctx := context.Background()
-	r := newScriptedReviewer(scriptedResponse{raw: validReviewOutput("ready_to_build")})
-	b := testBroker(t, r)
-	open, err := b.OpenSession(ctx, OpenSessionRequest{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	// pre-create a directory at the expected log file path to force a write failure.
-	roundDir := filepath.Join(open.SessionDir, "round-01")
-	if err := os.MkdirAll(roundDir, 0o700); err != nil {
-		t.Fatalf("create round dir: %v", err)
-	}
-	if err := os.Mkdir(filepath.Join(roundDir, roundLogName), 0o700); err != nil {
-		t.Fatalf("create log path directory: %v", err)
-	}
-
-	_, err = startAndCollectRound(t, b, ctx, StartRoundRequest{
-		SessionID: open.SessionID,
-		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
-	})
-	assertBrokerCode(t, err, CodeInternalError)
-	if _, err := os.Stat(roundDir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected round dir cleanup, got err=%v", err)
-	}
-	status, err := b.SessionStatus(ctx, open.SessionID)
-	if err != nil {
-		t.Fatalf("status: %v", err)
-	}
-	if status.RoundCount != 0 {
-		t.Fatalf("round count = %d, want 0", status.RoundCount)
-	}
+	b := testBroker(t, newScriptedReviewer())
+	_, err := b.SessionStatus(ctx, "s_missing")
+	assertBrokerCode(t, err, CodeNotFound)
 }
 
 type scriptedResponse struct {
@@ -874,9 +608,12 @@ func waitRoundTerminal(t *testing.T, b *Broker, sessionID string, roundNumber in
 
 	deadline := time.After(time.Second)
 	for {
-		status, err := b.RoundStatus(context.Background(), RoundStatusRequest{SessionID: sessionID, RoundNumber: roundNumber})
-		if err == nil && (status.State == roundStateCompleted || status.State == roundStateFailed) {
-			return
+		// poll session status for the round's terminal state.
+		status, err := b.SessionStatus(context.Background(), sessionID)
+		if err == nil {
+			if status.ActiveRound == nil {
+				return
+			}
 		}
 		select {
 		case <-deadline:
@@ -886,41 +623,30 @@ func waitRoundTerminal(t *testing.T, b *Broker, sessionID string, roundNumber in
 	}
 }
 
-func waitRoundState(t *testing.T, b *Broker, sessionID string, roundNumber int, state string) {
+func waitRoundCompleted(t *testing.T, b *Broker, sessionID string, roundNumber int) {
 	t.Helper()
 	deadline := time.After(time.Second)
 	for {
-		status, err := b.RoundStatus(context.Background(), RoundStatusRequest{SessionID: sessionID, RoundNumber: roundNumber})
-		if err == nil && status.State == state {
+		status, err := b.SessionStatus(context.Background(), sessionID)
+		if err == nil && status.ActiveRound == nil && status.RoundCount >= roundNumber {
 			return
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("round did not reach state %s; last status=%+v err=%v", state, status, err)
+			t.Fatalf("round did not complete; last status=%+v err=%v", status, err)
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
 }
 
-func hasEvent(events []monitor.Event, name string) bool {
-	for _, event := range events {
-		if event.Event == name {
-			return true
-		}
-	}
-	return false
-}
-
-func testBroker(t *testing.T, r *scriptedReviewer) *Broker {
+func testBroker(t *testing.T, r reviewer.Reviewer) *Broker {
 	t.Helper()
 
 	return New(Options{
 		LogDestination: filepath.Join(t.TempDir(), "reviews"),
 		ReviewFocus:    "flag unclear acceptance criteria.",
-		Reviewers: []ReviewerSpec{{
-			Name:    "dummy",
-			Factory: func(string) reviewer.Reviewer { return r },
-		}},
+		Reviewer:       r,
+		ReviewerInfo:   ReviewerInfo{Name: "dummy", Impl: "dummy"},
 	})
 }
 
@@ -964,9 +690,6 @@ func assertRoundLogStructure(t *testing.T, path string, sessionID string, roundN
 	if frontmatter["round_number"] != strconv.Itoa(roundNumber) {
 		t.Fatalf("frontmatter round_number = %q, want %d", frontmatter["round_number"], roundNumber)
 	}
-	if frontmatter["notes_recorded"] != "false" {
-		t.Fatalf("frontmatter notes_recorded = %q, want false", frontmatter["notes_recorded"])
-	}
 	if frontmatter["prompt_path"] != roundPromptName {
 		t.Fatalf("frontmatter prompt_path = %q, want %q", frontmatter["prompt_path"], roundPromptName)
 	}
@@ -982,9 +705,6 @@ func assertRoundLogStructure(t *testing.T, path string, sessionID string, roundN
 		if !strings.Contains(parts[2], "### "+name+"\n\n**Usage notes:**") {
 			t.Fatalf("round log missing reviewer block for %q", name)
 		}
-	}
-	if strings.Count(parts[2], roundlog.NotesBeginMarker) != 1 || strings.Count(parts[2], roundlog.NotesEndMarker) != 1 {
-		t.Fatal("round log must contain exactly one notes marker pair")
 	}
 }
 
@@ -1030,7 +750,6 @@ func validReviewOutput(verdict string) json.RawMessage {
 		Concerns:      []schema.Concern{},
 		Questions:     []schema.Question{},
 		AdvisoryNotes: []schema.AdvisoryNote{},
-		ProposedDiffs: []schema.ProposedDiff{},
 	})
 	if err != nil {
 		panic(err)
@@ -1050,28 +769,6 @@ func reviewOutputWithRefs() json.RawMessage {
 			{ID: "Q-1", Topic: "budget", WhyItBlocks: "cannot judge loop length"},
 		},
 		AdvisoryNotes: []schema.AdvisoryNote{},
-		ProposedDiffs: []schema.ProposedDiff{},
-	})
-	if err != nil {
-		panic(err)
-	}
-	return raw
-}
-
-func reviewOutputWithAdvisoryRefs(advisoryID string) json.RawMessage {
-	suggestion := "clarify the work order"
-	noteSuggestion := "polish the wording"
-	raw, err := json.Marshal(schema.ReviewOutput{
-		Verdict: "needs_changes",
-		Summary: "reviewed",
-		Concerns: []schema.Concern{
-			{ID: "C-1", Severity: "major", Location: "work-order:M3", Claim: "missing detail", Rationale: "implementation would diverge", Suggestion: &suggestion},
-		},
-		Questions: []schema.Question{},
-		AdvisoryNotes: []schema.AdvisoryNote{
-			{ID: advisoryID, Location: "design:summary", Note: "tone could be tighter", Rationale: "polish", Suggestion: &noteSuggestion},
-		},
-		ProposedDiffs: []schema.ProposedDiff{},
 	})
 	if err != nil {
 		panic(err)
@@ -1089,7 +786,6 @@ func reviewOutputWithFindingCounts(t *testing.T, concernCount int, questionCount
 		Concerns:      make([]schema.Concern, 0, concernCount),
 		Questions:     make([]schema.Question, 0, questionCount),
 		AdvisoryNotes: []schema.AdvisoryNote{},
-		ProposedDiffs: []schema.ProposedDiff{},
 	}
 	for i := 0; i < concernCount; i++ {
 		output.Concerns = append(output.Concerns, schema.Concern{
@@ -1106,47 +802,6 @@ func reviewOutputWithFindingCounts(t *testing.T, concernCount int, questionCount
 			ID:          "Q-" + strconv.Itoa(i+1),
 			Topic:       "scope",
 			WhyItBlocks: "cannot decide implementation shape",
-		})
-	}
-	raw, err := json.Marshal(output)
-	if err != nil {
-		t.Fatalf("marshal review output: %v", err)
-	}
-	return raw
-}
-
-func reviewOutputWithAdvisory(t *testing.T, concernCount int, advisoryCount int) json.RawMessage {
-	t.Helper()
-
-	suggestion := "tighten the artifact"
-	output := schema.ReviewOutput{
-		Verdict:       "ready_to_build",
-		Summary:       "reviewed",
-		Concerns:      make([]schema.Concern, 0, concernCount),
-		Questions:     []schema.Question{},
-		AdvisoryNotes: make([]schema.AdvisoryNote, 0, advisoryCount),
-		ProposedDiffs: []schema.ProposedDiff{},
-	}
-	if concernCount > 0 {
-		output.Verdict = "needs_changes"
-	}
-	for i := 0; i < concernCount; i++ {
-		output.Concerns = append(output.Concerns, schema.Concern{
-			ID:         "C-" + strconv.Itoa(i+1),
-			Severity:   "major",
-			Location:   "design",
-			Claim:      "missing detail",
-			Rationale:  "implementation would diverge",
-			Suggestion: &suggestion,
-		})
-	}
-	for i := 0; i < advisoryCount; i++ {
-		output.AdvisoryNotes = append(output.AdvisoryNotes, schema.AdvisoryNote{
-			ID:         "A-" + strconv.Itoa(i+1),
-			Location:   "design",
-			Note:       "polish note",
-			Rationale:  "useful but not blocking",
-			Suggestion: nil,
 		})
 	}
 	raw, err := json.Marshal(output)

@@ -371,7 +371,6 @@ func validReviewOutput() string {
 		"concerns":       []any{},
 		"questions":      []any{},
 		"advisory_notes": []any{},
-		"proposed_diffs": []any{},
 	})
 	if err != nil {
 		panic(err)

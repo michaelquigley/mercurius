@@ -1,48 +1,45 @@
 # MCP Tools
 
-Mercurius exposes these MCP tools:
+Mercurius exposes six MCP tools:
 
 - `open_session`
 - `start_review_round`
-- `round_status`
 - `collect_round`
 - `record_round_notes`
 - `close_session`
 - `session_status`
-- `list_reviewers`
-- `list_sessions`
 
 Expected broker failures are returned as tool error results with structured content:
 
 ```json
 {
   "error": {
-    "code": "stable_code",
+    "code": "user_error",
     "message": "human-readable message",
-    "details": {},
-    "retryable": false,
-    "next_action": "agent-facing guidance"
+    "details": {}
   }
 }
 ```
 
+Error codes (five stable classes):
+
+- `user_error` — caller can fix it (artifact validation, decision validation, bad log destination)
+- `not_found` — session, round, or ref doesn't exist
+- `conflict` — operation can't run in the current state (closed session, in-progress round)
+- `reviewer_failed` — reviewer subprocess or output validation failure (retryable)
+- `internal_error` — broker bug
+
 ## `open_session`
 
-Opens a review session - a lightweight container for one or more rounds.
+Opens a review session - a lightweight container for one or more rounds. The reviewer is taken from `mercurius.yaml`; there is no choice to make at session-open time.
 
 Request:
 
 ```json
-{
-  "reviewers": ["codex"]
-}
+{}
 ```
 
-`reviewers` is optional when the config has exactly one reviewer. `review_context` and `review_focus` are read from `mercurius.yaml`; they are not tool inputs. Edit the YAML before opening a session if you want different calibration.
-
-Response includes `session_id`, `max_findings`, the selected reviewer, and the `review_context_present` and `review_focus_present` booleans so the agent can confirm the YAML provides those fields.
-
-Common errors: `unknown_reviewer`, `panel_mode_unsupported`, `invalid_log_destination`.
+Response includes `session_id`, `max_findings`, the configured reviewer, and the `review_context_present` and `review_focus_present` booleans so the agent can confirm the YAML provides those fields.
 
 ## `start_review_round`
 
@@ -60,23 +57,9 @@ Request:
 }
 ```
 
-Response includes round number, state, reviewer, status path, events path, monitor command, and next action. The design agent should tell the user to monitor and re-engage when the round completes.
+Response includes round number, state, status path, monitor command, and a next-action hint. The design agent should tell the user to monitor and re-engage when the round completes.
 
-Common errors: `unknown_session`, `session_closed`, `round_in_progress`, `invalid_artifacts`.
-
-## `round_status`
-
-Returns status for a running or terminal round.
-
-Request:
-
-```json
-{ "session_id": "s_...", "round_number": 1 }
-```
-
-If `round_number` is omitted, Mercurius returns the active round, latest round job, or latest completed round.
-
-Common errors: `unknown_session`, `unknown_round`.
+There is no separate `round_status` tool; to check progress, call `collect_round` — if the round is still running, it returns a `conflict` error with the status path embedded in `details`.
 
 ## `collect_round`
 
@@ -100,13 +83,11 @@ Response includes:
 
 `triage.guidance` and `next_action` direct the agent to walk findings one at a time, explaining each finding and its proposed solution clearly and simply (using few words), discussing it with the user, implementing the fix once aligned, and then stopping before moving to the next finding.
 
-If the round is still running, the tool returns `round_in_progress`. The agent should not immediately retry in a loop; it should ask the user to monitor and re-engage after completion.
-
-Common errors: `unknown_session`, `unknown_round`, `round_in_progress`, `reviewer_failed`, `schema_violation`.
+If the round is still running, the tool returns `conflict`. The agent should ask the user to monitor and re-engage after completion.
 
 ## `record_round_notes`
 
-Records commentary and human decisions for a completed round. This call implicitly finalizes the round - there is no separate `close_round` step.
+Records commentary and human decisions for a completed round. Notes are written to a sibling `_notes.md` file inside the round directory; the round log itself is immutable.
 
 Request:
 
@@ -121,9 +102,7 @@ Request:
 }
 ```
 
-Dispositions are `fixed`, `rejected`, or `deferred`. Decision refs must match a concern, question, or advisory_note id from this round. The tool updates the round log only; decisions do not carry forward into future rounds.
-
-Common errors: `unknown_session`, `unknown_round`, `empty_notes`, `unknown_ref`, `invalid_decision`.
+Dispositions are `fixed`, `rejected`, or `deferred`. Decision refs must match a concern, question, or advisory_note id from this round. The notes file is rewritten in place if called again on the same round; decisions do not carry forward into future rounds.
 
 ## `close_session`
 
@@ -135,36 +114,12 @@ Request:
 { "session_id": "s_..." }
 ```
 
-Common errors: `unknown_session`, `already_closed`, `round_in_progress`.
-
 ## `session_status`
 
-Returns a read-only session view: state, opened/closed timestamps, configured `max_findings`, `review_context_present` and `review_focus_present` booleans, the selected reviewer, the latest active/last round job, completed rounds, and last error.
+Returns a read-only session view: state, opened/closed timestamps, configured `max_findings`, `review_context_present` and `review_focus_present` booleans, the configured reviewer, the latest active round (if any), completed rounds, and last error.
 
 Request:
 
 ```json
 { "session_id": "s_..." }
-```
-
-Common errors: `unknown_session`.
-
-## `list_reviewers`
-
-Lists configured reviewers. Use this before `open_session` when a config contains multiple reviewers.
-
-Request:
-
-```json
-{}
-```
-
-## `list_sessions`
-
-Lists sessions known to the running server process.
-
-Request:
-
-```json
-{}
 ```

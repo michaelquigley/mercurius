@@ -11,19 +11,19 @@ Mercurius is a local MCP server that lets a design agent ask a reviewer, usually
 - [MCP tools](mcp-tools.md) is the tool contract.
 - [Reviewer output schema](reviewer-output.md) describes reviewer JSON.
 - [Architecture and storage](architecture.md) explains broker behavior, prompts, snapshots, logs, and reviewer invocation.
-- [Operations and troubleshooting](operations.md) explains monitoring, prompt previewing, timeouts, errors, and logs.
+- [Operations and troubleshooting](operations.md) explains monitoring, timeouts, errors, and logs.
 
 ## Current Capabilities
 
 - Single-project server process loaded from one `mercurius.yaml`.
-- Single reviewer per session, selected at `open_session`.
+- One reviewer per server, configured singularly in the YAML.
 - Codex reviewer implementation plus dummy reviewer for tests and scaffolding.
 - Single-shot rounds: artifacts and findings are scoped to one round. Sessions are light groupings; no shared state flows between rounds in the same session.
-- Background rounds with `start_review_round`, `round_status`, `collect_round`.
-- Per-round artifact snapshots and markdown logs in a self-contained round directory.
-- Structured reviewer output with blocking findings and separate advisory notes.
+- Background rounds with `start_review_round` and `collect_round`. Use `mercurius monitor --wait` to poll for completion.
+- Per-round artifact snapshots and markdown logs in a self-contained round directory; commentary and decisions land in a sibling `_notes.md` file.
+- Six-tool MCP surface (`open_session`, `start_review_round`, `collect_round`, `record_round_notes`, `close_session`, `session_status`) and five stable error codes (`user_error`, `not_found`, `conflict`, `reviewer_failed`, `internal_error`).
+- Structured reviewer output with blocking findings (`concerns`, `questions`) and separate `advisory_notes`.
 - `review_context` and `review_focus` live in `mercurius.yaml` and calibrate the reviewer.
-- CLI monitoring through `mercurius monitor` and unsighted prompt preview through `mercurius preview`.
 
 ## Current Non-Goals
 

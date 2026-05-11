@@ -10,8 +10,7 @@ Reviewer output is a single JSON object. Mercurius validates it against a strict
   "summary": "one-paragraph assessment",
   "concerns": [],
   "questions": [],
-  "advisory_notes": [],
-  "proposed_diffs": []
+  "advisory_notes": []
 }
 ```
 
@@ -73,24 +72,10 @@ Advisory notes are non-blocking polish or downstream considerations.
 }
 ```
 
-Advisory notes are returned to the design agent as `triage.advisory_notes`, separate from blocking findings. They do not count against `max_findings`. The design agent can disposition advisory ids via `record_round_notes` the same way it dispositions concerns and questions; advisory dispositions are recorded in the round log alongside blocking-finding dispositions, but they do not block readiness.
-
-## Proposed Diffs
-
-Proposed diffs are optional concrete edits.
-
-```json
-{
-  "id": "D-1",
-  "target": "implementation-plan.md M2",
-  "patch": "concrete replacement text or unified diff"
-}
-```
-
-A concern or question does not need a proposed diff. `proposed_diffs: []` is normal.
+Advisory notes are returned to the design agent as `triage.advisory_notes`, separate from blocking findings. They do not count against `max_findings`. The design agent can disposition advisory ids via `record_round_notes` the same way it dispositions concerns and questions; advisory dispositions are recorded in the round's `_notes.md` file alongside blocking-finding dispositions, but they do not block readiness.
 
 ## Strictness
 
 All top-level fields are required. Arrays must be present even when empty. Unknown fields are rejected at every object level. Empty strings are not accepted for nullable suggestion fields; use `null` when there is no suggestion.
 
-Every id appearing in `concerns`, `questions`, or `advisory_notes` must be unique across all three arrays. An id may not be reused within a single array, and may not appear in more than one of those arrays. Reviewer output that violates this rule is rejected with `schema_violation`. JSON Schema cannot express cross-array uniqueness, so the reviewer prompt states the rule explicitly and the broker enforces it after parsing.
+Every id appearing in `concerns`, `questions`, or `advisory_notes` must be unique across all three arrays. An id may not be reused within a single array, and may not appear in more than one of those arrays. Reviewer output that violates this rule is rejected with `reviewer_failed`. JSON Schema cannot express cross-array uniqueness, so the reviewer prompt states the rule explicitly and the broker enforces it after parsing.

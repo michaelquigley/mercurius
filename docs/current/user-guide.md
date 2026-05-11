@@ -23,10 +23,10 @@ review_context: |
 review_focus: |
   Pay particular attention to invariants specific to this project that the
   universal what-to-flag criteria do not already cover.
-reviewers:
-  - name: codex
-    impl: codex
-    model: gpt-5.5
+reviewer:
+  name: codex
+  impl: codex
+  model: gpt-5.5
 ```
 
 `review_context` and `review_focus` are the calibration surface for the reviewer. Edit them in the YAML before opening a session - they are not MCP tool inputs.
@@ -60,19 +60,13 @@ Mercurius speaks MCP over stdio. Logs go to stderr so stdout stays reserved for 
 
 ## Open a Session
 
-Ask the design agent to open a Mercurius session. The session itself takes no artifacts - it just creates a folder and binds a reviewer:
+Ask the design agent to open a Mercurius session. The session itself takes no inputs - the reviewer is fixed in `mercurius.yaml`, and artifacts are passed at round-start time:
 
 ```json
 {}
 ```
 
-If the config has multiple reviewers, pass the name of the one you want:
-
-```json
-{ "reviewers": ["codex"] }
-```
-
-The response reports the session id, the configured `max_findings`, and whether `review_context` and `review_focus` were found in the config (so the agent can confirm the YAML edits took effect).
+The response reports the session id, the configured `max_findings`, the bound reviewer, and whether `review_context` and `review_focus` were found in the config (so the agent can confirm the YAML edits took effect).
 
 ## Run a Round
 
@@ -132,7 +126,7 @@ Dispositions are `fixed`, `rejected`, or `deferred`:
 - `rejected`: disagreed with the finding.
 - `deferred`: agreed but explicitly not addressing now.
 
-Decision refs match a concern, question, or advisory_note id from this round. Decisions are written into the round log only. They do not carry forward into other rounds in the same session - each round starts cold.
+Decision refs match a concern, question, or advisory_note id from this round. Decisions are written to a sibling `_notes.md` file inside the round directory; the immutable round log itself is not touched. Decisions do not carry forward into other rounds in the same session - each round starts cold.
 
 ## Decide Whether to Continue
 
