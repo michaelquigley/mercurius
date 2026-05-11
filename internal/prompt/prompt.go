@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/michaelquigley/mercurius/internal/reviewer"
 	"github.com/michaelquigley/mercurius/internal/schema"
 )
 
@@ -22,12 +21,10 @@ type Artifact struct {
 
 // Request contains runtime values for the standard review prompt.
 type Request struct {
-	Artifacts      []Artifact
-	PriorDecisions []reviewer.PriorDecision
-	ReviewContext  string
-	DecisionsLog   string
-	ReviewFocus    string
-	MaxFindings    int
+	Artifacts     []Artifact
+	ReviewContext string
+	ReviewFocus   string
+	MaxFindings   int
 }
 
 // Build assembles the standard review prompt and schema payload.
@@ -83,25 +80,6 @@ func Build(req Request) (string, json.RawMessage) {
 	for _, artifact := range req.Artifacts {
 		writeArtifact(&b, artifact)
 	}
-
-	b.WriteString("## Prior decisions\n\n")
-	if len(req.PriorDecisions) == 0 {
-		b.WriteString("(No prior decisions; this is the first round of review for this session.)\n\n")
-	} else {
-		b.WriteString("The following decisions have been adjudicated in earlier rounds. Do not re-raise them unless there is a substantive new reason - for example, the artifacts have changed materially since the decision was made. If you do re-raise a prior decision, your `rationale` must reference the prior decision and explain why it should be revisited.\n\n")
-		for _, decision := range req.PriorDecisions {
-			b.WriteString(fmt.Sprintf("- Round %d, %s (%s): %s\n", decision.RoundNumber, decision.Ref, decision.Disposition, decision.Note))
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString("Rendered decisions log:\n\n")
-	if strings.TrimSpace(req.DecisionsLog) == "" {
-		b.WriteString("(no decisions log has been recorded yet)\n\n")
-	} else {
-		b.WriteString(strings.TrimRight(strings.TrimSpace(req.DecisionsLog), "\n"))
-		b.WriteString("\n\n")
-	}
-	b.WriteString("Treat fixed, rejected, and deferred decisions as adjudicated session context. Do not re-raise these items unless the artifacts now make the prior decision concretely broken or there is a genuinely new angle.\n\n")
 
 	b.WriteString("## Verdict and severity\n\n")
 	b.WriteString("Apply these definitions precisely.\n\n")

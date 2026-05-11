@@ -73,7 +73,7 @@ Advisory notes are non-blocking polish or downstream considerations.
 }
 ```
 
-Advisory notes are returned to the design agent as `triage.advisory_notes`, separate from blocking findings. They do not count against `max_findings`. The design agent can disposition advisory ids via `record_round_notes` the same way it dispositions concerns and questions; advisory dispositions flow into the decisions log and prior-decisions block but do not influence the convergence counters.
+Advisory notes are returned to the design agent as `triage.advisory_notes`, separate from blocking findings. They do not count against `max_findings`. The design agent can disposition advisory ids via `record_round_notes` the same way it dispositions concerns and questions; advisory dispositions are recorded in the round log alongside blocking-finding dispositions, but they do not block readiness.
 
 ## Proposed Diffs
 

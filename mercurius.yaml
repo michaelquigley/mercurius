@@ -1,10 +1,8 @@
 # example mercurius.yaml. copy this into a project directory as
 # `mercurius.yaml` and edit the fields below. fields omitted here fall back to
-# sane defaults (log_destination: .mercurius, default_budget: 4,
-# max_findings: 6). the project name is derived from the directory holding
-# the config file.
+# sane defaults (log_destination: .mercurius, max_findings: 6). the project
+# name is derived from the directory holding the config file.
 
-default_budget: 4
 max_findings: 6
 
 # review_context describes project posture and constraints. it calibrates
@@ -27,13 +25,10 @@ review_focus: |
   pay particular attention to:
 
   - broker invariants that are easy to drift past in prose: atomic
-    round-failure cleanup (no orphan logs, no partial snapshots, no budget
-    consumption on failure), single-reviewer-per-session, and broker-owned
-    prompt assembly (reviewers run their underlying tool and return raw
-    output; they do not construct prompts).
-  - decisions carry-forward: adjudicated findings must not be silently
-    re-raised across rounds, and the prior-decisions prompt block must
-    reflect what is in decisions.md.
+    round-failure cleanup (no orphan logs, no partial snapshots on failure),
+    single-reviewer-per-session, and broker-owned prompt assembly (reviewers
+    run their underlying tool and return raw output; they do not construct
+    prompts).
   - MCP tool surface stability: parameter names, error codes, and response
     shapes are part of the contract design agents depend on.
 

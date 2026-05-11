@@ -28,32 +28,25 @@ Expected broker failures are returned as tool error results with structured cont
 
 ## `open_session`
 
-Starts a review session.
+Opens a review session - a lightweight container for one or more rounds.
 
 Request:
 
 ```json
 {
-  "artifacts": [
-    { "name": "design", "path": "/abs/path/to/design.md" },
-    { "name": "work-order", "path": "/abs/path/to/work-order.md" }
-  ],
-  "reviewers": ["codex"],
-  "budget": 4,
-  "review_context": "optional session-specific constraints",
-  "review_focus": "optional session-specific focus"
+  "reviewers": ["codex"]
 }
 ```
 
-`review_context` and `review_focus` are optional and override the corresponding values from `mercurius.yaml` for this session only. Whitespace-only values are treated as absent and the config value is used.
+`reviewers` is optional when the config has exactly one reviewer. `review_context` and `review_focus` are read from `mercurius.yaml`; they are not tool inputs. Edit the YAML before opening a session if you want different calibration.
 
-Response includes `session_id`, budget state, `max_findings`, selected reviewer, artifacts, `review_context_source`, `review_context_present`, `review_focus_source`, and `review_focus_present`. Each `_source` field is one of `"config"`, `"session"`, or `"none"`.
+Response includes `session_id`, `max_findings`, the selected reviewer, and the `review_context_present` and `review_focus_present` booleans so the agent can confirm the YAML provides those fields.
 
-Common errors: `invalid_artifacts`, `unknown_reviewer`, `panel_mode_unsupported`, `invalid_budget`, `invalid_log_destination`.
+Common errors: `unknown_reviewer`, `panel_mode_unsupported`, `invalid_log_destination`.
 
 ## `start_review_round`
 
-Starts one background review round and returns immediately.
+Starts one background review round and returns immediately. Artifacts are required and scoped to this round only - nothing from a prior round in the same session carries over.
 
 Request:
 
@@ -61,16 +54,15 @@ Request:
 {
   "session_id": "s_...",
   "artifacts": [
-    { "name": "design", "path": "/abs/path/to/design.md" }
+    { "name": "design",     "path": "/abs/path/to/design.md" },
+    { "name": "work-order", "path": "/abs/path/to/work-order.md" }
   ]
 }
 ```
 
-`artifacts` is optional. When present, it replaces the session's artifact set only after the round succeeds.
-
 Response includes round number, state, reviewer, status path, events path, monitor command, and next action. The design agent should tell the user to monitor and re-engage when the round completes.
 
-Common errors: `unknown_session`, `session_closed`, `budget_exhausted`, `round_in_progress`, `invalid_artifacts`.
+Common errors: `unknown_session`, `session_closed`, `round_in_progress`, `invalid_artifacts`.
 
 ## `round_status`
 
@@ -88,7 +80,7 @@ Common errors: `unknown_session`, `unknown_round`.
 
 ## `collect_round`
 
-Returns a completed round result with triage and convergence guidance.
+Returns a completed round result with triage guidance.
 
 Request:
 
@@ -100,11 +92,13 @@ Response includes:
 
 - `manifest`: snapshot metadata.
 - `reviewers`: raw reviewer outputs and usage notes.
-- `triage.findings`: blocking concerns and questions.
+- `triage.findings`: blocking concerns and questions, in reviewer-emitted order.
 - `triage.advisory_notes`: non-blocking polish.
-- `triage.next_finding`: default first blocking finding.
-- `convergence`: advisory diminishing-return signal.
-- `next_action`: design-agent guidance.
+- `triage.next_finding`: default first blocking finding (highest severity, ties broken by id).
+- `triage.guidance`: instructions for the design agent on how to walk findings.
+- `next_action`: a one-line summary of what the agent should do next.
+
+`triage.guidance` and `next_action` direct the agent to walk findings one at a time, explaining each finding and its proposed solution clearly and simply (using few words), discussing it with the user, implementing the fix once aligned, and then stopping before moving to the next finding.
 
 If the round is still running, the tool returns `round_in_progress`. The agent should not immediately retry in a loop; it should ask the user to monitor and re-engage after completion.
 
@@ -112,7 +106,7 @@ Common errors: `unknown_session`, `unknown_round`, `round_in_progress`, `reviewe
 
 ## `record_round_notes`
 
-Records design-agent commentary and human decisions for a completed round.
+Records commentary and human decisions for a completed round. This call implicitly finalizes the round - there is no separate `close_round` step.
 
 Request:
 
@@ -122,40 +116,30 @@ Request:
   "round_number": 1,
   "commentary": "markdown commentary",
   "decisions": [
-    {
-      "ref": "C-1",
-      "disposition": "fixed",
-      "note": "fix landed in the work order"
-    }
+    { "ref": "C-1", "disposition": "fixed", "note": "fix landed in the work order" }
   ]
 }
 ```
 
-Dispositions are `fixed`, `rejected`, or `deferred`. Decision refs must match a concern, question, or advisory_note id from the round. Advisory dispositions are recorded in `decisions.md` and flow into the prior-decisions block of the next round's prompt the same way blocking dispositions do, but they do not contribute to the convergence counters (`accepted_decisions`, `declined_or_deferred_decisions`), which track blocking-finding triage progress only. The `accepted_decisions` field name is retained for backward compatibility (a 1.0 cleanup); under the current vocabulary it counts `fixed` decisions specifically.
-
-The tool updates the round log, writes `<session_dir>/decisions.md`, and feeds decisions into future reviewer prompts.
+Dispositions are `fixed`, `rejected`, or `deferred`. Decision refs must match a concern, question, or advisory_note id from this round. The tool updates the round log only; decisions do not carry forward into future rounds.
 
 Common errors: `unknown_session`, `unknown_round`, `empty_notes`, `unknown_ref`, `invalid_decision`.
 
 ## `close_session`
 
-Closes a session.
+Closes a session. Sessions are light groupings of rounds; closure just marks the arc done.
 
 Request:
 
 ```json
-{ "session_id": "s_...", "verdict": "ready_to_build" }
+{ "session_id": "s_..." }
 ```
 
-Valid verdicts are `ready_to_build`, `paused`, and `abandoned`.
-
-`ready_to_build` does not require zero findings. It means the remaining findings - including any deferred or rejected ones - are below the noise floor for the implementer the artifacts are written for, under the stated `review_context`. Advisory notes never block readiness.
-
-Common errors: `unknown_session`, `already_closed`, `round_in_progress`, `invalid_verdict`.
+Common errors: `unknown_session`, `already_closed`, `round_in_progress`.
 
 ## `session_status`
 
-Returns a read-only session view, including budget state, selected reviewer, artifacts, last error, active/latest round job, completed rounds, review-context and review-focus metadata, and convergence. The response includes `review_context_source` / `review_context_present` and `review_focus_source` / `review_focus_present`, parallel to the `open_session` response, so an agent can confirm which override is in effect at any point during the session.
+Returns a read-only session view: state, opened/closed timestamps, configured `max_findings`, `review_context_present` and `review_focus_present` booleans, the selected reviewer, the latest active/last round job, completed rounds, and last error.
 
 Request:
 

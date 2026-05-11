@@ -14,7 +14,6 @@ reviewers:
 
 ```yaml
 log_destination: ./reviews
-default_budget: 4
 max_findings: 8
 review_context: |
   Deployment: personal tool, single supervised implementer.
@@ -40,13 +39,19 @@ reviewers:
 ## Optional Fields
 
 - `log_destination`: directory where session logs, status files, and snapshots are written. Default is `.mercurius` (relative to the config file's directory).
-- `default_budget`: default maximum successful rounds per session. Default is `4`. `open_session.budget` can override it.
 - `max_findings`: maximum blocking findings across `concerns` plus `questions` in a successful round. Default is `6`. Advisory notes do not count.
-- `review_context`: free-form markdown describing project posture and constraints. Calibrates reviewer rigor.
+- `review_context`: free-form markdown describing project posture and constraints. Calibrates reviewer rigor. Read at every round (captured per round at the round's start).
 - `review_focus`: free-form markdown for project-specific things to look for that the base review philosophy does not already cover (typically one paragraph). Inserted in the project-specific focus section of the prompt.
 - `reviewers[].binary_path`: reviewer binary path. For `codex`, omitted means use normal executable lookup.
 - `reviewers[].model`: reviewer model string passed to the reviewer implementation.
 - `reviewers[].extra_args`: additional reviewer-specific CLI arguments.
+
+`review_context` and `review_focus` are configuration-only - they are not MCP tool inputs. The design agent should edit the YAML before opening a session if it wants different calibration.
+
+## Removed Fields
+
+- `default_budget`: removed. Rounds are single-shot and no longer share a budget across a session. The loader rejects configs that still include this key with a clear error message.
+- `prompt_overrides`: renamed to `review_focus`. The loader rejects configs that still include the old key.
 
 ## Project Name
 

@@ -22,7 +22,6 @@ type ReviewerSpec struct {
 type Options struct {
 	LogDestination string
 	ConfigPath     string
-	DefaultBudget  int
 	MaxFindings    int
 	ReviewContext  string
 	ReviewFocus    string
@@ -38,11 +37,7 @@ type Artifact struct {
 
 // OpenSessionRequest starts a new review session.
 type OpenSessionRequest struct {
-	Artifacts     []Artifact
-	Reviewers     []string
-	Budget        int
-	ReviewContext string
-	ReviewFocus   string
+	Reviewers []string
 }
 
 // OpenSessionResponse describes a newly opened session.
@@ -50,19 +45,13 @@ type OpenSessionResponse struct {
 	SessionID            string
 	SessionDir           string
 	OpenedAt             time.Time
-	Budget               int
-	BudgetRemaining      int
 	MaxFindings          int
-	ReviewContextSource  string
 	ReviewContextPresent bool
-	ReviewFocusSource    string
 	ReviewFocusPresent   bool
-	RoundsUsed           int
 	Reviewers            []ReviewerInfo
-	Artifacts            []RegisteredArtifact
 }
 
-// StartRoundRequest runs a new round, optionally replacing artifacts.
+// StartRoundRequest runs a new round in the named session.
 type StartRoundRequest struct {
 	SessionID string
 	Artifacts []Artifact
@@ -87,7 +76,6 @@ type CollectedRoundResponse struct {
 	LogPath     string
 	Manifest    []ArtifactManifestEntry
 	Reviewers   []ReviewerResult
-	Convergence Convergence
 }
 
 // RoundStatusRequest asks for a round job status.
@@ -134,16 +122,6 @@ type ReviewerResult struct {
 	UsageNotes   string
 }
 
-// Convergence describes advisory diminishing-return signals for a session.
-type Convergence struct {
-	Signal                      string
-	Message                     string
-	LatestBlockingFindings      int
-	PreviousBlockingFindings    int
-	DeclinedOrDeferredDecisions int
-	AcceptedDecisions           int
-}
-
 // RecordRoundNotesRequest replaces commentary and decisions for a round.
 type RecordRoundNotesRequest struct {
 	SessionID   string
@@ -170,13 +148,11 @@ type RecordRoundNotesResponse struct {
 // CloseSessionRequest closes a session.
 type CloseSessionRequest struct {
 	SessionID string
-	Verdict   string
 }
 
 // CloseSessionResponse describes a closed session.
 type CloseSessionResponse struct {
 	SessionID string
-	Verdict   string
 	ClosedAt  time.Time
 }
 
@@ -184,24 +160,17 @@ type CloseSessionResponse struct {
 type SessionStatusResponse struct {
 	SessionID            string
 	State                string
-	Verdict              *string
 	OpenedAt             time.Time
 	ClosedAt             *time.Time
-	Budget               int
-	BudgetRemaining      int
 	MaxFindings          int
-	ReviewContextSource  string
 	ReviewContextPresent bool
-	ReviewFocusSource    string
 	ReviewFocusPresent   bool
-	RoundsUsed           int
+	RoundCount           int
 	Reviewers            []ReviewerInfo
-	Artifacts            []RegisteredArtifact
 	LastError            *ErrorInfo
 	ActiveRound          *RoundStatusResponse
 	LastRoundJob         *RoundStatusResponse
 	Rounds               []RoundStatus
-	Convergence          Convergence
 }
 
 // RoundStatus is a read-only round summary.
@@ -222,9 +191,8 @@ type ListSessionsResponse struct {
 type SessionSummary struct {
 	SessionID  string
 	State      string
-	Verdict    *string
 	OpenedAt   time.Time
-	RoundsUsed int
+	RoundCount int
 }
 
 // ReviewerInfo describes a configured or selected reviewer.
@@ -232,13 +200,6 @@ type ReviewerInfo struct {
 	Name  string
 	Impl  string
 	Model string
-}
-
-// RegisteredArtifact describes one artifact registered with a session.
-type RegisteredArtifact struct {
-	Name       string
-	SourcePath string
-	Inline     bool
 }
 
 // ErrorInfo is a durable session-visible broker error summary.

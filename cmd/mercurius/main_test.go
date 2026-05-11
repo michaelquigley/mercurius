@@ -14,24 +14,21 @@ import (
 
 	"github.com/michaelquigley/mercurius/internal/broker"
 	"github.com/michaelquigley/mercurius/internal/config"
-	"github.com/michaelquigley/mercurius/internal/prompt"
-	"github.com/michaelquigley/mercurius/internal/reviewer"
 	monitorpkg "github.com/michaelquigley/mercurius/internal/monitor"
+	"github.com/michaelquigley/mercurius/internal/prompt"
 	"github.com/spf13/cobra"
 )
 
-func TestPrintStatusSuppressesEmptyConvergence(t *testing.T) {
+func TestPrintStatusOmitsRemovedFields(t *testing.T) {
 	cmd, out := testCommand()
 	now := time.Date(2026, 5, 5, 19, 38, 10, 0, time.UTC)
 
 	printStatus(cmd, monitorpkg.SessionStatus{
 		SessionID:            "s_test",
 		State:                "active",
-		Budget:               4,
-		BudgetRemaining:      4,
-		ReviewContextSource:  "config",
+		RoundCount:           1,
 		ReviewContextPresent: true,
-		Convergence:          monitorpkg.Convergence{Signal: "none", Message: "No convergence signal yet."},
+		ReviewFocusPresent:   true,
 		ActiveRound: &monitorpkg.RoundJob{
 			SessionID:   "s_test",
 			RoundNumber: 1,
@@ -46,7 +43,9 @@ func TestPrintStatusSuppressesEmptyConvergence(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"session 's_test' active",
-		"review context: config",
+		"rounds: 1",
+		"review context: present",
+		"review focus: present",
 		"active round: 1 running reviewer='codex'",
 		"monitor files: status='/tmp/status.json' events='/tmp/events.ndjson'",
 	} {
@@ -54,8 +53,10 @@ func TestPrintStatusSuppressesEmptyConvergence(t *testing.T) {
 			t.Fatalf("expected monitor status to contain %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "convergence") {
-		t.Fatalf("empty convergence should be suppressed:\n%s", got)
+	for _, banned := range []string{"budget", "convergence", "verdict"} {
+		if strings.Contains(got, banned) {
+			t.Fatalf("status should not contain %q:\n%s", banned, got)
+		}
 	}
 }
 
@@ -66,13 +67,13 @@ func TestPrintRoundTerminalActionCompleted(t *testing.T) {
 		Event:       "round_completed",
 		SessionID:   "s_test",
 		RoundNumber: 2,
-		LogPath:     "/tmp/round-02.md",
+		LogPath:     "/tmp/round-02/_round.md",
 	})
 
 	got := out.String()
 	for _, want := range []string{
 		"round 2 completed",
-		"log: '/tmp/round-02.md'",
+		"log: '/tmp/round-02/_round.md'",
 		"next: ask the design agent to call collect_round for session 's_test' round 2",
 	} {
 		if !strings.Contains(got, want) {
@@ -131,19 +132,10 @@ reviewers:
 		t.Fatalf("write artifact: %v", err)
 	}
 
-	cmd, out := testCommand()
-	cmd.SetArgs([]string{"preview", "--config", cfgPath, "--artifact", "design=" + artifactPath})
-	cmd.AddCommand(newPreviewCommand(stringPtr(cfgPath)))
-	if err := runPreview(cfgPath, "design="+artifactPath, "", "", 0, ""); err != nil {
+	if err := runPreview(cfgPath, "design="+artifactPath, ""); err != nil {
 		t.Fatalf("run preview: %v", err)
 	}
-	got := out.String()
-	if got != "" {
-		t.Fatalf("expected empty cobra buffer when invoked via runPreview; instead got:\n%s", got)
-	}
 
-	// independently build what Build() would emit for the same inputs and
-	// compare byte-for-byte.
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -152,13 +144,13 @@ reviewers:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	req, err := buildPreviewContext(cfg, specs, "", "", 0)
+	req, err := buildPreviewContext(cfg, specs)
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
 	wantText, _ := prompt.Build(req)
 
-	previewText := capturePreviewOutput(t, cfgPath, []string{"design=" + artifactPath}, "", "", 0)
+	previewText := capturePreviewOutput(t, cfgPath, []string{"design=" + artifactPath})
 	if previewText != wantText {
 		t.Fatalf("preview output drifted from prompt.Build output")
 	}
@@ -166,10 +158,8 @@ reviewers:
 	// snapshot path sentinel must be the only difference between preview and
 	// broker round 1's prompt.
 	brokerText := captureBrokerRound1Prompt(t, cfg, []broker.Artifact{{Name: "design", Path: artifactPath}})
-	hash := sha256.Sum256([]byte("# design\n"))
-	hashStr := "sha256:" + hex.EncodeToString(hash[:])
 	previewNormalized := strings.Replace(previewText, "Snapshot path: "+previewSnapshotSentinel, "Snapshot path: __NORMALIZED__", 1)
-	brokerNormalized := normalizeBrokerSnapshot(brokerText, "design", hashStr)
+	brokerNormalized := strings.Replace(brokerText, "Snapshot path: /synthetic-snapshot/design", "Snapshot path: __NORMALIZED__", 1)
 	if previewNormalized != brokerNormalized {
 		t.Fatalf("preview and broker round 1 prompts differ beyond the snapshot path sentinel")
 	}
@@ -187,7 +177,7 @@ reviewers:
 	if err := os.WriteFile(artifactPath, []byte("hello\n"), 0o600); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	if err := runPreview(cfgPath, "design="+artifactPath, "", "", 0, ""); err != nil {
+	if err := runPreview(cfgPath, "design="+artifactPath, ""); err != nil {
 		t.Fatalf("run preview: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tmp, "reviews")); !os.IsNotExist(err) {
@@ -204,13 +194,10 @@ reviewers:
     impl: dummy
 `)
 	root := newRootCommand()
-	cmd, out := testCommand()
-	cmd.SetArgs([]string{"monitor", "--config", cfgPath, "--all"})
+	_, out := testCommand()
 	root.SetOut(out)
 	root.SetErr(out)
 	root.SetArgs([]string{"monitor", "--config", cfgPath, "--all"})
-	// monitor against a missing log_destination must error cleanly without
-	// creating the directory.
 	err := root.ExecuteContext(context.Background())
 	if err == nil {
 		t.Fatal("expected monitor against missing log_destination to error")
@@ -232,19 +219,10 @@ func writePreviewConfig(t *testing.T, dir string, body string) string {
 	return cfgPath
 }
 
-func runPreview(cfgPath string, artifact string, reviewContext string, reviewFocus string, maxFindings int, output string) error {
+func runPreview(cfgPath string, artifact string, output string) error {
 	configPath := cfgPath
 	cmd := newPreviewCommand(&configPath)
 	args := []string{"--artifact", artifact}
-	if reviewContext != "" {
-		args = append(args, "--review-context", reviewContext)
-	}
-	if reviewFocus != "" {
-		args = append(args, "--review-focus", reviewFocus)
-	}
-	if maxFindings > 0 {
-		args = append(args, "--max-findings", fmtInt(maxFindings))
-	}
 	if output != "" {
 		args = append(args, "--output", output)
 	}
@@ -253,22 +231,13 @@ func runPreview(cfgPath string, artifact string, reviewContext string, reviewFoc
 	return cmd.Execute()
 }
 
-func capturePreviewOutput(t *testing.T, cfgPath string, artifacts []string, reviewContext string, reviewFocus string, maxFindings int) string {
+func capturePreviewOutput(t *testing.T, cfgPath string, artifacts []string) string {
 	t.Helper()
 	configPath := cfgPath
 	cmd := newPreviewCommand(&configPath)
 	args := []string{}
 	for _, a := range artifacts {
 		args = append(args, "--artifact", a)
-	}
-	if reviewContext != "" {
-		args = append(args, "--review-context", reviewContext)
-	}
-	if reviewFocus != "" {
-		args = append(args, "--review-focus", reviewFocus)
-	}
-	if maxFindings > 0 {
-		args = append(args, "--max-findings", fmtInt(maxFindings))
 	}
 	cmd.SetArgs(args)
 	var buf bytes.Buffer
@@ -281,8 +250,6 @@ func capturePreviewOutput(t *testing.T, cfgPath string, artifacts []string, revi
 
 func captureBrokerRound1Prompt(t *testing.T, cfg *config.Config, artifacts []broker.Artifact) string {
 	t.Helper()
-	// reproduce the prompt construction broker round 1 performs for an empty
-	// session, but skip the reviewer dispatch and snapshotting machinery.
 	promptArtifacts := make([]prompt.Artifact, 0, len(artifacts))
 	for _, a := range artifacts {
 		content, err := os.ReadFile(a.Path)
@@ -299,43 +266,12 @@ func captureBrokerRound1Prompt(t *testing.T, cfg *config.Config, artifacts []bro
 		})
 	}
 	text, _ := prompt.Build(prompt.Request{
-		Artifacts:      promptArtifacts,
-		PriorDecisions: []reviewer.PriorDecision(nil),
-		ReviewContext:  cfg.ReviewContext,
-		ReviewFocus:    cfg.ReviewFocus,
-		DecisionsLog:   broker.EmptySessionDecisionsLogText(),
-		MaxFindings:    cfg.MaxFindings,
+		Artifacts:     promptArtifacts,
+		ReviewContext: cfg.ReviewContext,
+		ReviewFocus:   cfg.ReviewFocus,
+		MaxFindings:   cfg.MaxFindings,
 	})
 	return text
-}
-
-func normalizeBrokerSnapshot(text string, artifactName string, hash string) string {
-	// replace the broker-side synthetic snapshot path with the same sentinel
-	// the preview path uses, so the only meaningful difference between the
-	// two prompts is removed for the byte-equality check.
-	return strings.Replace(text, "Snapshot path: /synthetic-snapshot/"+artifactName, "Snapshot path: __NORMALIZED__", 1)
-}
-
-func stringPtr(s string) *string { return &s }
-
-func fmtInt(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	digits := []byte{}
-	if n < 0 {
-		digits = append(digits, '-')
-		n = -n
-	}
-	var rev []byte
-	for n > 0 {
-		rev = append(rev, byte('0'+n%10))
-		n /= 10
-	}
-	for i := len(rev) - 1; i >= 0; i-- {
-		digits = append(digits, rev[i])
-	}
-	return string(digits)
 }
 
 func testCommand() (*cobra.Command, *bytes.Buffer) {

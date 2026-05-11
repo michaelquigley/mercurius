@@ -182,15 +182,12 @@ func monitorSession(cmd *cobra.Command, logDestination string, sessionID string,
 func printStatus(cmd *cobra.Command, status monitorpkg.SessionStatus) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "session '%s' %s\n", status.SessionID, status.State)
-	fmt.Fprintf(out, "rounds: used=%d budget_remaining=%d\n", status.RoundsUsed, status.BudgetRemaining)
+	fmt.Fprintf(out, "rounds: %d\n", status.RoundCount)
 	if status.ReviewContextPresent {
-		fmt.Fprintf(out, "review context: %s\n", status.ReviewContextSource)
+		fmt.Fprintln(out, "review context: present")
 	}
-	if status.Convergence.Signal != "" && status.Convergence.Signal != "none" {
-		fmt.Fprintf(out, "convergence: %s latest_blocking=%d previous_blocking=%d accepted_decisions=%d declined_or_deferred_decisions=%d\n", status.Convergence.Signal, status.Convergence.LatestBlockingFindings, status.Convergence.PreviousBlockingFindings, status.Convergence.AcceptedDecisions, status.Convergence.DeclinedOrDeferredDecisions)
-		if status.Convergence.Message != "" {
-			fmt.Fprintf(out, "convergence message: %s\n", status.Convergence.Message)
-		}
+	if status.ReviewFocusPresent {
+		fmt.Fprintln(out, "review focus: present")
 	}
 	if status.LastError != nil {
 		fmt.Fprintf(out, "last error: %s - %s\n", status.LastError.Code, status.LastError.Message)

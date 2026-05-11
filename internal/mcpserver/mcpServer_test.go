@@ -53,13 +53,8 @@ func TestDummyReviewFlow(t *testing.T) {
 	artifactPath := writeArtifact(t, "design.md", "# design\n")
 
 	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "open_session",
-		Arguments: map[string]any{
-			"artifacts": []map[string]any{{
-				"name": "design.md",
-				"path": artifactPath,
-			}},
-		},
+		Name:      "open_session",
+		Arguments: map[string]any{},
 	})
 	if err != nil {
 		t.Fatalf("open session: %v", err)
@@ -68,20 +63,14 @@ func TestDummyReviewFlow(t *testing.T) {
 	if openOutput.SessionID == "" {
 		t.Fatal("expected session id")
 	}
-	if openOutput.Budget != 2 {
-		t.Fatalf("budget = %d, want 2", openOutput.Budget)
-	}
-	if openOutput.BudgetRemaining != 2 || openOutput.RoundsUsed != 0 || openOutput.MaxFindings != config.DefaultMaxFindings {
-		t.Fatalf("open budget state = %+v", openOutput)
+	if openOutput.MaxFindings != config.DefaultMaxFindings {
+		t.Fatalf("max findings = %d, want %d", openOutput.MaxFindings, config.DefaultMaxFindings)
 	}
 	if len(openOutput.Reviewers) != 1 || openOutput.Reviewers[0].Name != "dummy" {
 		t.Fatalf("open reviewers = %+v", openOutput.Reviewers)
 	}
-	if len(openOutput.Artifacts) != 1 || openOutput.Artifacts[0].Name != "design.md" {
-		t.Fatalf("open artifacts = %+v", openOutput.Artifacts)
-	}
 
-	round1 := startAndCollectRoundTool(t, ctx, client, openOutput.SessionID)
+	round1 := startAndCollectRoundTool(t, ctx, client, openOutput.SessionID, artifactPath)
 	if round1.RoundNumber != 1 {
 		t.Fatalf("round number = %d, want 1", round1.RoundNumber)
 	}
@@ -94,7 +83,7 @@ func TestDummyReviewFlow(t *testing.T) {
 	if !strings.Contains(round1.NextAction, "pause") {
 		t.Fatalf("round next action = %q", round1.NextAction)
 	}
-	if round1.Triage.Mode != "one_finding_per_user_turn" || round1.Triage.TotalFindings != 0 || round1.Triage.RemainingFindings != 0 || len(round1.Triage.Findings) != 0 || round1.Triage.NextFinding != nil {
+	if round1.Triage.Mode != "walk_findings_one_at_a_time" || round1.Triage.TotalFindings != 0 || round1.Triage.RemainingFindings != 0 || len(round1.Triage.Findings) != 0 || round1.Triage.NextFinding != nil {
 		t.Fatalf("no-finding triage = %+v", round1.Triage)
 	}
 	if !strings.Contains(round1.Triage.Guidance, "No concerns or questions") || !strings.Contains(round1.NextAction, "no blocking findings") {
@@ -120,7 +109,7 @@ func TestDummyReviewFlow(t *testing.T) {
 		t.Fatalf("notes next action = %q", notesOutput.NextAction)
 	}
 
-	round2 := startAndCollectRoundTool(t, ctx, client, openOutput.SessionID)
+	round2 := startAndCollectRoundTool(t, ctx, client, openOutput.SessionID, artifactPath)
 	if round2.RoundNumber != 2 {
 		t.Fatalf("round number = %d, want 2", round2.RoundNumber)
 	}
@@ -135,10 +124,10 @@ func TestDummyReviewFlow(t *testing.T) {
 		t.Fatalf("session status: %v", err)
 	}
 	statusOutput := decodeStructured[SessionStatusOutput](t, statusResult)
-	if statusOutput.RoundsUsed != 2 || statusOutput.BudgetRemaining != 0 || statusOutput.MaxFindings != config.DefaultMaxFindings || len(statusOutput.Rounds) != 2 || !statusOutput.Rounds[0].HasNotes {
+	if statusOutput.RoundCount != 2 || statusOutput.MaxFindings != config.DefaultMaxFindings || len(statusOutput.Rounds) != 2 || !statusOutput.Rounds[0].HasNotes {
 		t.Fatalf("status output = %+v", statusOutput)
 	}
-	if len(statusOutput.Reviewers) != 1 || len(statusOutput.Artifacts) != 1 || statusOutput.LastError != nil {
+	if len(statusOutput.Reviewers) != 1 || statusOutput.LastError != nil {
 		t.Fatalf("status diagnostics = %+v", statusOutput)
 	}
 
@@ -150,7 +139,7 @@ func TestDummyReviewFlow(t *testing.T) {
 		t.Fatalf("list sessions: %v", err)
 	}
 	listOutput := decodeStructured[ListSessionsOutput](t, listResult)
-	if len(listOutput.Sessions) != 1 || listOutput.Sessions[0].SessionID != openOutput.SessionID {
+	if len(listOutput.Sessions) != 1 || listOutput.Sessions[0].SessionID != openOutput.SessionID || listOutput.Sessions[0].RoundCount != 2 {
 		t.Fatalf("list output = %+v", listOutput)
 	}
 
@@ -158,14 +147,13 @@ func TestDummyReviewFlow(t *testing.T) {
 		Name: "close_session",
 		Arguments: map[string]any{
 			"session_id": openOutput.SessionID,
-			"verdict":    "ready_to_build",
 		},
 	})
 	if err != nil {
 		t.Fatalf("close session: %v", err)
 	}
 	closeOutput := decodeStructured[CloseSessionOutput](t, closeResult)
-	if closeOutput.Verdict != "ready_to_build" || closeOutput.ClosedAt == "" {
+	if closeOutput.SessionID != openOutput.SessionID || closeOutput.ClosedAt == "" {
 		t.Fatalf("close output = %+v", closeOutput)
 	}
 }
@@ -205,26 +193,16 @@ func TestListReviewers(t *testing.T) {
 func TestReviewerSelection(t *testing.T) {
 	cfg := testConfig(t, &config.ReviewerConfig{Name: "codex", Impl: "codex"}, dummyReviewer())
 	ctx, client := newTestClient(t, cfg)
-	artifactPath := writeArtifact(t, "design.md", "# design\n")
 
 	result, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "open_session",
-		Arguments: map[string]any{
-			"artifacts": []map[string]any{{
-				"name": "design.md",
-				"path": artifactPath,
-			}},
-		},
+		Name:      "open_session",
+		Arguments: map[string]any{},
 	})
 	assertToolError(t, result, err, broker.CodePanelModeUnsupported)
 
 	result, err = client.CallTool(ctx, &mcp.CallToolParams{
 		Name: "open_session",
 		Arguments: map[string]any{
-			"artifacts": []map[string]any{{
-				"name": "design.md",
-				"path": artifactPath,
-			}},
 			"reviewers": []string{"codex"},
 		},
 	})
@@ -238,10 +216,6 @@ func TestReviewerSelection(t *testing.T) {
 	result, err = client.CallTool(ctx, &mcp.CallToolParams{
 		Name: "open_session",
 		Arguments: map[string]any{
-			"artifacts": []map[string]any{{
-				"name": "design.md",
-				"path": artifactPath,
-			}},
 			"reviewers": []string{"codex", "dummy"},
 		},
 	})
@@ -250,131 +224,43 @@ func TestReviewerSelection(t *testing.T) {
 	result, err = client.CallTool(ctx, &mcp.CallToolParams{
 		Name: "open_session",
 		Arguments: map[string]any{
-			"artifacts": []map[string]any{{
-				"name": "design.md",
-				"path": artifactPath,
-			}},
 			"reviewers": []string{"missing"},
 		},
 	})
 	assertToolError(t, result, err, broker.CodeUnknownReviewer)
 }
 
-func TestOpenSessionReviewContextMetadata(t *testing.T) {
+func TestOpenSessionReportsReviewPresenceFromConfig(t *testing.T) {
 	cfg := testConfig(t, dummyReviewer())
 	cfg.ReviewContext = "config context"
-	ctx, client := newTestClient(t, cfg)
-	artifactPath := writeArtifact(t, "design.md", "# design\n")
-
-	result, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "open_session",
-		Arguments: map[string]any{
-			"artifacts": []map[string]any{{
-				"name": "design.md",
-				"path": artifactPath,
-			}},
-		},
-	})
-	if err != nil {
-		t.Fatalf("open session: %v", err)
-	}
-	configOutput := decodeStructured[OpenSessionOutput](t, result)
-	if configOutput.ReviewContextSource != "config" || !configOutput.ReviewContextPresent {
-		t.Fatalf("config context output = %+v", configOutput)
-	}
-
-	result, err = client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "open_session",
-		Arguments: map[string]any{
-			"artifacts": []map[string]any{{
-				"name": "design.md",
-				"path": artifactPath,
-			}},
-			"review_context": "session context",
-		},
-	})
-	if err != nil {
-		t.Fatalf("open session with override: %v", err)
-	}
-	sessionOutput := decodeStructured[OpenSessionOutput](t, result)
-	if sessionOutput.ReviewContextSource != "session" || !sessionOutput.ReviewContextPresent {
-		t.Fatalf("session context output = %+v", sessionOutput)
-	}
-
-	statusResult, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "session_status",
-		Arguments: map[string]any{
-			"session_id": sessionOutput.SessionID,
-		},
-	})
-	if err != nil {
-		t.Fatalf("session status: %v", err)
-	}
-	status := decodeStructured[SessionStatusOutput](t, statusResult)
-	if status.ReviewContextSource != "session" || !status.ReviewContextPresent {
-		t.Fatalf("status context = %+v", status)
-	}
-}
-
-func TestOpenSessionReviewFocusMetadata(t *testing.T) {
-	cfg := testConfig(t, dummyReviewer())
 	cfg.ReviewFocus = "config focus"
 	ctx, client := newTestClient(t, cfg)
-	artifactPath := writeArtifact(t, "design.md", "# design\n")
 
 	result, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "open_session",
-		Arguments: map[string]any{
-			"artifacts": []map[string]any{{
-				"name": "design.md",
-				"path": artifactPath,
-			}},
-		},
+		Name:      "open_session",
+		Arguments: map[string]any{},
 	})
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	configOutput := decodeStructured[OpenSessionOutput](t, result)
-	if configOutput.ReviewFocusSource != "config" || !configOutput.ReviewFocusPresent {
-		t.Fatalf("config focus output = %+v", configOutput)
-	}
-
-	result, err = client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "open_session",
-		Arguments: map[string]any{
-			"artifacts": []map[string]any{{
-				"name": "design.md",
-				"path": artifactPath,
-			}},
-			"review_focus": "session focus",
-		},
-	})
-	if err != nil {
-		t.Fatalf("open session with override: %v", err)
-	}
-	sessionOutput := decodeStructured[OpenSessionOutput](t, result)
-	if sessionOutput.ReviewFocusSource != "session" || !sessionOutput.ReviewFocusPresent {
-		t.Fatalf("session focus output = %+v", sessionOutput)
-	}
-
-	statusResult, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "session_status",
-		Arguments: map[string]any{
-			"session_id": sessionOutput.SessionID,
-		},
-	})
-	if err != nil {
-		t.Fatalf("session status: %v", err)
-	}
-	status := decodeStructured[SessionStatusOutput](t, statusResult)
-	if status.ReviewFocusSource != "session" || !status.ReviewFocusPresent {
-		t.Fatalf("status focus = %+v", status)
+	output := decodeStructured[OpenSessionOutput](t, result)
+	if !output.ReviewContextPresent || !output.ReviewFocusPresent {
+		t.Fatalf("expected both review_*_present true; got %+v", output)
 	}
 }
 
-func TestArtifactNameValidation(t *testing.T) {
+func TestArtifactNameValidationOnStartRound(t *testing.T) {
 	ctx, client := newTestClient(t, testConfig(t, dummyReviewer()))
 	artifactPath := writeArtifact(t, "design.md", "# design\n")
+
+	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "open_session",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	sessionID := decodeStructured[OpenSessionOutput](t, openResult).SessionID
 
 	tests := []string{
 		"dir/file",
@@ -388,8 +274,9 @@ func TestArtifactNameValidation(t *testing.T) {
 	for _, name := range tests {
 		t.Run(name, func(t *testing.T) {
 			result, err := client.CallTool(ctx, &mcp.CallToolParams{
-				Name: "open_session",
+				Name: "start_review_round",
 				Arguments: map[string]any{
+					"session_id": sessionID,
 					"artifacts": []map[string]any{{
 						"name": name,
 						"path": artifactPath,
@@ -405,7 +292,6 @@ func TestFailedRoundReturnsToolErrorAndStatusLastError(t *testing.T) {
 	logDestination := filepath.Join(t.TempDir(), "reviews")
 	b := broker.New(broker.Options{
 		LogDestination: logDestination,
-		DefaultBudget:  2,
 		Reviewers: []broker.ReviewerSpec{{
 			Name: "failing",
 			Impl: "dummy",
@@ -418,20 +304,15 @@ func TestFailedRoundReturnsToolErrorAndStatusLastError(t *testing.T) {
 	artifactPath := writeArtifact(t, "design.md", "# design\n")
 
 	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "open_session",
-		Arguments: map[string]any{
-			"artifacts": []map[string]any{{
-				"name": "design.md",
-				"path": artifactPath,
-			}},
-		},
+		Name:      "open_session",
+		Arguments: map[string]any{},
 	})
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
 	sessionID := decodeStructured[OpenSessionOutput](t, openResult).SessionID
 
-	errorOutput := startAndCollectRoundToolError(t, ctx, client, sessionID, broker.CodeReviewerFailed)
+	errorOutput := startAndCollectRoundToolError(t, ctx, client, sessionID, artifactPath, broker.CodeReviewerFailed)
 	if !errorOutput.Retryable || !strings.Contains(errorOutput.NextAction, "retry") {
 		t.Fatalf("error output = %+v", errorOutput)
 	}
@@ -446,8 +327,8 @@ func TestFailedRoundReturnsToolErrorAndStatusLastError(t *testing.T) {
 		t.Fatalf("session status: %v", err)
 	}
 	status := decodeStructured[SessionStatusOutput](t, statusResult)
-	if status.RoundsUsed != 0 || status.BudgetRemaining != 2 {
-		t.Fatalf("status budget after failure = %+v", status)
+	if status.RoundCount != 0 {
+		t.Fatalf("round count after failure = %d, want 0", status.RoundCount)
 	}
 	if status.LastError == nil || status.LastError.Code != broker.CodeReviewerFailed {
 		t.Fatalf("last error = %+v", status.LastError)
@@ -458,7 +339,6 @@ func TestAsyncReviewTools(t *testing.T) {
 	reviewerImpl := newBlockingReviewer(validReviewOutput())
 	b := broker.New(broker.Options{
 		LogDestination: filepath.Join(t.TempDir(), "reviews"),
-		DefaultBudget:  2,
 		MaxFindings:    config.DefaultMaxFindings,
 		Reviewers: []broker.ReviewerSpec{{
 			Name: "blocking",
@@ -472,13 +352,8 @@ func TestAsyncReviewTools(t *testing.T) {
 	artifactPath := writeArtifact(t, "design.md", "# design\n")
 
 	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "open_session",
-		Arguments: map[string]any{
-			"artifacts": []map[string]any{{
-				"name": "design.md",
-				"path": artifactPath,
-			}},
-		},
+		Name:      "open_session",
+		Arguments: map[string]any{},
 	})
 	if err != nil {
 		t.Fatalf("open session: %v", err)
@@ -489,6 +364,10 @@ func TestAsyncReviewTools(t *testing.T) {
 		Name: "start_review_round",
 		Arguments: map[string]any{
 			"session_id": sessionID,
+			"artifacts": []map[string]any{{
+				"name": "design.md",
+				"path": artifactPath,
+			}},
 		},
 	})
 	if err != nil {
@@ -552,10 +431,10 @@ func TestAsyncReviewTools(t *testing.T) {
 
 func TestCollectRoundTriageConcernFirst(t *testing.T) {
 	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithConcernAndQuestion(t))
-	sessionID := openTestSession(t, ctx, client)
+	sessionID, artifactPath := openTestSession(t, ctx, client)
 
-	collected := startAndCollectRoundTool(t, ctx, client, sessionID)
-	if collected.Triage.Mode != "one_finding_per_user_turn" {
+	collected := startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
+	if collected.Triage.Mode != "walk_findings_one_at_a_time" {
 		t.Fatalf("triage mode = %q", collected.Triage.Mode)
 	}
 	if collected.Triage.TotalFindings != 2 || collected.Triage.RemainingFindings != 1 {
@@ -583,19 +462,33 @@ func TestCollectRoundTriageConcernFirst(t *testing.T) {
 	if finding.Suggestion == nil || *finding.Suggestion != "make the acceptance criteria explicit" {
 		t.Fatalf("concern suggestion = %+v", finding)
 	}
-	if !strings.Contains(collected.Triage.Guidance, "present all entries in triage.findings") || !strings.Contains(collected.Triage.Guidance, "one blocking finding") || !strings.Contains(collected.Triage.Guidance, "fresh turn") {
-		t.Fatalf("triage guidance = %q", collected.Triage.Guidance)
+	for _, want := range []string{
+		"present all entries in triage.findings",
+		"walk findings one at a time",
+		"explain the finding and its proposed solution clearly and simply, using few words",
+		"implement the fix",
+	} {
+		if !strings.Contains(collected.Triage.Guidance, want) {
+			t.Fatalf("triage guidance missing %q:\n%s", want, collected.Triage.Guidance)
+		}
 	}
-	if !strings.Contains(collected.NextAction, "all triage.findings") || !strings.Contains(collected.NextAction, "one blocking finding only") || !strings.Contains(collected.NextAction, "stop") {
-		t.Fatalf("next action = %q", collected.NextAction)
+	for _, want := range []string{
+		"all triage.findings",
+		"walk findings one at a time",
+		"clearly and briefly",
+		"stop and wait",
+	} {
+		if !strings.Contains(collected.NextAction, want) {
+			t.Fatalf("next action missing %q: %q", want, collected.NextAction)
+		}
 	}
 }
 
 func TestCollectRoundTriageQuestionOnly(t *testing.T) {
 	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithQuestionOnly(t))
-	sessionID := openTestSession(t, ctx, client)
+	sessionID, artifactPath := openTestSession(t, ctx, client)
 
-	collected := startAndCollectRoundTool(t, ctx, client, sessionID)
+	collected := startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
 	if collected.Triage.TotalFindings != 1 || collected.Triage.RemainingFindings != 0 {
 		t.Fatalf("triage counts = %+v", collected.Triage)
 	}
@@ -685,9 +578,9 @@ func TestSelectNextFindingBySeverity(t *testing.T) {
 
 func TestCollectRoundTriageAdvisoryNotes(t *testing.T) {
 	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithAdvisoryOnly(t))
-	sessionID := openTestSession(t, ctx, client)
+	sessionID, artifactPath := openTestSession(t, ctx, client)
 
-	collected := startAndCollectRoundTool(t, ctx, client, sessionID)
+	collected := startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
 	if collected.Triage.TotalFindings != 0 || len(collected.Triage.Findings) != 0 || collected.Triage.NextFinding != nil {
 		t.Fatalf("blocking triage = %+v", collected.Triage)
 	}
@@ -697,9 +590,6 @@ func TestCollectRoundTriageAdvisoryNotes(t *testing.T) {
 	note := collected.Triage.AdvisoryNotes[0]
 	if note.ReviewerName != "triage" || note.Ref != "A-1" || note.Note != "shorten one paragraph" || note.Rationale != "easier to scan" {
 		t.Fatalf("advisory note = %+v", note)
-	}
-	if collected.Convergence.Signal != "consider_closing" || collected.Convergence.LatestBlockingFindings != 0 {
-		t.Fatalf("convergence = %+v", collected.Convergence)
 	}
 	if !strings.Contains(collected.NextAction, "no blocking findings") {
 		t.Fatalf("next action = %q", collected.NextAction)
@@ -721,7 +611,6 @@ func newTestClientWithFixedReviewer(t *testing.T, raw json.RawMessage) (context.
 
 	b := broker.New(broker.Options{
 		LogDestination: filepath.Join(t.TempDir(), "reviews"),
-		DefaultBudget:  2,
 		MaxFindings:    config.DefaultMaxFindings,
 		Reviewers: []broker.ReviewerSpec{{
 			Name: "triage",
@@ -766,32 +655,31 @@ func newTestClientForServer(t *testing.T, server *mcp.Server) (context.Context, 
 	return ctx, clientSession
 }
 
-func openTestSession(t *testing.T, ctx context.Context, client *mcp.ClientSession) string {
+func openTestSession(t *testing.T, ctx context.Context, client *mcp.ClientSession) (string, string) {
 	t.Helper()
 
 	artifactPath := writeArtifact(t, "design.md", "# design\n")
 	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "open_session",
-		Arguments: map[string]any{
-			"artifacts": []map[string]any{{
-				"name": "design.md",
-				"path": artifactPath,
-			}},
-		},
+		Name:      "open_session",
+		Arguments: map[string]any{},
 	})
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	return decodeStructured[OpenSessionOutput](t, openResult).SessionID
+	return decodeStructured[OpenSessionOutput](t, openResult).SessionID, artifactPath
 }
 
-func startAndCollectRoundTool(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string) CollectedRoundOutput {
+func startAndCollectRoundTool(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string, artifactPath string) CollectedRoundOutput {
 	t.Helper()
 
 	result, err := client.CallTool(ctx, &mcp.CallToolParams{
 		Name: "start_review_round",
 		Arguments: map[string]any{
 			"session_id": sessionID,
+			"artifacts": []map[string]any{{
+				"name": "design.md",
+				"path": artifactPath,
+			}},
 		},
 	})
 	if err != nil {
@@ -834,13 +722,17 @@ func collectRound(t *testing.T, ctx context.Context, client *mcp.ClientSession, 
 	}
 }
 
-func startAndCollectRoundToolError(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string, wantStableCode string) ErrorOutput {
+func startAndCollectRoundToolError(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string, artifactPath string, wantStableCode string) ErrorOutput {
 	t.Helper()
 
 	result, err := client.CallTool(ctx, &mcp.CallToolParams{
 		Name: "start_review_round",
 		Arguments: map[string]any{
 			"session_id": sessionID,
+			"artifacts": []map[string]any{{
+				"name": "design.md",
+				"path": artifactPath,
+			}},
 		},
 	})
 	if err != nil {
@@ -926,7 +818,6 @@ func testConfig(t *testing.T, reviewers ...*config.ReviewerConfig) *config.Confi
 
 	return &config.Config{
 		LogDestination: filepath.Join(t.TempDir(), "reviews"),
-		DefaultBudget:  2,
 		MaxFindings:    config.DefaultMaxFindings,
 		Reviewers:      reviewers,
 	}

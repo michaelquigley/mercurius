@@ -21,12 +21,6 @@ type ReviewerInfo struct {
 	Model string `json:"model,omitempty"`
 }
 
-type RegisteredArtifact struct {
-	Name       string `json:"name"`
-	SourcePath string `json:"source_path"`
-	Inline     bool   `json:"inline"`
-}
-
 type ErrorInfo struct {
 	Code       string         `json:"code"`
 	Message    string         `json:"message"`
@@ -58,36 +52,20 @@ type RoundStatus struct {
 	DecisionCount int       `json:"decision_count"`
 }
 
-type Convergence struct {
-	Signal                      string `json:"signal"`
-	Message                     string `json:"message"`
-	LatestBlockingFindings      int    `json:"latest_blocking_findings"`
-	PreviousBlockingFindings    int    `json:"previous_blocking_findings"`
-	DeclinedOrDeferredDecisions int    `json:"declined_or_deferred_decisions"`
-	AcceptedDecisions           int    `json:"accepted_decisions"`
-}
-
 type SessionStatus struct {
-	SessionID            string               `json:"session_id"`
-	State                string               `json:"state"`
-	Verdict              *string              `json:"verdict"`
-	OpenedAt             time.Time            `json:"opened_at"`
-	ClosedAt             *time.Time           `json:"closed_at,omitempty"`
-	Budget               int                  `json:"budget"`
-	BudgetRemaining      int                  `json:"budget_remaining"`
-	MaxFindings          int                  `json:"max_findings"`
-	ReviewContextSource  string               `json:"review_context_source"`
-	ReviewContextPresent bool                 `json:"review_context_present"`
-	ReviewFocusSource    string               `json:"review_focus_source"`
-	ReviewFocusPresent   bool                 `json:"review_focus_present"`
-	RoundsUsed           int                  `json:"rounds_used"`
-	Reviewers            []ReviewerInfo       `json:"reviewers"`
-	Artifacts            []RegisteredArtifact `json:"artifacts"`
-	LastError            *ErrorInfo           `json:"last_error,omitempty"`
-	ActiveRound          *RoundJob            `json:"active_round,omitempty"`
-	LastRoundJob         *RoundJob            `json:"last_round_job,omitempty"`
-	Rounds               []RoundStatus        `json:"rounds"`
-	Convergence          Convergence          `json:"convergence"`
+	SessionID            string         `json:"session_id"`
+	State                string         `json:"state"`
+	OpenedAt             time.Time      `json:"opened_at"`
+	ClosedAt             *time.Time     `json:"closed_at,omitempty"`
+	MaxFindings          int            `json:"max_findings"`
+	ReviewContextPresent bool           `json:"review_context_present"`
+	ReviewFocusPresent   bool           `json:"review_focus_present"`
+	RoundCount           int            `json:"round_count"`
+	Reviewers            []ReviewerInfo `json:"reviewers"`
+	LastError            *ErrorInfo     `json:"last_error,omitempty"`
+	ActiveRound          *RoundJob      `json:"active_round,omitempty"`
+	LastRoundJob         *RoundJob      `json:"last_round_job,omitempty"`
+	Rounds               []RoundStatus  `json:"rounds"`
 }
 
 type Event struct {

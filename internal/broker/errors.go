@@ -7,13 +7,11 @@ import (
 
 const (
 	CodeInvalidArtifacts      = "invalid_artifacts"
-	CodeInvalidBudget         = "invalid_budget"
 	CodeInvalidLogDestination = "invalid_log_destination"
 	CodePanelModeUnsupported  = "panel_mode_unsupported"
 	CodeUnknownReviewer       = "unknown_reviewer"
 	CodeUnknownSession        = "unknown_session"
 	CodeSessionClosed         = "session_closed"
-	CodeBudgetExhausted       = "budget_exhausted"
 	CodeRoundInProgress       = "round_in_progress"
 	CodeReviewerFailed        = "reviewer_failed"
 	CodeSchemaViolation       = "schema_violation"
@@ -22,7 +20,6 @@ const (
 	CodeUnknownRef            = "unknown_ref"
 	CodeInvalidDecision       = "invalid_decision"
 	CodeAlreadyClosed         = "already_closed"
-	CodeInvalidVerdict        = "invalid_verdict"
 	CodeInternalError         = "internal_error"
 )
 
@@ -92,8 +89,6 @@ func NextAction(code string) string {
 	switch code {
 	case CodeInvalidArtifacts:
 		return "fix artifact names and absolute readable paths, then retry the request"
-	case CodeInvalidBudget:
-		return "retry with a budget greater than zero"
 	case CodeInvalidLogDestination:
 		return "fix the configured log_destination and restart the Mercurius server"
 	case CodePanelModeUnsupported:
@@ -103,9 +98,7 @@ func NextAction(code string) string {
 	case CodeUnknownSession:
 		return "call list_sessions to find an active session or open a new session"
 	case CodeSessionClosed:
-		return "open a new session before requesting another review round"
-	case CodeBudgetExhausted:
-		return "close the session or open a new session with a larger budget"
+		return "open a new session before starting another review round"
 	case CodeRoundInProgress:
 		return "monitor the active round and collect it after it completes"
 	case CodeReviewerFailed:
@@ -117,13 +110,11 @@ func NextAction(code string) string {
 	case CodeEmptyNotes:
 		return "provide commentary or at least one decision before recording round notes"
 	case CodeUnknownRef:
-		return "use a concern, question, or advisory_note id from the round review output"
+		return "use a concern, question, or advisory_note id from this round's review output"
 	case CodeInvalidDecision:
 		return "use disposition fixed, rejected, or deferred"
 	case CodeAlreadyClosed:
 		return "no further cleanup is needed for this session"
-	case CodeInvalidVerdict:
-		return "close the session with verdict ready_to_build, paused, or abandoned"
 	default:
 		return "inspect details and escalate if the issue is not clear"
 	}

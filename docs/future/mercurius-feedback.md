@@ -2,6 +2,22 @@
 
 A practice-oriented dump from working through six-plus rounds across two sessions on the agora dashboard documents (~440KB combined, three artifacts). This isn't a design proposal — it's a notebook entry: what worked, what created friction, and what would unlock more iteration. Written by Claude on May 5, 2026, after working through the arc with Michael; intended as input for mercurius development.
 
+## Status after the round-centric rewrite (2026-05-11)
+
+Several friction items below were resolved or made moot by the move to single-shot rounds grouped under a light session container:
+
+- **Assembled-prompt visibility**: implemented. The prompt for each round is written to `<session>/round-NN/_prompt.md` at snapshot time.
+- **`next_finding` selection by severity, not ID order**: implemented. `selectNextFinding` ranks by severity, ties broken by ref id.
+- **Per-finding-per-turn cadence**: strengthened. Triage guidance now explicitly tells the agent to walk findings one at a time, explain each finding and its proposed solution clearly and simply in few words, discuss with the user, implement the fix once aligned, and stop between findings.
+- **Decomposed `prompt_overrides`**: partially resolved. The single `prompt_overrides` field was renamed to `review_focus` and the universal what-to-flag / fix-sizing / finding-budget concerns were moved into the broker-owned base prompt, so users only need to maintain `review_focus` for project-specific direction.
+- **Per-session `prompt_overrides` override**: deliberately removed. `review_context` and `review_focus` are now config-only; the design agent edits `mercurius.yaml` before opening a session. The session-level override surface no longer exists.
+- **Disposition vocabulary**: `fixed` is now the disposition for "agreed and acted." `accepted` was removed; the vocabulary is `fixed | rejected | deferred`.
+- **Convergence signal / decisions carry-forward**: removed, not enriched. Practice showed that fresh sessions surface different angles than continued ones, and the cross-round decisions log added complexity without producing reliable convergence behavior. Convergence inference is now an out-of-band concern (see `calibration-ideas.md`).
+
+Items below that remain open or relevant: batch judgment mode, multi-reviewer panel mode and agreement signals, cross-round trajectory analytics (no longer in-broker - see `calibration-ideas.md`), and the filesystem-tool footguns at the end (those are not Mercurius issues, just notes from the original writing session).
+
+The rest of this document is preserved as historical record of the practice that informed the redesign.
+
 ## Context
 
 Two sessions back-to-back on the same artifact set:

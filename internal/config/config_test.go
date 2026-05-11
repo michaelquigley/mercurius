@@ -29,9 +29,6 @@ reviewers:
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if cfg.DefaultBudget != DefaultBudget {
-		t.Fatalf("default budget = %d, want %d", cfg.DefaultBudget, DefaultBudget)
-	}
 	if cfg.MaxFindings != DefaultMaxFindings {
 		t.Fatalf("max findings = %d, want %d", cfg.MaxFindings, DefaultMaxFindings)
 	}
@@ -110,10 +107,10 @@ func TestLoadValidatesConfig(t *testing.T) {
 		want string
 	}{
 		{
-			name: "invalid budget",
+			name: "removed default_budget rejected",
 			body: `
 log_destination: ./reviews
-default_budget: -1
+default_budget: 4
 reviewers:
   - name: dummy
     impl: dummy

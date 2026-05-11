@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/michaelquigley/mercurius/internal/broker"
 	"github.com/michaelquigley/mercurius/internal/config"
 	"github.com/michaelquigley/mercurius/internal/prompt"
 	"github.com/spf13/cobra"
@@ -24,20 +23,17 @@ import (
 const previewSnapshotSentinel = "(preview)"
 
 // safePreviewArtifactName mirrors the broker's artifact name validator so the
-// preview CLI rejects the same names that open_session would.
+// preview CLI rejects the same names that start_review_round would.
 var safePreviewArtifactName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 func newPreviewCommand(configPath *string) *cobra.Command {
-	var reviewContext string
-	var reviewFocus string
 	var artifacts []string
-	var maxFindings int
 	var output string
 
 	cmd := &cobra.Command{
 		Use:          "preview",
-		Short:        "render the round-1 review prompt for a config and a set of artifacts without running a reviewer",
-		Long:         "preview reads a Mercurius config and the named artifacts, assembles the prompt that broker round 1 would send to the reviewer, and prints it. no session is created, no reviewer is dispatched, and no .mercurius/ writes happen. use this to iterate on review_focus or other config-shaped content before paying the cost of a real round.",
+		Short:        "render the review prompt for a config and a set of artifacts without running a reviewer",
+		Long:         "preview reads a Mercurius config and the named artifacts, assembles the prompt that a broker round would send to the reviewer, and prints it. no session is created, no reviewer is dispatched, and no .mercurius/ writes happen. use this to iterate on review_context or review_focus in mercurius.yaml before paying the cost of a real round.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load(*configPath)
@@ -53,7 +49,7 @@ func newPreviewCommand(configPath *string) *cobra.Command {
 				return err
 			}
 
-			ctx, err := buildPreviewContext(cfg, parsed, reviewContext, reviewFocus, maxFindings)
+			ctx, err := buildPreviewContext(cfg, parsed)
 			if err != nil {
 				return err
 			}
@@ -62,10 +58,7 @@ func newPreviewCommand(configPath *string) *cobra.Command {
 			return writePreviewOutput(cmd, text, output)
 		},
 	}
-	cmd.Flags().StringVar(&reviewContext, "review-context", "", "override the configured review_context for this preview")
-	cmd.Flags().StringVar(&reviewFocus, "review-focus", "", "override the configured review_focus for this preview")
 	cmd.Flags().StringArrayVar(&artifacts, "artifact", nil, "artifact in name=path form; repeat for multiple artifacts")
-	cmd.Flags().IntVar(&maxFindings, "max-findings", 0, "override the configured max_findings for this preview (0 keeps the config value)")
 	cmd.Flags().StringVar(&output, "output", "", "write the assembled prompt to this file instead of stdout")
 	return cmd
 }
@@ -115,7 +108,7 @@ func validatePreviewArtifactName(name string) error {
 	return nil
 }
 
-func buildPreviewContext(cfg *config.Config, specs []previewArtifactSpec, reviewContextOverride string, reviewFocusOverride string, maxFindingsOverride int) (prompt.Request, error) {
+func buildPreviewContext(cfg *config.Config, specs []previewArtifactSpec) (prompt.Request, error) {
 	artifacts := make([]prompt.Artifact, 0, len(specs))
 	for _, spec := range specs {
 		absPath, err := filepath.Abs(spec.path)
@@ -137,28 +130,12 @@ func buildPreviewContext(cfg *config.Config, specs []previewArtifactSpec, review
 		})
 	}
 
-	maxFindings := cfg.MaxFindings
-	if maxFindingsOverride > 0 {
-		maxFindings = maxFindingsOverride
-	}
 	return prompt.Request{
-		Artifacts:      artifacts,
-		PriorDecisions: nil,
-		ReviewContext:  selectPreviewOverride(reviewContextOverride, cfg.ReviewContext),
-		ReviewFocus:    selectPreviewOverride(reviewFocusOverride, cfg.ReviewFocus),
-		DecisionsLog:   broker.EmptySessionDecisionsLogText(),
-		MaxFindings:    maxFindings,
+		Artifacts:     artifacts,
+		ReviewContext: strings.TrimSpace(cfg.ReviewContext),
+		ReviewFocus:   strings.TrimSpace(cfg.ReviewFocus),
+		MaxFindings:   cfg.MaxFindings,
 	}, nil
-}
-
-// selectPreviewOverride applies the same trim-and-non-empty rule used by the
-// session-level review_context / review_focus overrides: a whitespace-only CLI
-// value is treated as absent and the config value is used.
-func selectPreviewOverride(cliValue string, configValue string) string {
-	if trimmed := strings.TrimSpace(cliValue); trimmed != "" {
-		return trimmed
-	}
-	return configValue
 }
 
 func writePreviewOutput(cmd *cobra.Command, text string, outputPath string) error {
@@ -168,4 +145,3 @@ func writePreviewOutput(cmd *cobra.Command, text string, outputPath string) erro
 	}
 	return os.WriteFile(outputPath, []byte(text), 0o600)
 }
-

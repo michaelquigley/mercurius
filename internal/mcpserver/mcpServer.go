@@ -27,26 +27,16 @@ type ArtifactInput struct {
 }
 
 type OpenSessionInput struct {
-	Artifacts     []ArtifactInput `json:"artifacts,omitempty"`
-	Reviewers     []string        `json:"reviewers,omitempty"`
-	Budget        int             `json:"budget,omitempty"`
-	ReviewContext string          `json:"review_context,omitempty"`
-	ReviewFocus   string          `json:"review_focus,omitempty"`
+	Reviewers []string `json:"reviewers,omitempty"`
 }
 
 type OpenSessionOutput struct {
-	SessionID            string                     `json:"session_id"`
-	OpenedAt             string                     `json:"opened_at"`
-	Budget               int                        `json:"budget"`
-	BudgetRemaining      int                        `json:"budget_remaining"`
-	MaxFindings          int                        `json:"max_findings"`
-	ReviewContextSource  string                     `json:"review_context_source"`
-	ReviewContextPresent bool                       `json:"review_context_present"`
-	ReviewFocusSource    string                     `json:"review_focus_source"`
-	ReviewFocusPresent   bool                       `json:"review_focus_present"`
-	RoundsUsed           int                        `json:"rounds_used"`
-	Reviewers            []ReviewerInfoOutput       `json:"reviewers"`
-	Artifacts            []RegisteredArtifactOutput `json:"artifacts"`
+	SessionID            string               `json:"session_id"`
+	OpenedAt             string               `json:"opened_at"`
+	MaxFindings          int                  `json:"max_findings"`
+	ReviewContextPresent bool                 `json:"review_context_present"`
+	ReviewFocusPresent   bool                 `json:"review_focus_present"`
+	Reviewers            []ReviewerInfoOutput `json:"reviewers"`
 }
 
 type StartRoundInput struct {
@@ -60,7 +50,6 @@ type CollectedRoundOutput struct {
 	Manifest    []ManifestEntryOutput `json:"manifest"`
 	Reviewers   []ReviewerOutput      `json:"reviewers"`
 	Triage      RoundTriageOutput     `json:"triage"`
-	Convergence ConvergenceOutput     `json:"convergence"`
 	NextAction  string                `json:"next_action"`
 }
 
@@ -69,7 +58,7 @@ type RoundTriageOutput struct {
 	TotalFindings     int                    `json:"total_findings"`
 	RemainingFindings int                    `json:"remaining_findings"`
 	Findings          []TriageFindingOutput  `json:"findings"`
-	AdvisoryNotes     []TriageAdvisoryOutput `json:"advisory_notes"`
+	AdvisoryNotes    []TriageAdvisoryOutput `json:"advisory_notes"`
 	NextFinding       *TriageFindingOutput   `json:"next_finding"`
 	Guidance          string                 `json:"guidance"`
 }
@@ -92,15 +81,6 @@ type TriageAdvisoryOutput struct {
 	Note         string  `json:"note"`
 	Rationale    string  `json:"rationale"`
 	Suggestion   *string `json:"suggestion,omitempty"`
-}
-
-type ConvergenceOutput struct {
-	Signal                      string `json:"signal"`
-	Message                     string `json:"message"`
-	LatestBlockingFindings      int    `json:"latest_blocking_findings"`
-	PreviousBlockingFindings    int    `json:"previous_blocking_findings"`
-	DeclinedOrDeferredDecisions int    `json:"declined_or_deferred_decisions"`
-	AcceptedDecisions           int    `json:"accepted_decisions"`
 }
 
 type StartReviewRoundOutput struct {
@@ -180,12 +160,10 @@ type RecordRoundNotesOutput struct {
 
 type CloseSessionInput struct {
 	SessionID string `json:"session_id,omitempty"`
-	Verdict   string `json:"verdict,omitempty"`
 }
 
 type CloseSessionOutput struct {
 	SessionID string `json:"session_id"`
-	Verdict   string `json:"verdict"`
 	ClosedAt  string `json:"closed_at"`
 }
 
@@ -194,26 +172,19 @@ type SessionStatusInput struct {
 }
 
 type SessionStatusOutput struct {
-	SessionID            string                     `json:"session_id"`
-	State                string                     `json:"state"`
-	Verdict              *string                    `json:"verdict"`
-	OpenedAt             string                     `json:"opened_at"`
-	ClosedAt             *string                    `json:"closed_at"`
-	Budget               int                        `json:"budget"`
-	BudgetRemaining      int                        `json:"budget_remaining"`
-	MaxFindings          int                        `json:"max_findings"`
-	ReviewContextSource  string                     `json:"review_context_source"`
-	ReviewContextPresent bool                       `json:"review_context_present"`
-	ReviewFocusSource    string                     `json:"review_focus_source"`
-	ReviewFocusPresent   bool                       `json:"review_focus_present"`
-	RoundsUsed           int                        `json:"rounds_used"`
-	Reviewers            []ReviewerInfoOutput       `json:"reviewers"`
-	Artifacts            []RegisteredArtifactOutput `json:"artifacts"`
-	LastError            *ErrorOutput               `json:"last_error"`
-	ActiveRound          *RoundJobOutput            `json:"active_round"`
-	LastRoundJob         *RoundJobOutput            `json:"last_round_job"`
-	Rounds               []RoundStatusOutput        `json:"rounds"`
-	Convergence          ConvergenceOutput          `json:"convergence"`
+	SessionID            string              `json:"session_id"`
+	State                string              `json:"state"`
+	OpenedAt             string              `json:"opened_at"`
+	ClosedAt             *string             `json:"closed_at"`
+	MaxFindings          int                 `json:"max_findings"`
+	ReviewContextPresent bool                `json:"review_context_present"`
+	ReviewFocusPresent   bool                `json:"review_focus_present"`
+	RoundCount           int                 `json:"round_count"`
+	Reviewers            []ReviewerInfoOutput `json:"reviewers"`
+	LastError            *ErrorOutput        `json:"last_error"`
+	ActiveRound          *RoundJobOutput     `json:"active_round"`
+	LastRoundJob         *RoundJobOutput     `json:"last_round_job"`
+	Rounds               []RoundStatusOutput `json:"rounds"`
 }
 
 type RoundStatusOutput struct {
@@ -229,11 +200,10 @@ type ListSessionsOutput struct {
 }
 
 type SessionSummaryOutput struct {
-	SessionID  string  `json:"session_id"`
-	State      string  `json:"state"`
-	Verdict    *string `json:"verdict"`
-	OpenedAt   string  `json:"opened_at"`
-	RoundsUsed int     `json:"rounds_used"`
+	SessionID  string `json:"session_id"`
+	State      string `json:"state"`
+	OpenedAt   string `json:"opened_at"`
+	RoundCount int    `json:"round_count"`
 }
 
 type ListReviewersOutput struct {
@@ -245,12 +215,6 @@ type ReviewerInfoOutput struct {
 	Impl       string `json:"impl"`
 	Model      string `json:"model,omitempty"`
 	Selectable bool   `json:"selectable,omitempty"`
-}
-
-type RegisteredArtifactOutput struct {
-	Name       string `json:"name"`
-	SourcePath string `json:"source_path"`
-	Inline     bool   `json:"inline"`
 }
 
 type ToolErrorOutput struct {
@@ -294,7 +258,6 @@ func BrokerOptions(cfg *config.Config) (broker.Options, error) {
 	options := broker.Options{
 		LogDestination: cfg.LogDestination,
 		ConfigPath:     cfg.ConfigPath,
-		DefaultBudget:  cfg.DefaultBudget,
 		MaxFindings:    cfg.MaxFindings,
 		ReviewContext:  cfg.ReviewContext,
 		ReviewFocus:    cfg.ReviewFocus,
@@ -318,14 +281,10 @@ func BrokerOptions(cfg *config.Config) (broker.Options, error) {
 func RegisterTools(server *mcp.Server, b *broker.Broker) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "open_session",
-		Description: "start a new Mercurius review session. artifacts must use unique safe names and absolute paths readable by the Mercurius server. budget defaults to the project default_budget when omitted. review_context and review_focus can override the corresponding config values for this session. the response includes the configured max_findings cap for each review round.",
+		Description: "open a new Mercurius review session. review_context and review_focus are read from mercurius.yaml; edit the YAML before opening a session if you want different review calibration. when the config has multiple reviewers, pass the chosen name in reviewers. artifacts are not registered at session open; pass them to each start_round call.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input OpenSessionInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.OpenSession(ctx, broker.OpenSessionRequest{
-			Artifacts:     artifactsFromInput(input.Artifacts),
-			Reviewers:     append([]string(nil), input.Reviewers...),
-			Budget:        input.Budget,
-			ReviewContext: input.ReviewContext,
-			ReviewFocus:   input.ReviewFocus,
+			Reviewers: append([]string(nil), input.Reviewers...),
 		})
 		if err != nil {
 			return toolErrorResult(err)
@@ -333,30 +292,20 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 		return nil, OpenSessionOutput{
 			SessionID:            response.SessionID,
 			OpenedAt:             formatTime(response.OpenedAt),
-			Budget:               response.Budget,
-			BudgetRemaining:      response.BudgetRemaining,
 			MaxFindings:          response.MaxFindings,
-			ReviewContextSource:  response.ReviewContextSource,
 			ReviewContextPresent: response.ReviewContextPresent,
-			ReviewFocusSource:    response.ReviewFocusSource,
 			ReviewFocusPresent:   response.ReviewFocusPresent,
-			RoundsUsed:           response.RoundsUsed,
 			Reviewers:            reviewerInfoOutput(response.Reviewers, false),
-			Artifacts:            registeredArtifactOutput(response.Artifacts),
 		}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "start_review_round",
-		Description: "start one review round in the background and return immediately. use this for real reviews that may outlive the MCP client timeout; tell the user to run monitor_command and re-engage when the round completes.",
+		Description: "start one review round in the background and return immediately. artifacts are required and are scoped to this round only; nothing carries over between rounds in the same session. use the returned monitor_command to tell the user how to watch progress; the round may outlive the MCP client timeout.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input StartRoundInput) (*mcp.CallToolResult, any, error) {
-		var artifacts []broker.Artifact
-		if input.Artifacts != nil {
-			artifacts = artifactsFromInput(input.Artifacts)
-		}
 		response, err := b.StartReviewRound(ctx, broker.StartRoundRequest{
 			SessionID: input.SessionID,
-			Artifacts: artifacts,
+			Artifacts: artifactsFromInput(input.Artifacts),
 		})
 		if err != nil {
 			return toolErrorResult(err)
@@ -390,7 +339,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "collect_round",
-		Description: "return a completed review round result with triage guidance. if the round is still running, pause and tell the user to keep monitoring instead of retrying immediately. after a successful result, present all triage.findings as a concise overview, then address only one finding per user turn.",
+		Description: "return a completed review round result with triage guidance. if the round is still running, pause and tell the user to keep monitoring instead of retrying immediately. when findings are present, walk them one at a time, explaining each finding and its proposed solution clearly and briefly.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input CollectRoundInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.CollectRound(ctx, broker.CollectRoundRequest{
 			SessionID:   input.SessionID,
@@ -406,14 +355,13 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 			Manifest:    manifestOutput(response.Manifest),
 			Reviewers:   reviewerOutput(response.Reviewers),
 			Triage:      triage,
-			Convergence: convergenceOutput(response.Convergence),
 			NextAction:  collectedRoundNextAction(triage),
 		}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "record_round_notes",
-		Description: "record commentary and human decisions for a completed round. after this tool returns, pause and ask the user whether to handle the next finding, start another round, or stop; do not immediately call another Mercurius tool unless the user explicitly asks you to continue",
+		Description: "record commentary and human decisions for a completed round. this implicitly finalizes the round; there is no separate close_round step. after this returns, pause and ask the user whether to start another round, open a new session, or stop; do not immediately call another Mercurius tool unless the user explicitly asks you to continue.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RecordRoundNotesInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.RecordRoundNotes(ctx, broker.RecordRoundNotesRequest{
 			SessionID:   input.SessionID,
@@ -429,24 +377,22 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 			LogPath:            response.LogPath,
 			CommentaryRecorded: response.CommentaryRecorded,
 			DecisionsRecorded:  response.DecisionsRecorded,
-			NextAction:         "pause and ask the user whether to handle the next finding, start another review round, or close the session",
+			NextAction:         "pause and ask the user whether to start another review round, open a new session, or stop",
 		}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "close_session",
-		Description: "close a Mercurius review session",
+		Description: "close a Mercurius review session. sessions are light groupings of rounds; closure just marks the arc done.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input CloseSessionInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.CloseSession(ctx, broker.CloseSessionRequest{
 			SessionID: input.SessionID,
-			Verdict:   input.Verdict,
 		})
 		if err != nil {
 			return toolErrorResult(err)
 		}
 		return nil, CloseSessionOutput{
 			SessionID: response.SessionID,
-			Verdict:   response.Verdict,
 			ClosedAt:  formatTime(response.ClosedAt),
 		}, nil
 	})
@@ -631,7 +577,7 @@ func reviewerOutput(results []broker.ReviewerResult) []ReviewerOutput {
 
 func triageOutput(results []broker.ReviewerResult) RoundTriageOutput {
 	triage := RoundTriageOutput{
-		Mode:     "one_finding_per_user_turn",
+		Mode:     "walk_findings_one_at_a_time",
 		Guidance: noFindingsTriageGuidance(),
 	}
 	for _, result := range results {
@@ -749,7 +695,7 @@ func severityRank(severity *string) int {
 }
 
 func oneFindingTriageGuidance() string {
-	return "First present all entries in triage.findings as a concise overview so the user sees the full review landscape. Present triage.advisory_notes separately as non-blocking polish when present. Then address only one blocking finding in the current turn, defaulting to triage.next_finding unless the user chooses another ref. Ask whether they want to discuss it, fix it, defer it, or reject it before making artifact changes. Then stop and wait for the user; do not address other findings, record notes, or call another Mercurius tool until the user explicitly responds. This preserves a fresh turn and tool-call budget for each finding."
+	return "First present all entries in triage.findings as a concise overview so the user sees the full review landscape. Present triage.advisory_notes separately as non-blocking polish when present. Then walk findings one at a time, defaulting to triage.next_finding unless the user chooses another ref. For each finding: explain the finding and its proposed solution clearly and simply, using few words; discuss it with the user; implement the fix in the artifacts once you and the user are aligned. Then stop and wait - do not advance to the next finding, record notes, or call another Mercurius tool until the user explicitly responds. This preserves a fresh turn and tool-call budget for each finding."
 }
 
 func noFindingsTriageGuidance() string {
@@ -758,7 +704,7 @@ func noFindingsTriageGuidance() string {
 
 func collectedRoundNextAction(triage RoundTriageOutput) string {
 	if triage.NextFinding != nil {
-		return "pause and present all triage.findings as a concise overview, with triage.advisory_notes separate if present; then address one blocking finding only, defaulting to triage.next_finding unless the user chooses another ref, and stop before addressing other findings or calling another Mercurius tool"
+		return "pause; present all triage.findings as a concise overview with triage.advisory_notes separate if present; then walk findings one at a time starting with triage.next_finding, explaining each finding and its proposed solution clearly and briefly in few words, discussing with the user, and implementing the fix once aligned; stop and wait between findings"
 	}
 	return "pause and tell the user this round returned no blocking findings, with triage.advisory_notes separate if present; ask whether to record notes, start another review round, or close the session"
 }
@@ -767,35 +713,17 @@ func sessionStatusOutput(status broker.SessionStatusResponse) SessionStatusOutpu
 	return SessionStatusOutput{
 		SessionID:            status.SessionID,
 		State:                status.State,
-		Verdict:              cloneString(status.Verdict),
 		OpenedAt:             formatTime(status.OpenedAt),
 		ClosedAt:             formatTimePtr(status.ClosedAt),
-		Budget:               status.Budget,
-		BudgetRemaining:      status.BudgetRemaining,
 		MaxFindings:          status.MaxFindings,
-		ReviewContextSource:  status.ReviewContextSource,
 		ReviewContextPresent: status.ReviewContextPresent,
-		ReviewFocusSource:    status.ReviewFocusSource,
 		ReviewFocusPresent:   status.ReviewFocusPresent,
-		RoundsUsed:           status.RoundsUsed,
+		RoundCount:           status.RoundCount,
 		Reviewers:            reviewerInfoOutput(status.Reviewers, false),
-		Artifacts:            registeredArtifactOutput(status.Artifacts),
 		LastError:            errorOutputPtr(status.LastError),
 		ActiveRound:          roundJobOutputPtr(status.ActiveRound),
 		LastRoundJob:         roundJobOutputPtr(status.LastRoundJob),
 		Rounds:               roundStatusOutput(status.Rounds),
-		Convergence:          convergenceOutput(status.Convergence),
-	}
-}
-
-func convergenceOutput(convergence broker.Convergence) ConvergenceOutput {
-	return ConvergenceOutput{
-		Signal:                      convergence.Signal,
-		Message:                     convergence.Message,
-		LatestBlockingFindings:      convergence.LatestBlockingFindings,
-		PreviousBlockingFindings:    convergence.PreviousBlockingFindings,
-		DeclinedOrDeferredDecisions: convergence.DeclinedOrDeferredDecisions,
-		AcceptedDecisions:           convergence.AcceptedDecisions,
 	}
 }
 
@@ -843,9 +771,8 @@ func listSessionsOutput(response broker.ListSessionsResponse) ListSessionsOutput
 		sessions = append(sessions, SessionSummaryOutput{
 			SessionID:  session.SessionID,
 			State:      session.State,
-			Verdict:    cloneString(session.Verdict),
 			OpenedAt:   formatTime(session.OpenedAt),
-			RoundsUsed: session.RoundsUsed,
+			RoundCount: session.RoundCount,
 		})
 	}
 	return ListSessionsOutput{Sessions: sessions}
@@ -859,18 +786,6 @@ func reviewerInfoOutput(reviewers []broker.ReviewerInfo, selectable bool) []Revi
 			Impl:       reviewer.Impl,
 			Model:      reviewer.Model,
 			Selectable: selectable,
-		})
-	}
-	return out
-}
-
-func registeredArtifactOutput(artifacts []broker.RegisteredArtifact) []RegisteredArtifactOutput {
-	out := make([]RegisteredArtifactOutput, 0, len(artifacts))
-	for _, artifact := range artifacts {
-		out = append(out, RegisteredArtifactOutput{
-			Name:       artifact.Name,
-			SourcePath: artifact.SourcePath,
-			Inline:     artifact.Inline,
 		})
 	}
 	return out

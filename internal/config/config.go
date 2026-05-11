@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	DefaultBudget         = 4
 	DefaultMaxFindings    = 6
 	DefaultLogDestination = ".mercurius"
 )
@@ -28,7 +27,6 @@ type Config struct {
 	Name           string
 	ConfigPath     string
 	LogDestination string
-	DefaultBudget  int
 	MaxFindings    int
 	ReviewContext  string
 	ReviewFocus    string
@@ -56,7 +54,6 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		DefaultBudget:  DefaultBudget,
 		MaxFindings:    DefaultMaxFindings,
 		LogDestination: DefaultLogDestination,
 	}
@@ -84,9 +81,6 @@ func Load(path string) (*Config, error) {
 // write to log_destination (the MCP server startup path) invoke
 // EnsureLogDestination() separately after Load().
 func (c *Config) Validate() error {
-	if c.DefaultBudget <= 0 {
-		return fmt.Errorf("default_budget must be greater than zero")
-	}
 	if c.MaxFindings <= 0 {
 		return fmt.Errorf("max_findings must be greater than zero")
 	}
@@ -143,6 +137,9 @@ func checkRenamedFields(absPath string) error {
 	}
 	if _, ok := generic["prompt_overrides"]; ok {
 		return fmt.Errorf("config '%s': field 'prompt_overrides' has been renamed to 'review_focus'; update the YAML key", absPath)
+	}
+	if _, ok := generic["default_budget"]; ok {
+		return fmt.Errorf("config '%s': field 'default_budget' has been removed; rounds are single-shot and no longer share a budget across a session", absPath)
 	}
 	return nil
 }

@@ -4,16 +4,17 @@ This guide describes the normal human workflow for using Mercurius with a design
 
 ## Mental Model
 
-You stay in the design agent's chat. The design agent calls Mercurius through MCP. Mercurius runs the configured reviewer against the current artifacts and returns structured feedback. You decide what matters, what to fix, what to defer, and when to stop.
+You stay in the design agent's chat. The design agent calls Mercurius through MCP. Mercurius runs the configured reviewer against the supplied artifacts and returns structured feedback. You decide what matters, what to fix, what to defer, and when to stop.
 
-The key rule is that Mercurius is a reviewer broker, not an editor. It reads artifacts, snapshots them, asks for review, and records the audit trail. Artifact edits happen outside Mercurius.
+A **session** is a lightweight grouping of one or more **rounds**. Each round is atomic: it snapshots its artifacts, dispatches one review, returns findings, accepts notes/decisions, and that's it. No state from a round flows into the next round in the same session. The common workflow is to open a session, run one round, fix what you and the agent agree on, then either run another round in the same session or close it and open a fresh one for the next pass.
+
+Mercurius is a reviewer broker, not an editor. It reads artifacts, snapshots them, asks for review, and records the audit trail. Artifact edits happen outside Mercurius.
 
 ## Prepare a Project
 
 Create a `mercurius.yaml` in the project you want reviewed:
 
 ```yaml
-default_budget: 4
 max_findings: 8
 review_context: |
   Deployment: personal project, single supervised implementer.
@@ -28,9 +29,11 @@ reviewers:
     model: gpt-5.5
 ```
 
-Use `review_context` to calibrate reviewer rigor. This is where you say whether the work is a one-shot migration, production infrastructure, a personal tool, a security-sensitive change, or something else. Good context reduces over-polishing and helps the reviewer suppress findings that do not apply.
+`review_context` and `review_focus` are the calibration surface for the reviewer. Edit them in the YAML before opening a session - they are not MCP tool inputs.
 
-Use `review_focus` to direct the reviewer at project-specific surfaces that the base review philosophy does not already cover. The base prompt already carries the universal subtle-vs-obvious filter, so `review_focus` is typically just one paragraph naming the invariants or risks unique to this project. The two fields divide labor cleanly: `review_context` calibrates rigor; `review_focus` directs attention.
+Use `review_context` to state project posture: deployment model, stakes, scope, locked decisions, simplicity-vs-defensiveness preference. The reviewer suppresses findings that do not materially apply under this context.
+
+Use `review_focus` to direct the reviewer at project-specific surfaces that the base review philosophy does not already cover. The base prompt already carries the universal subtle-vs-obvious filter, so `review_focus` is typically just one paragraph naming invariants or risks unique to this project.
 
 ## Run the Server
 
@@ -55,12 +58,29 @@ Configure your MCP client to launch it:
 
 Mercurius speaks MCP over stdio. Logs go to stderr so stdout stays reserved for MCP messages.
 
-## Start a Review Session
+## Open a Session
 
-Ask the design agent to open a Mercurius session for the artifacts:
+Ask the design agent to open a Mercurius session. The session itself takes no artifacts - it just creates a folder and binds a reviewer:
+
+```json
+{}
+```
+
+If the config has multiple reviewers, pass the name of the one you want:
+
+```json
+{ "reviewers": ["codex"] }
+```
+
+The response reports the session id, the configured `max_findings`, and whether `review_context` and `review_focus` were found in the config (so the agent can confirm the YAML edits took effect).
+
+## Run a Round
+
+Ask the design agent to start a round, passing the artifacts under review:
 
 ```json
 {
+  "session_id": "s_...",
   "artifacts": [
     { "name": "design", "path": "/abs/path/to/project/design.md" },
     { "name": "work-order", "path": "/abs/path/to/project/work-order.md" }
@@ -68,26 +88,9 @@ Ask the design agent to open a Mercurius session for the artifacts:
 }
 ```
 
-Artifact paths must be absolute and readable by the Mercurius server. Artifact names become snapshot filenames, so keep them short and safe. Artifact names cannot begin with `_`; that prefix is reserved for broker-emitted meta files inside the snapshot directory (`_prompt.md` today, future meta files may follow).
+Artifact paths must be absolute and readable by the Mercurius server. Artifact names become snapshot filenames, so keep them short and safe. Names cannot begin with `_`; that prefix is reserved for broker-emitted meta files (`_round.md`, `_prompt.md`) inside the round directory.
 
-You can override the config-level `review_context` and `review_focus` per session:
-
-```json
-{
-  "review_context": "This is a one-shot migration with full backup and one supervised implementer.",
-  "review_focus": "Pay particular attention to silent migration failures."
-}
-```
-
-Whitespace-only overrides fall back to the config value. The session response and `session_status` report `review_context_source`, `review_context_present`, `review_focus_source`, and `review_focus_present` so the agent can confirm which value is in effect.
-
-When iterating on `review_focus` (or other config-shaped content), use `mercurius preview` to render the round-1 prompt without running a real round; see `operations.md` for the command reference.
-
-## Run a Round
-
-The design agent should call `start_review_round`. Real review rounds can take longer than the MCP client's timeout, so Mercurius starts the work in the background and returns immediately with a monitor command.
-
-Run the monitor command yourself in a terminal:
+Real review rounds can take longer than the MCP client's timeout, so Mercurius runs the round in the background and returns immediately with a monitor command. Run it in a terminal:
 
 ```sh
 mercurius monitor --config /absolute/path/to/mercurius.yaml --session s_... --wait
@@ -95,78 +98,56 @@ mercurius monitor --config /absolute/path/to/mercurius.yaml --session s_... --wa
 
 When the monitor reports completion, re-engage the design agent and ask it to collect the round.
 
-## Triage Findings
+## Walk the Findings
 
 `collect_round` returns:
 
-- `triage.findings`: blocking concerns and questions only.
+- `triage.findings`: blocking concerns and questions.
 - `triage.advisory_notes`: non-blocking polish or downstream considerations.
-- `triage.next_finding`: the default first blocking finding to address.
-- `convergence`: an advisory signal about whether another round may be worthwhile.
+- `triage.next_finding`: the default first blocking finding (highest severity, ties broken by id).
 
-The design agent should present the full blocking finding list first, present advisory notes separately, and then handle one blocking finding in the current turn. For each finding, choose one of:
+The design agent first presents all blocking findings as a brief overview, then presents advisory notes separately, then walks findings one at a time. For each finding, the agent explains the finding and its proposed solution clearly and simply, using few words. You discuss it. If you agree on a fix, the agent edits the artifacts. Then it stops and waits before moving to the next finding.
 
-- Discuss it before deciding.
-- Fix the artifact.
-- Defer it with rationale.
-- Reject it with rationale.
-
-This one-finding-per-turn pattern preserves a fresh tool-call budget and keeps the human judgment surface explicit.
+This loop preserves a fresh turn for each finding and keeps the human judgment surface explicit.
 
 ## Record Notes and Decisions
 
-After a finding is handled, the design agent can call `record_round_notes`. Commentary is free-form markdown. Decisions are structured records tied to reviewer refs:
+After finishing the walk-through (or partway through, when you want to take stock), the design agent calls `record_round_notes`. This implicitly finalizes the round - there is no separate close-round step.
 
 ```json
 {
   "session_id": "s_...",
   "round_number": 1,
-  "commentary": "C-1 was fixed in the design.",
+  "commentary": "fixes landed for C-1; A-1 deferred.",
   "decisions": [
-    {
-      "ref": "C-1",
-      "disposition": "fixed",
-      "note": "The work order now includes a concrete acceptance test."
-    },
-    {
-      "ref": "A-1",
-      "disposition": "rejected",
-      "note": "Advisory only and not worth changing for this one-shot migration."
-    }
+    { "ref": "C-1", "disposition": "fixed",    "note": "work order now has acceptance test." },
+    { "ref": "A-1", "disposition": "deferred", "note": "not worth changing for this scope." }
   ]
 }
 ```
 
 Dispositions are `fixed`, `rejected`, or `deferred`:
 
-- `fixed`: agreed and addressed in the artifacts in the same turn.
+- `fixed`: agreed and addressed in the artifacts.
 - `rejected`: disagreed with the finding.
-- `deferred`: agreed but explicitly not addressing in this session.
+- `deferred`: agreed but explicitly not addressing now.
 
-Decision refs match a concern, question, or advisory_note id from the round. Advisory dispositions are recorded in `decisions.md` and flow into the prior-decisions block of future rounds the same way blocking dispositions do, but they do not contribute to the convergence counters - those track blocking-finding triage progress only.
-
-Mercurius writes the notes into the round log and updates `<session_dir>/decisions.md`. Future rounds receive the decisions log and should avoid re-raising adjudicated items unless there is a concrete new reason.
+Decision refs match a concern, question, or advisory_note id from this round. Decisions are written into the round log only. They do not carry forward into other rounds in the same session - each round starts cold.
 
 ## Decide Whether to Continue
 
-Run another round when the artifacts changed materially or an open question was answered. Stop when:
+After a round is finalized, you and the agent have three natural options:
 
-- The latest round has `verdict: ready_to_build`.
-- `triage.findings` is empty.
-- `convergence.signal` is `consider_closing`.
-- The remaining findings are advisory, rejected, or deferred under the stated context.
+- **Run another round in the same session**: re-snapshot updated artifacts and get a fresh review pass. Useful when the artifacts changed materially and you want to see what the reviewer still catches.
+- **Close the session and open a new one**: the most common pattern in practice - one fresh review per session, repeat until you stop seeing new substance.
+- **Stop**: the latest round verdict is `ready_to_build`, or the remaining findings are advisory / deferred / rejected and below the noise floor for your stated `review_context`.
 
-`ready_to_build` does not mean zero findings remain. It means the remaining findings - including any deferred or rejected ones - are below the noise floor for the implementer the artifacts are written for, under the stated `review_context`. The verdict reflects a judgment about implementation readiness, not a guarantee of artifact perfection. Advisory notes in particular do not block readiness.
-
-Continued sessions and fresh sessions surface different review angles. A continued session has conversational momentum from prior rounds and tends to keep iterating on dimensions it has already explored. A fresh session against the same artifacts sees them cold and can find different surface area. After multiple continued rounds without convergence, opening a fresh session sometimes surfaces findings the continued arc did not reach.
+`ready_to_build` does not mean zero findings. It means the remaining findings are below the noise floor for the implementer the artifacts are written for, under the stated `review_context`. Advisory notes never block readiness.
 
 Close the session with:
 
 ```json
-{
-  "session_id": "s_...",
-  "verdict": "ready_to_build"
-}
+{ "session_id": "s_..." }
 ```
 
-Use `paused` when the review is intentionally stopped before readiness. Use `abandoned` when the session is no longer relevant.
+There is no verdict on `close_session` - outcomes live on individual rounds. Closing a session just marks the arc done.

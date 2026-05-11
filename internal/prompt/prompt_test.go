@@ -3,8 +3,6 @@ package prompt
 import (
 	"strings"
 	"testing"
-
-	"github.com/michaelquigley/mercurius/internal/reviewer"
 )
 
 func TestBuildIncludesRequiredSectionsInOrder(t *testing.T) {
@@ -13,7 +11,7 @@ func TestBuildIncludesRequiredSectionsInOrder(t *testing.T) {
 			{
 				Name:         "design",
 				SourcePath:   "/tmp/design.md",
-				SnapshotPath: "/tmp/session/snapshots/round-01/design",
+				SnapshotPath: "/tmp/session/round-01/design",
 				Hash:         "sha256:abc",
 				Content:      []byte("design content"),
 			},
@@ -31,7 +29,6 @@ func TestBuildIncludesRequiredSectionsInOrder(t *testing.T) {
 		"## Project-specific focus",
 		"In addition to the universal what-to-flag criteria above",
 		"## Artifacts under review",
-		"## Prior decisions",
 		"## Verdict and severity",
 		"## Output",
 	}
@@ -51,27 +48,29 @@ func TestBuildIncludesRequiredSectionsInOrder(t *testing.T) {
 	}
 }
 
-func TestBuildRendersReviewFocusAndPriorDecisions(t *testing.T) {
+func TestBuildRendersReviewContextAndFocus(t *testing.T) {
 	prompt, _ := Build(Request{
 		ReviewContext: "deployment: personal one-shot",
-		DecisionsLog:  "# session decisions log\n\n## round 2\n- C-1 (fixed): fix it.\n",
 		ReviewFocus:   "flag ad-hoc logging.",
-		PriorDecisions: []reviewer.PriorDecision{
-			{RoundNumber: 2, Ref: "C-1", Disposition: "fixed", Note: "fix it."},
-		},
 	})
 
 	for _, want := range []string{
 		"deployment: personal one-shot",
-		"Rendered decisions log:",
 		"flag ad-hoc logging.",
-		"- Round 2, C-1 (fixed): fix it.",
-		"- C-1 (fixed): fix it.",
-		"Treat fixed, rejected, and deferred decisions as adjudicated session context.",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected prompt to contain %q", want)
 		}
+	}
+}
+
+func TestBuildOmitsPriorDecisionsSection(t *testing.T) {
+	prompt, _ := Build(Request{})
+	if strings.Contains(prompt, "Prior decisions") {
+		t.Fatal("rounds are single-shot now; the prompt should not mention prior decisions")
+	}
+	if strings.Contains(prompt, "decisions log") {
+		t.Fatal("rounds are single-shot now; the prompt should not mention a decisions log")
 	}
 }
 
@@ -107,7 +106,7 @@ func TestBuildUsesDynamicArtifactFences(t *testing.T) {
 			{
 				Name:         "design",
 				SourcePath:   "/tmp/design.md",
-				SnapshotPath: "/tmp/session/snapshots/round-01/design",
+				SnapshotPath: "/tmp/session/round-01/design",
 				Hash:         "sha256:abc",
 				Content:      []byte("```\ninside\n```"),
 			},
@@ -124,7 +123,7 @@ func TestBuildRendersInlineSource(t *testing.T) {
 		Artifacts: []Artifact{
 			{
 				Name:         "context",
-				SnapshotPath: "/tmp/session/snapshots/round-01/context",
+				SnapshotPath: "/tmp/session/round-01/context",
 				Hash:         "sha256:def",
 				Content:      []byte("inline content"),
 				Inline:       true,

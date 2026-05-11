@@ -100,6 +100,5 @@ func cloneRequest(req reviewer.ReviewRequest) reviewer.ReviewRequest {
 		req.Artifacts[i].Content = append([]byte(nil), req.Artifacts[i].Content...)
 	}
 	req.Schema = append(json.RawMessage(nil), req.Schema...)
-	req.SessionMeta.PriorDecisions = append([]reviewer.PriorDecision(nil), req.SessionMeta.PriorDecisions...)
 	return req
 }

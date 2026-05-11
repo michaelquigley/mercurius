@@ -26,17 +26,8 @@ type Artifact struct {
 
 // SessionMetadata carries round context into a reviewer call.
 type SessionMetadata struct {
-	SessionID      string
-	RoundNumber    int
-	PriorDecisions []PriorDecision
-}
-
-// PriorDecision records an adjudicated item from an earlier round.
-type PriorDecision struct {
+	SessionID   string
 	RoundNumber int
-	Ref         string
-	Disposition string
-	Note        string
 }
 
 // ReviewResponse contains the reviewer's structured output and diagnostics.
