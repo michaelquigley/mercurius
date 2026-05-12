@@ -75,6 +75,7 @@ The assembled prompt is also written to `<session_dir>/round-NN/_prompt.md` duri
 <log_destination>/
   <session_id>/
     status.json
+    _synopsis.md   (written by close_session)
     round-01/
       _round.md
       _prompt.md
@@ -89,7 +90,7 @@ The assembled prompt is also written to `<session_dir>/round-NN/_prompt.md` duri
 
 Each round gets its own self-contained folder. `_round.md` is the immutable log file. `_prompt.md` is the assembled prompt. `_notes.md` is the (optional) sibling file holding commentary and decisions. Other files in the directory are the snapshotted artifacts under their declared names.
 
-`status.json` is the latest durable monitor snapshot of session state. There is no `events.ndjson`: monitor `--wait` polls `status.json`.
+`status.json` is the latest durable monitor snapshot of session state. There is no `events.ndjson`: monitor `--wait` polls `status.json`. `_synopsis.md` is a session-level human-readable summary written by `close_session`; see Session Synopsis below.
 
 ## Round Logs
 
@@ -100,6 +101,10 @@ Each completed round writes a markdown log at `<session>/round-NN/_round.md`:
 - Reviewer output sections with usage notes and raw JSON.
 
 The log is immutable after creation. Recording commentary and decisions through `record_round_notes` writes a sibling `_notes.md` file rather than mutating the log.
+
+## Session Synopsis
+
+`close_session` writes a session-level summary at `<session>/_synopsis.md`. The file opens with YAML frontmatter (session id, opened/closed timestamps, round count, reviewer, calibration-present flags, and last error if any), followed by a skimmable Summary section, a Round outcomes table with one row per round, and a per-round detail block that restates verdicts, findings, decisions, and commentary. The synopsis is rendered from in-memory session state at close time; if a round's reviewer output fails to parse, the synopsis emits a stable fallback pointing at that round's `_round.md` for the raw JSON. The per-round `_round.md` and `_notes.md` files remain the authoritative record.
 
 ## Reviewer Implementations
 

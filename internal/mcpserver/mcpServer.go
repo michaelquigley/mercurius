@@ -149,8 +149,9 @@ type CloseSessionInput struct {
 }
 
 type CloseSessionOutput struct {
-	SessionID string `json:"session_id"`
-	ClosedAt  string `json:"closed_at"`
+	SessionID    string `json:"session_id"`
+	ClosedAt     string `json:"closed_at"`
+	SynopsisPath string `json:"synopsis_path"`
 }
 
 type SessionStatusInput struct {
@@ -375,7 +376,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker, calibration Calibration
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "close_session",
-		Description: "close a Mercurius review session. sessions are light groupings of rounds; closure just marks the arc done.",
+		Description: "close a Mercurius review session. sessions are light groupings of rounds; closure marks the arc done and writes a human-readable _synopsis.md at the session root that summarizes every round, its findings, and any recorded decisions. the synopsis_path field on the response points at that file.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input CloseSessionInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.CloseSession(ctx, broker.CloseSessionRequest{
 			SessionID: input.SessionID,
@@ -384,8 +385,9 @@ func RegisterTools(server *mcp.Server, b *broker.Broker, calibration Calibration
 			return toolErrorResult(err)
 		}
 		return nil, CloseSessionOutput{
-			SessionID: response.SessionID,
-			ClosedAt:  formatTime(response.ClosedAt),
+			SessionID:    response.SessionID,
+			ClosedAt:     formatTime(response.ClosedAt),
+			SynopsisPath: response.SynopsisPath,
 		}, nil
 	})
 

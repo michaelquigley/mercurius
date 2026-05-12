@@ -33,6 +33,7 @@ const (
 	roundLogName        = "_round.md"
 	roundPromptName     = "_prompt.md"
 	roundNotesName      = "_notes.md"
+	sessionSynopsisName = "_synopsis.md"
 )
 
 var safeArtifactName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -554,9 +555,25 @@ func (b *Broker) CloseSession(ctx context.Context, req CloseSessionRequest) (Clo
 	}
 
 	closedAt := time.Now().UTC()
+	previousState := s.state
+	previousClosedAt := s.closedAt
+	previousLastError := s.lastError
 	s.state = stateClosed
 	s.closedAt = &closedAt
 	s.lastError = nil
+
+	synopsisPath := filepath.Join(s.dir, sessionSynopsisName)
+	if err := roundlog.WriteSynopsis(synopsisPath, b.synopsisEntryFromSession(s, previousLastError)); err != nil {
+		// roll the state transition back so a retry of close_session works.
+		s.state = previousState
+		s.closedAt = previousClosedAt
+		s.lastError = previousLastError
+		failure := brokerError(CodeInternalError, "write session synopsis", err, map[string]any{"synopsis_path": synopsisPath})
+		s.recordError(failure)
+		_ = b.persistSessionLocked(s)
+		return CloseSessionResponse{}, failure
+	}
+
 	if err := b.persistSessionLocked(s); err != nil {
 		err := brokerError(CodeInternalError, "write session status", err, nil)
 		s.recordError(err)
@@ -564,9 +581,77 @@ func (b *Broker) CloseSession(ctx context.Context, req CloseSessionRequest) (Clo
 	}
 
 	return CloseSessionResponse{
-		SessionID: s.id,
-		ClosedAt:  closedAt,
+		SessionID:    s.id,
+		ClosedAt:     closedAt,
+		SynopsisPath: synopsisPath,
 	}, nil
+}
+
+// synopsisEntryFromSession assembles a roundlog.SynopsisEntry from in-memory
+// session state. Reviewer outputs that fail schema parsing are marked
+// Unparseable so the writer can emit a stable fallback for those rounds
+// without crashing the close path.
+func (b *Broker) synopsisEntryFromSession(s *session, lastError *ErrorInfo) roundlog.SynopsisEntry {
+	entry := roundlog.SynopsisEntry{
+		SessionID: s.id,
+		OpenedAt:  s.openedAt,
+		Reviewer: roundlog.SynopsisReviewer{
+			Name:  b.options.ReviewerInfo.Name,
+			Impl:  b.options.ReviewerInfo.Impl,
+			Model: b.options.ReviewerInfo.Model,
+		},
+		ReviewContextPresent: s.reviewContext != "",
+		ReviewFocusPresent:   s.reviewFocus != "",
+	}
+	if s.closedAt != nil {
+		entry.ClosedAt = *s.closedAt
+	}
+	if lastError != nil {
+		entry.LastError = &roundlog.SynopsisError{
+			Code:    lastError.Code,
+			Message: lastError.Message,
+		}
+	}
+	entry.Rounds = make([]roundlog.SynopsisRound, 0, len(s.rounds))
+	for _, r := range s.rounds {
+		entry.Rounds = append(entry.Rounds, synopsisRoundFromRound(r))
+	}
+	return entry
+}
+
+func synopsisRoundFromRound(r *round) roundlog.SynopsisRound {
+	sr := roundlog.SynopsisRound{
+		Number:     r.number,
+		OpenedAt:   r.openedAt,
+		LogPath:    r.logPath,
+		NotesPath:  r.notesPath,
+		HasNotes:   r.hasNotes,
+		Commentary: r.commentary,
+	}
+	if len(r.results) > 0 {
+		sr.ReviewerName = r.results[0].ReviewerName
+		output, err := schema.ParseReviewOutput(r.results[0].Raw)
+		if err != nil {
+			sr.Unparseable = true
+		} else {
+			sr.Verdict = output.Verdict
+			sr.ReviewerSummary = output.Summary
+			sr.Concerns = append([]schema.Concern(nil), output.Concerns...)
+			sr.Questions = append([]schema.Question(nil), output.Questions...)
+			sr.AdvisoryNotes = append([]schema.AdvisoryNote(nil), output.AdvisoryNotes...)
+		}
+	}
+	if len(r.decisions) > 0 {
+		sr.Decisions = make([]roundlog.Decision, 0, len(r.decisions))
+		for _, d := range r.decisions {
+			sr.Decisions = append(sr.Decisions, roundlog.Decision{
+				Ref:         d.Ref,
+				Disposition: d.Disposition,
+				Note:        d.Note,
+			})
+		}
+	}
+	return sr
 }
 
 // SessionStatus returns a read-only session view.

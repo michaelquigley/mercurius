@@ -106,13 +106,15 @@ Dispositions are `fixed`, `rejected`, or `deferred`. Decision refs must match a 
 
 ## `close_session`
 
-Closes a session. Sessions are light groupings of rounds; closure just marks the arc done.
+Closes a session and writes a human-readable `_synopsis.md` at the session root that summarizes every round, its findings, and any recorded decisions. The response includes the absolute path to the synopsis so callers can open it directly.
 
 Request:
 
 ```json
 { "session_id": "s_..." }
 ```
+
+Response fields: `session_id`, `closed_at`, `synopsis_path`.
 
 ## `session_status`
 

@@ -40,6 +40,10 @@ Real reviewer runs can outlive an MCP client's tool timeout. Use `start_review_r
 
 Each session directory contains a `status.json` file with the latest session state, active round (if any), last error, and round history. The broker writes this atomically on every state change.
 
+## Session Synopsis
+
+When `close_session` succeeds, the broker writes `<session>/_synopsis.md`: one durable, human-readable summary of the entire session. It opens with a skimmable summary (round count, latest verdict, decision tallies) and continues with a round-by-round detail block that restates the reviewer's findings, decisions recorded via `record_round_notes`, and any commentary. The synopsis is rendered fresh from in-memory session state at close time; per-round `_round.md` and `_notes.md` files remain the immutable record of each round's raw reviewer output and human notes.
+
 ## Error Codes
 
 Five stable codes cover the operational surface:

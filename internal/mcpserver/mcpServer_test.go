@@ -130,6 +130,12 @@ func TestDummyReviewFlow(t *testing.T) {
 	if closeOutput.SessionID != openOutput.SessionID || closeOutput.ClosedAt == "" {
 		t.Fatalf("close output = %+v", closeOutput)
 	}
+	if closeOutput.SynopsisPath == "" {
+		t.Fatal("close output did not return a synopsis_path")
+	}
+	if _, err := os.Stat(closeOutput.SynopsisPath); err != nil {
+		t.Fatalf("expected synopsis file at %s: %v", closeOutput.SynopsisPath, err)
+	}
 }
 
 func TestBrokerErrorsBecomeToolErrors(t *testing.T) {

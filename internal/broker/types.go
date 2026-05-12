@@ -138,10 +138,12 @@ type CloseSessionRequest struct {
 	SessionID string
 }
 
-// CloseSessionResponse describes a closed session.
+// CloseSessionResponse describes a closed session. SynopsisPath points at the
+// session-level _synopsis.md written by the broker at close time.
 type CloseSessionResponse struct {
-	SessionID string
-	ClosedAt  time.Time
+	SessionID    string
+	ClosedAt     time.Time
+	SynopsisPath string
 }
 
 // SessionStatusResponse is a read-only session view.

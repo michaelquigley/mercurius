@@ -144,4 +144,4 @@ Close the session with:
 { "session_id": "s_..." }
 ```
 
-There is no verdict on `close_session` - outcomes live on individual rounds. Closing a session just marks the arc done.
+There is no verdict on `close_session` - outcomes live on individual rounds. Closing a session marks the arc done and writes `<session>/_synopsis.md`, a tidy human-readable summary of every round (verdicts, findings, decisions, commentary). The path is returned as `synopsis_path` in the close response; open it when you want one durable artifact that describes what happened in this session without walking each round directory.

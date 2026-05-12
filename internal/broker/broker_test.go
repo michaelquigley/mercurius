@@ -133,6 +133,35 @@ func TestSessionRoundsNotesAndClose(t *testing.T) {
 	if closed.SessionID != open.SessionID || closed.ClosedAt.IsZero() {
 		t.Fatalf("unexpected close response: %+v", closed)
 	}
+	if closed.SynopsisPath == "" {
+		t.Fatal("close response did not include a synopsis path")
+	}
+	wantSynopsisPath := filepath.Join(open.SessionDir, "_synopsis.md")
+	if closed.SynopsisPath != wantSynopsisPath {
+		t.Fatalf("synopsis path = %q, want %q", closed.SynopsisPath, wantSynopsisPath)
+	}
+	synopsis := readFile(t, closed.SynopsisPath)
+	for _, want := range []string{
+		"session_id: " + open.SessionID,
+		"round_count: 2",
+		"## Round outcomes",
+		"| 01 | ",
+		"| 02 | ",
+		"## Round detail",
+		"### Round 01",
+		"### Round 02",
+		"**Decisions**",
+		"- **fixed** (C-1): fix landed.",
+		"**Commentary**",
+		"> commentary",
+	} {
+		if !strings.Contains(synopsis, want) {
+			t.Errorf("synopsis missing %q\n---\n%s", want, synopsis)
+		}
+	}
+	if strings.Contains(synopsis, "_no decisions recorded_") {
+		t.Fatalf("synopsis must render its own structure, not copy the notes-file placeholder")
+	}
 	_, err = startAndCollectRound(t, b, ctx, StartRoundRequest{
 		SessionID: open.SessionID,
 		Artifacts: []Artifact{{Name: "design", Path: design}},
@@ -547,6 +576,38 @@ func TestOpenSessionRejectsBadLogDestination(t *testing.T) {
 	})
 	_, err := b.OpenSession(ctx, OpenSessionRequest{})
 	assertBrokerCode(t, err, CodeUserError)
+}
+
+func TestCloseSessionWritesSynopsisWithoutRounds(t *testing.T) {
+	ctx := context.Background()
+	b := testBroker(t, newScriptedReviewer())
+	open, err := b.OpenSession(ctx, OpenSessionRequest{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	closed, err := b.CloseSession(ctx, CloseSessionRequest{SessionID: open.SessionID})
+	if err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if closed.SynopsisPath == "" {
+		t.Fatal("expected a synopsis path")
+	}
+	synopsis := readFile(t, closed.SynopsisPath)
+	for _, want := range []string{
+		"round_count: 0",
+		"# Session synopsis",
+		"## Summary",
+		"Session closed with no rounds.",
+	} {
+		if !strings.Contains(synopsis, want) {
+			t.Errorf("empty-rounds synopsis missing %q\n---\n%s", want, synopsis)
+		}
+	}
+	for _, unwanted := range []string{"## Round outcomes", "## Round detail"} {
+		if strings.Contains(synopsis, unwanted) {
+			t.Errorf("empty-rounds synopsis should not contain %q\n---\n%s", unwanted, synopsis)
+		}
+	}
 }
 
 func TestUnknownSessionReturnsNotFound(t *testing.T) {
