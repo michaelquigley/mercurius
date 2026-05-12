@@ -64,6 +64,7 @@ func newRootCommand() *cobra.Command {
 	root.PersistentFlags().StringVar(&configPath, "config", "./mercurius.yaml", "path to mercurius.yaml")
 	root.Flags().BoolVar(&verbose, "verbose", false, "enable verbose stderr logging")
 	root.AddCommand(newMonitorCommand(&configPath))
+	root.AddCommand(newBootstrapCommand())
 	return root
 }
 

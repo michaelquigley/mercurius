@@ -35,7 +35,7 @@ Mercurius has a working local MCP server, Codex and dummy reviewers, background 
 - [`docs/current/`](docs/current/README.md) — documentation for the current implementation
 - [`docs/current/user-guide.md`](docs/current/user-guide.md) — real-world usage guide
 - [`docs/future/`](docs/future/) — future changes and deferred designs
-- [`examples/mercurius.yaml`](examples/mercurius.yaml) — starter project config
+- `mercurius bootstrap` — write a starter `mercurius.yaml` into the current directory
 
 ## Install
 
@@ -44,6 +44,15 @@ From this checkout:
 ```sh
 go install ./cmd/mercurius
 ```
+
+Initialize a new project with a starter config:
+
+```sh
+cd /path/to/your/project
+mercurius bootstrap
+```
+
+This writes `mercurius.yaml` into the current directory using the embedded template. Pass `--force` to overwrite an existing file.
 
 Then run the MCP server on stdio:
 
