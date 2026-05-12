@@ -22,7 +22,7 @@ func TestSessionRoundsNotesAndClose(t *testing.T) {
 	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithRefs()})
 	b := testBroker(t, r)
 
-	open, err := b.OpenSession(ctx, OpenSessionRequest{})
+	open, err := b.OpenSession(ctx, OpenSessionRequest{ReviewFocus: "flag unclear acceptance criteria."})
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
@@ -140,15 +140,14 @@ func TestSessionRoundsNotesAndClose(t *testing.T) {
 	assertBrokerCode(t, err, CodeConflict)
 }
 
-func TestOpenSessionReportsConfigContextPresence(t *testing.T) {
+func TestOpenSessionReportsRequestCalibrationPresence(t *testing.T) {
 	ctx := context.Background()
 	b := New(Options{
 		LogDestination: filepath.Join(t.TempDir(), "reviews"),
-		ReviewContext:  "config context",
 		Reviewer:       newScriptedReviewer(),
 		ReviewerInfo:   ReviewerInfo{Name: "dummy", Impl: "dummy"},
 	})
-	open, err := b.OpenSession(ctx, OpenSessionRequest{})
+	open, err := b.OpenSession(ctx, OpenSessionRequest{ReviewContext: "request context"})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -156,7 +155,64 @@ func TestOpenSessionReportsConfigContextPresence(t *testing.T) {
 		t.Fatalf("expected review_context_present, got %+v", open)
 	}
 	if open.ReviewFocusPresent {
-		t.Fatal("did not configure review_focus, so it must be reported absent")
+		t.Fatal("did not pass review_focus, so it must be reported absent")
+	}
+}
+
+// TestSessionCalibrationIsPerRequest is the regression guard for the
+// cross-talk bug where review_context cached at server startup leaked into
+// later sessions even after mercurius.yaml had been edited. Two consecutive
+// OpenSession calls with different request values must produce round prompts
+// that contain only their own per-session calibration.
+func TestSessionCalibrationIsPerRequest(t *testing.T) {
+	ctx := context.Background()
+	r := newScriptedReviewer(
+		scriptedResponse{raw: validReviewOutput("ready_to_build")},
+		scriptedResponse{raw: validReviewOutput("ready_to_build")},
+	)
+	b := New(Options{
+		LogDestination: filepath.Join(t.TempDir(), "reviews"),
+		Reviewer:       r,
+		ReviewerInfo:   ReviewerInfo{Name: "dummy", Impl: "dummy"},
+	})
+
+	openA, err := b.OpenSession(ctx, OpenSessionRequest{
+		ReviewContext: "calibration-alpha",
+		ReviewFocus:   "focus-alpha",
+	})
+	if err != nil {
+		t.Fatalf("open A: %v", err)
+	}
+	if _, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
+		SessionID: openA.SessionID,
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "alpha")}},
+	}); err != nil {
+		t.Fatalf("round A: %v", err)
+	}
+	promptA := readFile(t, filepath.Join(openA.SessionDir, "round-01", roundPromptName))
+	if !strings.Contains(promptA, "calibration-alpha") || !strings.Contains(promptA, "focus-alpha") {
+		t.Fatalf("prompt A missing alpha calibration:\n%s", promptA)
+	}
+
+	openB, err := b.OpenSession(ctx, OpenSessionRequest{
+		ReviewContext: "calibration-bravo",
+		ReviewFocus:   "focus-bravo",
+	})
+	if err != nil {
+		t.Fatalf("open B: %v", err)
+	}
+	if _, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
+		SessionID: openB.SessionID,
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "bravo")}},
+	}); err != nil {
+		t.Fatalf("round B: %v", err)
+	}
+	promptB := readFile(t, filepath.Join(openB.SessionDir, "round-01", roundPromptName))
+	if !strings.Contains(promptB, "calibration-bravo") || !strings.Contains(promptB, "focus-bravo") {
+		t.Fatalf("prompt B missing bravo calibration:\n%s", promptB)
+	}
+	if strings.Contains(promptB, "calibration-alpha") || strings.Contains(promptB, "focus-alpha") {
+		t.Fatalf("prompt B leaked alpha calibration:\n%s", promptB)
 	}
 }
 
@@ -644,7 +700,6 @@ func testBroker(t *testing.T, r reviewer.Reviewer) *Broker {
 
 	return New(Options{
 		LogDestination: filepath.Join(t.TempDir(), "reviews"),
-		ReviewFocus:    "flag unclear acceptance criteria.",
 		Reviewer:       r,
 		ReviewerInfo:   ReviewerInfo{Name: "dummy", Impl: "dummy"},
 	})

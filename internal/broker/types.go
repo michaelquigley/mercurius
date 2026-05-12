@@ -7,13 +7,14 @@ import (
 	"github.com/michaelquigley/mercurius/internal/reviewer"
 )
 
-// Options configures a broker instance.
+// Options configures a broker instance. ReviewContext and ReviewFocus are not
+// cached on the broker; the MCP layer re-reads them from mercurius.yaml on each
+// open_session call and passes them in via OpenSessionRequest, so calibration
+// edits between sessions take effect without a server restart.
 type Options struct {
 	LogDestination string
 	ConfigPath     string
 	MaxFindings    int
-	ReviewContext  string
-	ReviewFocus    string
 	Reviewer       reviewer.Reviewer
 	ReviewerInfo   ReviewerInfo
 }
@@ -24,8 +25,14 @@ type Artifact struct {
 	Path string
 }
 
-// OpenSessionRequest starts a new review session.
-type OpenSessionRequest struct{}
+// OpenSessionRequest starts a new review session. ReviewContext and
+// ReviewFocus calibrate the round prompt for every round in this session; they
+// are typically passed by the MCP layer after re-reading mercurius.yaml so
+// edits between sessions are picked up without a server restart.
+type OpenSessionRequest struct {
+	ReviewContext string
+	ReviewFocus   string
+}
 
 // OpenSessionResponse describes a newly opened session.
 type OpenSessionResponse struct {

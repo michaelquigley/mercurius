@@ -197,6 +197,13 @@ type ErrorOutput struct {
 	At      string         `json:"at,omitempty"`
 }
 
+// CalibrationProvider returns the review_context and review_focus to attach to
+// a new session. Production wiring re-reads mercurius.yaml on each call so
+// edits between sessions take effect without a server restart. A nil provider
+// means no calibration is attached (the round prompt's calibration sections
+// stay empty); this is fine for tests that don't exercise calibration.
+type CalibrationProvider func(ctx context.Context) (reviewContext, reviewFocus string, err error)
+
 // New creates a configured MCP server and its backing broker.
 func New(cfg *config.Config) (*mcp.Server, *broker.Broker, error) {
 	if cfg == nil {
@@ -212,11 +219,14 @@ func New(cfg *config.Config) (*mcp.Server, *broker.Broker, error) {
 	}
 	b := broker.New(options)
 	server := mcp.NewServer(&mcp.Implementation{Name: cfg.Name, Version: Version}, nil)
-	RegisterTools(server, b)
+	RegisterTools(server, b, ConfigCalibrationProvider(cfg.ConfigPath))
 	return server, b, nil
 }
 
-// BrokerOptions builds broker options from a project config.
+// BrokerOptions builds broker options from a project config. Calibration
+// (review_context, review_focus) is intentionally not included here; the MCP
+// layer re-reads it per open_session via a CalibrationProvider so YAML edits
+// between sessions are picked up.
 func BrokerOptions(cfg *config.Config) (broker.Options, error) {
 	if cfg == nil {
 		return broker.Options{}, errors.New("config is nil")
@@ -234,20 +244,55 @@ func BrokerOptions(cfg *config.Config) (broker.Options, error) {
 		LogDestination: cfg.LogDestination,
 		ConfigPath:     cfg.ConfigPath,
 		MaxFindings:    cfg.MaxFindings,
-		ReviewContext:  cfg.ReviewContext,
-		ReviewFocus:    cfg.ReviewFocus,
 		Reviewer:       r,
 		ReviewerInfo:   info,
 	}, nil
 }
 
-// RegisterTools installs the Mercurius MCP tool surface.
-func RegisterTools(server *mcp.Server, b *broker.Broker) {
+// ConfigCalibrationProvider returns a CalibrationProvider that re-reads
+// mercurius.yaml at the given path on every call and returns its
+// review_context / review_focus fields.
+func ConfigCalibrationProvider(configPath string) CalibrationProvider {
+	if configPath == "" {
+		return nil
+	}
+	return func(ctx context.Context) (string, string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", "", err
+		}
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			return "", "", err
+		}
+		return cfg.ReviewContext, cfg.ReviewFocus, nil
+	}
+}
+
+// RegisterTools installs the Mercurius MCP tool surface. The provider is
+// consulted on each open_session call so calibration tracks mercurius.yaml
+// edits without a server restart.
+func RegisterTools(server *mcp.Server, b *broker.Broker, calibration CalibrationProvider) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "open_session",
-		Description: "open a new Mercurius review session. review_context and review_focus are read from mercurius.yaml; edit the YAML before opening a session if you want different review calibration. artifacts are not registered at session open; pass them to each start_review_round call.",
+		Description: "open a new Mercurius review session. review_context and review_focus are re-read from mercurius.yaml on every open_session call, so edits to the YAML take effect on the next session without restarting the server; calibration is fixed for the lifetime of the returned session. artifacts are not registered at session open; pass them to each start_review_round call.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ OpenSessionInput) (*mcp.CallToolResult, any, error) {
-		response, err := b.OpenSession(ctx, broker.OpenSessionRequest{})
+		var reviewContext, reviewFocus string
+		if calibration != nil {
+			rc, rf, err := calibration(ctx)
+			if err != nil {
+				return toolErrorResult(&broker.Error{
+					Code:    broker.CodeUserError,
+					Message: "reread mercurius.yaml",
+					Err:     err,
+				})
+			}
+			reviewContext = rc
+			reviewFocus = rf
+		}
+		response, err := b.OpenSession(ctx, broker.OpenSessionRequest{
+			ReviewContext: reviewContext,
+			ReviewFocus:   reviewFocus,
+		})
 		if err != nil {
 			return toolErrorResult(err)
 		}

@@ -45,15 +45,17 @@ type Broker struct {
 }
 
 type session struct {
-	id           string
-	dir          string
-	state        string
-	openedAt     time.Time
-	closedAt     *time.Time
-	rounds       []*round
-	lastError    *ErrorInfo
-	activeJob    *roundJob
-	lastRoundJob *roundJob
+	id            string
+	dir           string
+	state         string
+	openedAt      time.Time
+	closedAt      *time.Time
+	reviewContext string
+	reviewFocus   string
+	rounds        []*round
+	lastError     *ErrorInfo
+	activeJob     *roundJob
+	lastRoundJob  *roundJob
 }
 
 type round struct {
@@ -120,7 +122,9 @@ func New(options Options) *Broker {
 }
 
 // OpenSession creates a session directory and binds the configured reviewer.
-func (b *Broker) OpenSession(ctx context.Context, _ OpenSessionRequest) (OpenSessionResponse, error) {
+// The request's ReviewContext and ReviewFocus are stored on the session and
+// used for every round; the broker does not cache calibration across sessions.
+func (b *Broker) OpenSession(ctx context.Context, req OpenSessionRequest) (OpenSessionResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return OpenSessionResponse{}, err
 	}
@@ -142,10 +146,12 @@ func (b *Broker) OpenSession(ctx context.Context, _ OpenSessionRequest) (OpenSes
 
 	openedAt := time.Now().UTC()
 	s := &session{
-		id:       id,
-		dir:      dir,
-		state:    stateActive,
-		openedAt: openedAt,
+		id:            id,
+		dir:           dir,
+		state:         stateActive,
+		openedAt:      openedAt,
+		reviewContext: strings.TrimSpace(req.ReviewContext),
+		reviewFocus:   strings.TrimSpace(req.ReviewFocus),
 	}
 	b.sessions[id] = s
 
@@ -160,8 +166,8 @@ func (b *Broker) OpenSession(ctx context.Context, _ OpenSessionRequest) (OpenSes
 		SessionDir:           dir,
 		OpenedAt:             openedAt,
 		MaxFindings:          b.options.MaxFindings,
-		ReviewContextPresent: strings.TrimSpace(b.options.ReviewContext) != "",
-		ReviewFocusPresent:   strings.TrimSpace(b.options.ReviewFocus) != "",
+		ReviewContextPresent: s.reviewContext != "",
+		ReviewFocusPresent:   s.reviewFocus != "",
 		Reviewer:             b.options.ReviewerInfo,
 	}, nil
 }
@@ -216,8 +222,8 @@ func (b *Broker) StartReviewRound(ctx context.Context, req StartRoundRequest) (S
 		reviewer:      b.options.Reviewer,
 		reviewerName:  b.options.ReviewerInfo.Name,
 		artifacts:     artifacts,
-		reviewContext: strings.TrimSpace(b.options.ReviewContext),
-		reviewFocus:   strings.TrimSpace(b.options.ReviewFocus),
+		reviewContext: s.reviewContext,
+		reviewFocus:   s.reviewFocus,
 		maxFindings:   b.options.MaxFindings,
 		startedAt:     startedAt,
 		updatedAt:     startedAt,
@@ -629,8 +635,8 @@ func (s *session) status(options Options) SessionStatusResponse {
 		OpenedAt:             s.openedAt,
 		ClosedAt:             cloneTimePtr(s.closedAt),
 		MaxFindings:          options.MaxFindings,
-		ReviewContextPresent: strings.TrimSpace(options.ReviewContext) != "",
-		ReviewFocusPresent:   strings.TrimSpace(options.ReviewFocus) != "",
+		ReviewContextPresent: s.reviewContext != "",
+		ReviewFocusPresent:   s.reviewFocus != "",
 		RoundCount:           len(s.rounds),
 		Reviewer:             options.ReviewerInfo,
 		LastError:            cloneErrorInfo(s.lastError),

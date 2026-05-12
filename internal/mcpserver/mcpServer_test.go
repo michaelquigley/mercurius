@@ -329,6 +329,76 @@ func TestCollectRoundTriageConcernFirst(t *testing.T) {
 	}
 }
 
+// TestOpenSessionRereadsConfig guards the cross-talk regression where
+// review_context was cached at server startup and leaked into later sessions
+// after mercurius.yaml had been edited. ConfigCalibrationProvider must observe
+// the current YAML on every open_session call.
+func TestOpenSessionRereadsConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "mercurius.yaml")
+	writeConfig := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+	}
+
+	writeConfig(`log_destination: ` + filepath.Join(dir, "reviews") + `
+review_context: |
+  first calibration
+reviewer:
+  name: dummy
+  impl: dummy
+`)
+
+	b := broker.New(broker.Options{
+		LogDestination: filepath.Join(dir, "reviews"),
+		MaxFindings:    config.DefaultMaxFindings,
+		Reviewer:       fixedReviewer{raw: validReviewOutput()},
+		ReviewerInfo:   broker.ReviewerInfo{Name: "dummy", Impl: "dummy"},
+	})
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-project", Version: Version}, nil)
+	RegisterTools(server, b, ConfigCalibrationProvider(configPath))
+	ctx, client := newTestClientForServer(t, server)
+
+	// first open: context present
+	first, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("open session 1: %v", err)
+	}
+	out1 := decodeStructured[OpenSessionOutput](t, first)
+	if !out1.ReviewContextPresent {
+		t.Fatalf("first open: expected review_context_present, got %+v", out1)
+	}
+
+	// edit the yaml to drop review_context entirely
+	writeConfig(`log_destination: ` + filepath.Join(dir, "reviews") + `
+reviewer:
+  name: dummy
+  impl: dummy
+`)
+	second, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("open session 2: %v", err)
+	}
+	out2 := decodeStructured[OpenSessionOutput](t, second)
+	if out2.ReviewContextPresent {
+		t.Fatalf("second open: expected review_context absent after yaml edit, got %+v", out2)
+	}
+
+	// invalid yaml: open_session must surface a user_error instead of falling
+	// back to a stale value.
+	writeConfig("this: is: not: valid: yaml\n\t::broken")
+	third, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("open session 3: %v", err)
+	}
+	payload := assertToolError(t, third, nil, broker.CodeUserError)
+	if !strings.Contains(payload.Message, "reread mercurius.yaml") {
+		t.Fatalf("expected 'reread mercurius.yaml' message, got %+v", payload)
+	}
+}
+
 func TestSelectNextFindingBySeverity(t *testing.T) {
 	mk := func(ref string, kind string, severity *string) TriageFindingOutput {
 		return TriageFindingOutput{Ref: ref, Kind: kind, Severity: severity}
@@ -425,7 +495,7 @@ func newTestClientWithBroker(t *testing.T, b *broker.Broker) (context.Context, *
 	t.Helper()
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test-project", Version: Version}, nil)
-	RegisterTools(server, b)
+	RegisterTools(server, b, nil)
 	return newTestClientForServer(t, server)
 }
 
