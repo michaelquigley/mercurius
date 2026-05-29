@@ -66,6 +66,17 @@ the decision-maker. This is field feedback, not a postmortem write-up.
   natural step in any workflow. Could be promoted by including
   the round number directly in `start_review_round`'s response so
   the recorder doesn't have to look it up.
+- **Settled-context over-extension is its own failure mode.** The
+  counterpart to "settled context as a re-litigation guard": guards
+  added speculatively, before any real re-litigation has occurred,
+  bloat the YAML and slow reviewer cold-reads without buying
+  anything. In one arc the initial `mercurius.yaml` carried ~11
+  settled-decision blocks inherited from a prior session and ran
+  ~400 lines; the operator asked for simplification, and trimming
+  to ~50 lines made round 1 of the new arc faster to read and
+  faster to dispatch. Guards should be earned by actual reviewer
+  re-litigation, not pre-emptive. Comprehensive at project-posture
+  altitude; minimal at PR-review altitude.
 
 ## Planning-pipeline integration
 
@@ -108,6 +119,59 @@ workflow described in the grimoire, not about mercurius proper.
   findings have not changed character across two rounds, declare
   convergence" — would help the planning agent recognize when
   further rounds are extracting diminishing returns.
+- **Close-and-reopen approximates the fresh-reader round.** The
+  meta-observation at the bottom of this doc proposes an
+  empty-`review_context` round to test artifact durability. That
+  mode isn't implementable today, but close-current-session +
+  open-new-session is a partial approximation: `review_context`
+  still loads, but the reviewer doesn't carry round-by-round triage
+  history. Used after a consistency-fix pass at the end of one arc;
+  surfaced three precision advisories the original session hadn't
+  named, validating that the artifacts hold up under fresh-reader
+  scrutiny. Planning agents should know this pattern is available
+  today without waiting for mercurius to grow a dedicated mode.
+- **Intra-artifact consistency drift is the planning agent's job,
+  not the reviewer's.** Across a multi-round arc the spec and work
+  order accumulated stale framing in earlier sections — a round-1
+  conclusion paragraph that under-stated scope after rounds 4-7
+  pulled in more work; a thread that was explicitly reframed in a
+  later round but never updated where it lived; a critical-files
+  table that drifted into direct contradiction with later sections.
+  Mercurius reviewers compared artifacts against code, not against
+  later sections of the same artifact, and none of these surfaced
+  via mercurius review (not even in the fresh-eyes session). They
+  emerged only when the planning agent did a self-directed
+  end-to-end re-read prompted by the operator. Worth adding to
+  planning-pipeline guidance: a self-audit pass over both artifacts
+  between the final mercurius round and the implementation handoff.
+  Look for stale framing in early sections, under-stated scope
+  statements, "may need to" hedges that have since been resolved,
+  and tables that haven't kept pace with body edits.
+- **Confidence is not consent.** The most reliable planning-agent
+  failure mode in one arc was the agent's own tendency to skip the
+  present-and-wait step once the operator had shown a clear pattern
+  of agreement. The cognitive shape: form a high-confidence
+  prediction about what the user will say; the discussion turn
+  looks like overhead; batch advisories or apply edits before
+  asking. Twice in one session the operator pulled the agent back.
+  The discussion turn is where the user's judgment surfaces, where
+  framings get sharpened, and where predictions are sometimes wrong.
+  Even a tiny extra turn is cheaper than an unconsented edit. The
+  pattern is durable enough across planning agents that it's worth
+  flagging as a standing warning in the planning-pipeline guidance.
+- **Re-litigation isn't always noise — sometimes it surfaces
+  refinement.** Nuance to "reviewer re-raises settled decisions":
+  when the reviewer re-raises a decision, the right response isn't
+  always "yes, settled, here's why." Sometimes walking the operator
+  through the re-raise surfaces a sharper framing than the original
+  decision had. In one arc, a round-3 re-raise of a regression test
+  dropped in round 2 produced a third framing (assertion of a
+  permanent contract, not regression guard against a deleted path)
+  that was better than either earlier round's resolution. Test for
+  productive vs. noise re-litigation: does walking the operator
+  through it surface something neither side had named? If yes,
+  productive. If the operator just confirms the prior decision
+  verbatim, it's noise — and the guard pattern applies.
 
 ## One meta-observation worth its own line
 
