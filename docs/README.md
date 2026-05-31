@@ -14,5 +14,5 @@ Documentation is split by whether it describes the implementation that exists to
 
 ## Future
 
-- [Panel mode and diff rounds](future/panel-mode-and-diff-rounds.md)
+- [Review round modes](future/review-round-modes.md)
 - [Future calibration ideas](future/calibration-ideas.md)
