@@ -1,0 +1,43 @@
+# mercurius reviewing itself. drives the review of the settled-decisions spec +
+# work order in docs/future/.
+#
+# note: this is written against the CURRENT schema (review_context + review_focus).
+# once Slice A of the work order ships, the calibration/guards split applies and any
+# decided-and-out-of-scope guards would move into a settled_decisions field. for now
+# review_context stays pure calibration, and if the reviewer re-raises one of the
+# spec's explicit deferrals, that gets triaged in the round notes rather than
+# pre-suppressed here.
+
+max_findings: 8
+
+# review_context: calibration only — posture, stakes, scope, simplicity preference.
+review_context: |
+  mercurius is a personal practice tool, pre-1.0; breaking changes are acceptable and
+  backward compatibility is not a concern. the implementer is a single supervised agent
+  following the work order precisely, with a human in the loop. go 1.26 on the df/dd and
+  modelcontextprotocol/go-sdk stack. prefer simple over highly defensive when both achieve
+  correctness, and prefer the smallest fix that resolves an issue over new mechanism. the
+  artifacts under review are a design spec and its implementation work order — prose, not
+  code; judge them for implementation-readiness.
+
+# review_focus: project-specific surfaces the universal what-to-flag criteria miss.
+review_focus: |
+  give particular attention to invariants specific to mercurius that the universal criteria
+  do not already cover:
+  - the broker stays config-agnostic: calibration and guards are injected through the MCP
+    CalibrationProvider, never read from YAML inside the broker package. flag any plan step
+    that would have the broker read config directly.
+  - the single-shot round model and the per-round _prompt.md snapshot are load-bearing. flag
+    anything that would carry state between rounds or break the "what each round saw" record.
+  - error-class discipline (user_error / reviewer_failed / internal_error), especially for the
+    new live-read failure path on start_review_round.
+  - whether each work-order slice has a testable definition of done, and whether the stated
+    A -> B/C -> D dependency ordering actually holds.
+  - consistency between the spec and the work order — they were edited together; check they
+    agree, especially on disposition location, the reproduce-first framing of the
+    dropped-decisions bug, the live-read failure mode, and the presence-flag ripple.
+
+reviewer:
+  name: codex
+  impl: codex
+  model: gpt-5.5

@@ -126,6 +126,21 @@ takes effect on the very next round. The close-and-reopen ritual disappears, not
 because the reviewer changed, but because the file finally gets read when it
 matters.
 
+Reading live also means a round can now fail on a file that has stopped parsing — a
+half-finished edit, a transient unreadable moment. Today that class of error only
+bites the next `open_session`; once the read moves per round, a broken edit between
+rounds fails the next `start_review_round` instead. That is the right place to fail,
+and it should fail cleanly: the round does not start, the error names the YAML
+problem, and the session is left intact so the operator fixes the file and runs the
+round again. A failed re-read is a retryable speed bump, never a session-ending event.
+
+One reporting wrinkle falls out of the same move. The `review_context_present` and
+`review_focus_present` flags on `open_session`, `session_status`, and the session
+synopsis describe calibration as a session-level property — but once the file is read
+per round, "present at open" no longer guarantees "present at round five." They stay,
+read as an at-open informational snapshot rather than a session-wide guarantee, and
+the docs say so.
+
 ### Editing the file is the amend
 
 A natural next ask — and one the field feedback raised explicitly — is a
@@ -146,6 +161,13 @@ before dispatch. "What guards was this specific round run with" is therefore
 already recorded, per round, as a side effect of how rounds already work. The
 snapshot model was built for exactly this kind of per-round variation, and live
 re-read simply starts using a capability that was already there.
+
+One deliberate addition goes a step further: each round also snapshots the raw
+`mercurius.yaml` it read, beside the rendered prompt. The prompt snapshot shows the guards as
+they rendered; the config snapshot shows them as they were written — so a guard that rendered
+to nothing, present in the source but absent from the prompt, stays diagnosable from the round
+directory. That input-beside-output pairing is the diagnostic the live-read model wants, and it
+sits on top of the for-free prompt snapshot rather than replacing it.
 
 ### The bootstrap template stops teaching the conflation
 
@@ -337,16 +359,22 @@ picks them up together, grounded fresh against the code:
 
 - The `decisions` array passed to `record_round_notes` is dropped on the first
   call a majority of the time, and only persists on a second identical call.
-  Decisions should persist reliably on the first call.
+  Decisions should persist reliably on the first call. This one is reproduce-first,
+  not a known fix: the broker records a populated `decisions` array correctly when it
+  arrives, so the drop lives at the MCP input-schema or client boundary rather than in
+  the broker. The work order should reproduce it and capture the actual first-call
+  payload before committing to a fix, and carry the possibility that constraining the
+  input schema does not, on its own, cure it.
 - The `decision ref is unknown` error names neither the offending ref's context
   nor the valid refs for that round. It should list the valid refs so the operator
   is not left grepping the round log for the id format.
 - The disposition values (`fixed` / `rejected` / `deferred`) are pinned only in Go
-  code, exposed in no schema, and discoverable only by reading source. They should
-  be a documented enum in the output schema and in the tool's input schema, so a
-  client sees the valid values directly. (This may also cure the dropped-decisions
-  bug, if the cause turns out to be a client malforming the first call against an
-  unconstrained schema.)
+  code, exposed in no schema, and discoverable only by reading source. Disposition is
+  a field of the human decision recorded through `record_round_notes`, not part of the
+  reviewer output schema — so it should become a documented enum on that tool's input
+  schema and in the current docs, where a client sees the valid values directly. (This
+  may also cure the dropped-decisions bug, if the cause turns out to be a client
+  malforming the first call against an unconstrained schema.)
 
 Separately, and as part of the same arc of work, the grimoire's
 `software/mercurius/mercurius-vision` note has been reconciled to the single-shot
