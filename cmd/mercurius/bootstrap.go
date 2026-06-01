@@ -26,6 +26,7 @@ func newBootstrapCommand() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "wrote '%s'\n", path)
+			fmt.Fprintln(cmd.OutOrStdout(), "next: edit the calibration and reviewer fields, then see docs/current/agent-guide.md for how to drive a review well.")
 			return nil
 		},
 	}

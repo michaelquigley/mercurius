@@ -6,7 +6,7 @@ This guide describes the normal human workflow for using Mercurius with a design
 
 You stay in the design agent's chat. The design agent calls Mercurius through MCP. Mercurius runs the configured reviewer against the supplied artifacts and returns structured feedback. You decide what matters, what to fix, what to defer, and when to stop.
 
-A **session** is a lightweight grouping of one or more **rounds**. Each round is atomic: it snapshots its artifacts, dispatches one review, returns findings, accepts notes/decisions, and that's it. No state from a round flows into the next round in the same session. The common workflow is to open a session, run one round, fix what you and the agent agree on, then either run another round in the same session or close it and open a fresh one for the next pass.
+A **session** is a lightweight grouping of one or more **rounds**. Each round is atomic: it snapshots its artifacts, dispatches one review, returns findings, accepts notes/decisions, and that's it. No state from a round flows into the next round in the same session. The common workflow is to open a session and run several rounds in it: review, fix what you and the agent agree on, run another round, and so on - editing the artifacts (and, if needed, the YAML's calibration or guards) between rounds. Close the session when the arc is done.
 
 Mercurius is a reviewer broker, not an editor. It reads artifacts, snapshots them, asks for review, and records the audit trail. Artifact edits happen outside Mercurius.
 
@@ -19,7 +19,9 @@ max_findings: 8
 review_context: |
   Deployment: personal project, single supervised implementer.
   Preference: simple over highly defensive when both are correct.
-  Out of scope: production-grade observability and multi-tenant concerns.
+settled_decisions:
+  - id: observability-out-of-scope
+    do_not_flag: missing production-grade observability or multi-tenant concerns
 review_focus: |
   Pay particular attention to invariants specific to this project that the
   universal what-to-flag criteria do not already cover.
@@ -29,9 +31,11 @@ reviewer:
   model: gpt-5.5
 ```
 
-`review_context` and `review_focus` are the calibration surface for the reviewer. Edit them in the YAML before opening a session - they are not MCP tool inputs.
+`review_context`, `settled_decisions`, and `review_focus` are configuration-only - they are not MCP tool inputs. Mercurius re-reads `mercurius.yaml` at the start of every round, so editing them between rounds takes effect on the next round with no session reopen.
 
-Use `review_context` to state project posture: deployment model, stakes, scope, locked decisions, simplicity-vs-defensiveness preference. The reviewer suppresses findings that do not materially apply under this context.
+Use `review_context` for calibration only: the stable framing of what kind of review this is - deployment model, stakes, scope, simplicity-vs-defensiveness preference. It is true in round one and still true in round fourteen.
+
+Use `settled_decisions` for guards: decisions already made that the reviewer should stop raising (for example, an out-of-scope concern it keeps re-flagging). Each entry is `{id, do_not_flag}`; the reviewer reads `do_not_flag`, while `id` is your handle for editing or removing the guard. The usual way a guard is born is that the reviewer raises something, you reject it as out of scope in that round's notes, and then - to stop it coming back - you promote that rejection into a guard. Earn guards by re-litigation; do not add them speculatively.
 
 Use `review_focus` to direct the reviewer at project-specific surfaces that the base review philosophy does not already cover. The base prompt already carries the universal subtle-vs-obvious filter, so `review_focus` is typically just one paragraph naming invariants or risks unique to this project.
 
@@ -66,7 +70,7 @@ Ask the design agent to open a Mercurius session. The session itself takes no in
 {}
 ```
 
-The response reports the session id, the configured `max_findings`, the bound reviewer, and whether `review_context` and `review_focus` were found in the config (so the agent can confirm the YAML edits took effect).
+The response reports the session id, the configured `max_findings`, the bound reviewer, and `review_context_present` / `review_focus_present` booleans. Those booleans are an at-open snapshot of what the config held when the session opened; because calibration is re-read per round, they are informational rather than a guarantee for every later round.
 
 ## Run a Round
 
@@ -82,7 +86,7 @@ Ask the design agent to start a round, passing the artifacts under review:
 }
 ```
 
-Artifact paths must be absolute and readable by the Mercurius server. Artifact names become snapshot filenames, so keep them short and safe. Names cannot begin with `_`; that prefix is reserved for broker-emitted meta files (`_round.md`, `_prompt.md`) inside the round directory.
+Artifact paths must be absolute and readable by the Mercurius server. Artifact names become snapshot filenames, so keep them short and safe. Names cannot begin with `_`; that prefix is reserved for broker-emitted meta files (`_round.md`, `_prompt.md`, `_config.yaml`, `_notes.md`) inside the round directory.
 
 Real review rounds can take longer than the MCP client's timeout, so Mercurius runs the round in the background and returns immediately with a monitor command. Run it in a terminal:
 
@@ -100,9 +104,9 @@ When the monitor reports completion, re-engage the design agent and ask it to co
 - `triage.advisory_notes`: non-blocking polish or downstream considerations.
 - `triage.next_finding`: the default first blocking finding (highest severity, ties broken by id).
 
-The design agent first presents all blocking findings as a brief overview, then presents advisory notes separately, then walks findings one at a time. For each finding, the agent explains the finding and its proposed solution clearly and simply, using few words. You discuss it. If you agree on a fix, the agent edits the artifacts. Then it stops and waits before moving to the next finding.
+The design agent first presents all blocking findings as a brief overview, then presents advisory notes separately, then walks findings one at a time. For each finding, the agent compresses the finding and its proposed solution to the plainest, fewest-words version so you can make a fast call, presents it, and then stops and waits for your decision before acting - confidence that it can predict your answer is not consent. Only after you respond does it implement the fix. Then it stops and waits again before moving to the next finding.
 
-This loop preserves a fresh turn for each finding and keeps the human judgment surface explicit.
+This loop preserves a fresh turn for each finding and keeps the human judgment surface explicit: one finding per turn, both before acting and before advancing.
 
 ## Record Notes and Decisions
 
@@ -132,8 +136,8 @@ Decision refs match a concern, question, or advisory_note id from this round. De
 
 After a round is finalized, you and the agent have three natural options:
 
-- **Run another round in the same session**: re-snapshot updated artifacts and get a fresh review pass. Useful when the artifacts changed materially and you want to see what the reviewer still catches.
-- **Close the session and open a new one**: the most common pattern in practice - one fresh review per session, repeat until you stop seeing new substance.
+- **Run another round in the same session**: the normal next pass - re-snapshot the updated artifacts and get a fresh review. Any edits you made to `mercurius.yaml` between rounds (calibration or guards) are picked up automatically, since the config is re-read at the start of each round.
+- **Close the session and open a new one**: still available, but no longer necessary just to pick up YAML edits - closing and reopening used to be the only moment the config was re-read, and that is no longer the case.
 - **Stop**: the latest round verdict is `ready_to_build`, or the remaining findings are advisory / deferred / rejected and below the noise floor for your stated `review_context`.
 
 `ready_to_build` does not mean zero findings. It means the remaining findings are below the noise floor for the implementer the artifacts are written for, under the stated `review_context`. Advisory notes never block readiness.

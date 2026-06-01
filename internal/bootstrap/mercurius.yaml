@@ -15,14 +15,28 @@
 
 max_findings: 6
 
-# review_context describes project posture and constraints. it calibrates
-# reviewer rigor by stating what's true about the project: deployment model,
-# stakes, scope, locked decisions, simplicity-vs-defensiveness preference. the
-# reviewer suppresses findings that do not materially apply under this context.
+# review_context is calibration: the stable framing of what kind of review this
+# is. state project posture - deployment model, stakes, scope, and the
+# simplicity-vs-defensiveness preference. it is true in round one and still true
+# in round fourteen. decisions the reviewer should stop raising do NOT go here;
+# those are guards, and they live in settled_decisions below.
 review_context: |
   personal tool, single supervised implementer. pre-1.0; breaking changes are
   acceptable. prefer simple over highly defensive when both achieve correctness.
-  out of scope: production-grade observability and multi-tenant concerns.
+
+# settled_decisions are guards: decisions already made that the reviewer should
+# not re-raise. each entry is {id, do_not_flag}. do_not_flag is the instruction
+# the reviewer acts on; id is your handle for finding, editing, or removing the
+# guard and is never shown to the reviewer. earn a guard by actually
+# re-litigating a finding and deciding it is out of scope - do not add them
+# speculatively. the field's worst failure mode is bloat: a ledger that grows
+# faster than the artifacts slows every cold read without buying anything.
+# mercurius re-reads this file at the start of every round, so adding or removing
+# a guard takes effect on the next round with no session reopen.
+settled_decisions:
+  - id: observability-out-of-scope
+    do_not_flag: >
+      missing production-grade observability or multi-tenant concerns
 
 # review_focus directs the reviewer at project-specific surfaces that the base
 # review philosophy does not already cover. the base prompt already carries

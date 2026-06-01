@@ -1,7 +1,12 @@
 # Settled decisions and live review context
 
-> Status: future. Nothing in this document is implemented yet. It describes a
-> change to how mercurius carries review context across the rounds of an arc.
+> Status: implemented (2026-06-01). The behavior described here now ships and is
+> documented in `docs/current/` (see the user guide, the new agent guide,
+> configuration, MCP tools, and architecture docs). This document persists as the
+> record of design intent, not as pending work. Only the items in the Deferred
+> section below remain future: the fresh-reader round, the richer
+> `{decided, reason}` entry shape, the first-class amend tool, and
+> panel/polish/follow-up.
 
 ## The friction that started this
 

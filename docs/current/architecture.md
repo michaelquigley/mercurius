@@ -35,8 +35,8 @@ Nothing flows between rounds within a session: no decisions log carry-forward, n
 
 1. Validate session and artifacts.
 2. Snapshot artifacts into `<session_dir>/round-NN/`.
-3. Build the review prompt with review context, what-to-flag criteria, fix sizing, project-specific focus, artifact contents, verdict/severity definitions, finding budget, and output schema.
-4. Write the assembled prompt to `<session_dir>/round-NN/_prompt.md`.
+3. Build the review prompt with review context, the settled-decisions guards (rendered as their own block when any are configured), what-to-flag criteria, fix sizing, project-specific focus, artifact contents, verdict/severity definitions, finding budget, and output schema. Calibration (`review_context`, `review_focus`, `settled_decisions`) is supplied per round by the MCP layer, which re-reads `mercurius.yaml` at the start of each round; the broker itself never reads the config.
+4. Write the assembled prompt to `<session_dir>/round-NN/_prompt.md`, and the exact config bytes this round ran with to `<session_dir>/round-NN/_config.yaml`.
 5. Dispatch to the configured reviewer.
 6. Validate the raw reviewer output against the JSON schema, readiness consistency, and the finding limit.
 7. Write `<session_dir>/round-NN/_round.md`.
@@ -57,6 +57,7 @@ The current prompt always includes these sections in order:
 
 - Role and readiness frame.
 - Review context.
+- Settled decisions (only when guards are configured).
 - What to flag.
 - Fix sizing.
 - Project-specific focus.
@@ -79,16 +80,18 @@ The assembled prompt is also written to `<session_dir>/round-NN/_prompt.md` duri
     round-01/
       _round.md
       _prompt.md
+      _config.yaml
       _notes.md     (only if record_round_notes was called)
       design
       work-order
     round-02/
       _round.md
       _prompt.md
+      _config.yaml
       design
 ```
 
-Each round gets its own self-contained folder. `_round.md` is the immutable log file. `_prompt.md` is the assembled prompt. `_notes.md` is the (optional) sibling file holding commentary and decisions. Other files in the directory are the snapshotted artifacts under their declared names.
+Each round gets its own self-contained folder. `_round.md` is the immutable log file. `_prompt.md` is the assembled prompt. `_config.yaml` is the exact `mercurius.yaml` bytes this round ran with, captured beside the rendered prompt so the round's input and output sit together: a guard present in `_config.yaml` but absent from `_prompt.md` (rendered empty) stays diagnosable after the fact. Because it is the raw config, `_config.yaml` can contain `reviewer.binary_path`, `model`, or `extra_args`; the `.mercurius/` tree is local and gitignored, so treat it accordingly. `_notes.md` is the (optional) sibling file holding commentary and decisions. Other files in the directory are the snapshotted artifacts under their declared names.
 
 `status.json` is the latest durable monitor snapshot of session state. There is no `events.ndjson`: monitor `--wait` polls `status.json`. `_synopsis.md` is a session-level human-readable summary written by `close_session`; see Session Synopsis below.
 

@@ -108,6 +108,9 @@ func TestBootstrapCommandWritesConfig(t *testing.T) {
 	if got := out.String(); !strings.Contains(got, "wrote '") || !strings.Contains(got, "mercurius.yaml") {
 		t.Fatalf("expected wrote-confirmation in output, got %q", got)
 	}
+	if got := out.String(); !strings.Contains(got, "agent-guide.md") {
+		t.Fatalf("expected success message to point at the agent guide, got %q", got)
+	}
 
 	// re-running without --force refuses to clobber and leaves the file alone.
 	before, err := os.ReadFile(written)

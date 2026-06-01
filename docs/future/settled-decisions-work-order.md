@@ -1,11 +1,13 @@
 # Work order: settled decisions and live review context
 
-> Status: future. Nothing here is implemented yet. This is the implementation-shaped
-> translation of [`settled-decisions.md`](./settled-decisions.md) — the design spec —
-> grounded against the code as it stands. The spec is the record of intent; this work
-> order is the plan an implementation agent executes. Where the two disagree, the spec
-> governs intent and this document governs implementation; flag any genuine conflict
-> rather than silently choosing.
+> Status: implemented (2026-06-01). Slices A-D shipped; the behavior is now
+> documented in `docs/current/`. This is the implementation-shaped translation of
+> [`settled-decisions.md`](./settled-decisions.md) — the design spec — grounded
+> against the code as it stood. It persists as the record of how the work was
+> planned and executed, not as pending work. The only material still future is the
+> spec's Deferred / this document's Out of scope set (the fresh-reader round, the
+> richer `{decided, reason}` entry shape, the first-class amend tool, and
+> panel/polish/follow-up).
 
 ## What this covers
 

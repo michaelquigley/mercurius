@@ -22,9 +22,9 @@ Mercurius runs as an MCP server that the design agent can call. The design agent
 2. Returns structured output — readiness verdict, blocking concerns/questions, advisory notes — rather than free-form prose.
 3. Logs the round to a self-contained per-round directory so the audit trail accumulates without effort.
 
-The design agent then walks the blocking findings one at a time, explaining each finding and its proposed solution clearly and briefly, discussing it with the human, and implementing the fix once aligned. Advisory notes are presented separately as non-blocking polish. The loop continues until the verdict is `ready_to_build` or the human calls it.
+The design agent then walks the blocking findings one at a time, compressing each finding and its proposed solution to the plainest, fewest-words version, presenting it, and then waiting for the human's decision before acting — the fix lands only after the human responds. Advisory notes are presented separately as non-blocking polish. The loop continues until the verdict is `ready_to_build` or the human calls it.
 
-Rounds are single-shot and self-contained: artifacts and findings are scoped to one round; nothing carries forward between rounds in the same session. The common workflow is `open session → review → fix → close → repeat`.
+Rounds are single-shot and self-contained: artifacts and findings are scoped to one round; nothing carries forward between rounds in the same session. The common workflow is `open session → review → fix → review → … → close`: multiple rounds in one session, editing the artifacts (and, if needed, the YAML's calibration or guards) between them. The config is re-read at the start of each round, so edits take effect on the next round with no reopen.
 
 Mercurius is reviewer-agnostic by design. Codex is the first implementation; the interface is built so other implementing agents can be swapped in without touching the orchestration layer.
 
@@ -34,6 +34,7 @@ Mercurius has a working local MCP server, Codex and dummy reviewers, background 
 
 - [`docs/current/`](docs/current/README.md) — documentation for the current implementation
 - [`docs/current/user-guide.md`](docs/current/user-guide.md) — real-world usage guide
+- [`docs/current/agent-guide.md`](docs/current/agent-guide.md) — portable, agent-facing playbook for driving a review well
 - [`docs/future/`](docs/future/) — future changes and deferred designs
 - `mercurius bootstrap` — write a starter `mercurius.yaml` into the current directory
 
@@ -69,7 +70,11 @@ Minimal config:
 ```yaml
 max_findings: 6
 review_context: |
-  Add project constraints that should calibrate reviewer rigor.
+  Calibration only: the stable framing of what kind of review this is
+  (deployment model, stakes, scope, simplicity-vs-defensiveness preference).
+settled_decisions:
+  - id: observability-out-of-scope
+    do_not_flag: missing production-grade observability or multi-tenant concerns
 review_focus: |
   Add project-specific things to look for that the base review philosophy
   does not already cover.
@@ -79,7 +84,7 @@ reviewer:
   model: gpt-5.5
 ```
 
-`review_context` and `review_focus` are read from this file; they are not MCP tool inputs. Edit the YAML before opening a session if you want different calibration. Relative `log_destination` and `binary_path` values resolve relative to the config file, not the process working directory.
+`review_context` (calibration), `settled_decisions` (guards — decisions already made that the reviewer should stop re-raising), and `review_focus` are read from this file; they are not MCP tool inputs. Mercurius re-reads the YAML at the start of every round, so edits between rounds take effect on the next round with no session reopen. Relative `log_destination` and `binary_path` values resolve relative to the config file, not the process working directory.
 
 ## MCP Usage
 
