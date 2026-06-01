@@ -24,13 +24,24 @@ var knownImpls = map[string]struct{}{
 
 // Config is the resolved Mercurius project configuration.
 type Config struct {
-	Name           string
-	ConfigPath     string
-	LogDestination string
-	MaxFindings    int
-	ReviewContext  string
-	ReviewFocus    string
-	Reviewer       *ReviewerConfig
+	Name             string
+	ConfigPath       string
+	LogDestination   string
+	MaxFindings      int
+	ReviewContext    string
+	ReviewFocus      string
+	SettledDecisions []SettledDecision
+	Reviewer         *ReviewerConfig
+}
+
+// SettledDecision is one operator-side guard: a decision already made that the
+// reviewer should stop re-raising. DoNotFlag is the load-bearing instruction
+// rendered into the round prompt; ID is an operator-side handle for finding and
+// editing the guard and never reaches the reviewer. dd auto-converts the field
+// names to 'id' and 'do_not_flag', so no struct tags are needed.
+type SettledDecision struct {
+	ID        string
+	DoNotFlag string
 }
 
 // ReviewerConfig configures one named reviewer.
@@ -44,35 +55,50 @@ type ReviewerConfig struct {
 
 // Load reads, resolves, and validates a Mercurius YAML config.
 func Load(path string) (*Config, error) {
+	cfg, _, err := LoadWithRaw(path)
+	return cfg, err
+}
+
+// LoadWithRaw reads, resolves, and validates a Mercurius YAML config and also
+// returns the exact bytes it read. The file is read exactly once: the same
+// buffer is both parsed and checked for renamed fields. Callers that snapshot
+// the raw config per round (the _config.yaml diagnostic) get bytes that are
+// exact by construction rather than a best-effort re-read.
+func LoadWithRaw(path string) (*Config, []byte, error) {
 	if path == "" {
 		path = "./mercurius.yaml"
 	}
 
 	absPath, err := filepath.Abs(expandHome(path))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+
+	raw, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	cfg := &Config{
 		MaxFindings:    DefaultMaxFindings,
 		LogDestination: DefaultLogDestination,
 	}
-	if err := dd.MergeYAMLFile(cfg, absPath); err != nil {
-		return nil, err
+	if err := dd.MergeYAML(cfg, raw); err != nil {
+		return nil, nil, err
 	}
-	if err := checkRenamedFields(absPath); err != nil {
-		return nil, err
+	if err := checkRenamedFields(absPath, raw); err != nil {
+		return nil, nil, err
 	}
 	cfg.Name = filepath.Base(filepath.Dir(absPath))
 
 	if err := cfg.resolve(filepath.Dir(absPath)); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := cfg.Validate(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cfg.ConfigPath = absPath
-	return cfg, nil
+	return cfg, raw, nil
 }
 
 // Validate checks required fields. It performs pure field validation only and
@@ -112,12 +138,10 @@ func (c *Config) EnsureLogDestination() error {
 
 // checkRenamedFields rejects configs that still use renamed YAML keys. dd
 // silently drops unknown fields, so a stale key would otherwise produce
-// confusing review behavior with no error.
-func checkRenamedFields(absPath string) error {
-	raw, err := os.ReadFile(absPath)
-	if err != nil {
-		return err
-	}
+// confusing review behavior with no error. It works from the already-read
+// bytes so the config file is not read a second time. absPath is used only for
+// error messages.
+func checkRenamedFields(absPath string, raw []byte) error {
 	var generic map[string]any
 	if err := yaml.Unmarshal(raw, &generic); err != nil {
 		// dd already validated the YAML; ignore parse errors here so this

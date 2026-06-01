@@ -405,6 +405,127 @@ reviewer:
 	}
 }
 
+// TestStartReviewRoundRereadsConfigLive is the core of the live-re-read change:
+// a guard added to mercurius.yaml between rounds must appear in the very next
+// round's prompt with no session reopen, and the round's _config.yaml must hold
+// the guard as it was written.
+func TestStartReviewRoundRereadsConfigLive(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "mercurius.yaml")
+	base := `log_destination: ` + filepath.Join(dir, "reviews") + `
+reviewer:
+  name: dummy
+  impl: dummy
+`
+	writeConfigFile(t, configPath, base)
+
+	b := broker.New(broker.Options{
+		LogDestination: filepath.Join(dir, "reviews"),
+		MaxFindings:    config.DefaultMaxFindings,
+		Reviewer:       fixedReviewer{raw: validReviewOutput()},
+		ReviewerInfo:   broker.ReviewerInfo{Name: "dummy", Impl: "dummy"},
+	})
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-project", Version: Version}, nil)
+	RegisterTools(server, b, ConfigCalibrationProvider(configPath))
+	ctx, client := newTestClientForServer(t, server)
+
+	artifactPath := writeArtifact(t, "design.md", "# design\n")
+	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	sessionID := decodeStructured[OpenSessionOutput](t, openResult).SessionID
+
+	// round 1: no guard configured yet.
+	round1 := startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
+	prompt1 := readFileContent(t, filepath.Join(filepath.Dir(round1.LogPath), "_prompt.md"))
+	if strings.Contains(prompt1, "Settled decisions") {
+		t.Fatalf("round 1 should have no settled-decisions block:\n%s", prompt1)
+	}
+
+	// add a guard between rounds, with no reopen.
+	writeConfigFile(t, configPath, base+`settled_decisions:
+  - id: recall-deferred
+    do_not_flag: the absence of a 'recall' concept
+`)
+
+	round2 := startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
+	roundDir2 := filepath.Dir(round2.LogPath)
+	prompt2 := readFileContent(t, filepath.Join(roundDir2, "_prompt.md"))
+	if !strings.Contains(prompt2, "the absence of a 'recall' concept") {
+		t.Fatalf("round 2 prompt missing the live-added guard:\n%s", prompt2)
+	}
+	cfg2 := readFileContent(t, filepath.Join(roundDir2, "_config.yaml"))
+	if !strings.Contains(cfg2, "recall-deferred") {
+		t.Fatalf("round 2 _config.yaml missing the guard source:\n%s", cfg2)
+	}
+}
+
+// TestStartReviewRoundFailsCleanlyOnBrokenConfig: a round started against an
+// unreadable YAML returns user_error, does not start a round, leaves the session
+// active, and a retry after the file is fixed succeeds.
+func TestStartReviewRoundFailsCleanlyOnBrokenConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "mercurius.yaml")
+	valid := `log_destination: ` + filepath.Join(dir, "reviews") + `
+reviewer:
+  name: dummy
+  impl: dummy
+`
+	writeConfigFile(t, configPath, valid)
+
+	b := broker.New(broker.Options{
+		LogDestination: filepath.Join(dir, "reviews"),
+		MaxFindings:    config.DefaultMaxFindings,
+		Reviewer:       fixedReviewer{raw: validReviewOutput()},
+		ReviewerInfo:   broker.ReviewerInfo{Name: "dummy", Impl: "dummy"},
+	})
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-project", Version: Version}, nil)
+	RegisterTools(server, b, ConfigCalibrationProvider(configPath))
+	ctx, client := newTestClientForServer(t, server)
+
+	artifactPath := writeArtifact(t, "design.md", "# design\n")
+	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	sessionID := decodeStructured[OpenSessionOutput](t, openResult).SessionID
+
+	// break the YAML between open and the round.
+	writeConfigFile(t, configPath, "this: is: not: valid: yaml\n\t::broken")
+	broken, err := client.CallTool(ctx, &mcp.CallToolParams{
+		Name: "start_review_round",
+		Arguments: map[string]any{
+			"session_id": sessionID,
+			"artifacts":  []map[string]any{{"name": "design.md", "path": artifactPath}},
+		},
+	})
+	payload := assertToolError(t, broken, err, broker.CodeUserError)
+	if !strings.Contains(payload.Message, "reread mercurius.yaml") {
+		t.Fatalf("expected 'reread mercurius.yaml' message, got %+v", payload)
+	}
+
+	// the session must still be active with no round recorded.
+	statusResult, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "session_status", Arguments: map[string]any{"session_id": sessionID}})
+	if err != nil {
+		t.Fatalf("session status: %v", err)
+	}
+	status := decodeStructured[SessionStatusOutput](t, statusResult)
+	if status.State != "active" {
+		t.Fatalf("session state = %q, want active after a failed re-read", status.State)
+	}
+	if status.RoundCount != 0 {
+		t.Fatalf("round count = %d, want 0 (round must not start)", status.RoundCount)
+	}
+
+	// fix the file and retry; the round now runs.
+	writeConfigFile(t, configPath, valid)
+	round := startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
+	if round.RoundNumber != 1 {
+		t.Fatalf("retry round number = %d, want 1", round.RoundNumber)
+	}
+}
+
 func TestSelectNextFindingBySeverity(t *testing.T) {
 	mk := func(ref string, kind string, severity *string) TriageFindingOutput {
 		return TriageFindingOutput{Ref: ref, Kind: kind, Severity: severity}
@@ -679,6 +800,22 @@ func assertToolError(t *testing.T, result *mcp.CallToolResult, err error, wantSt
 		t.Fatalf("stable code = %s, want %s; payload=%+v", payload.Error.Code, wantStableCode, payload)
 	}
 	return payload.Error
+}
+
+func writeConfigFile(t *testing.T, path string, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+}
+
+func readFileContent(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
 }
 
 func writeArtifact(t *testing.T, name string, content string) string {

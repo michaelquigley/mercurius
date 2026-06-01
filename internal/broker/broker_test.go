@@ -34,8 +34,9 @@ func TestSessionRoundsNotesAndClose(t *testing.T) {
 	}
 
 	round1, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
-		SessionID: open.SessionID,
-		Artifacts: []Artifact{{Name: "design", Path: design}},
+		SessionID:   open.SessionID,
+		Artifacts:   []Artifact{{Name: "design", Path: design}},
+		ReviewFocus: "flag unclear acceptance criteria.",
 	})
 	if err != nil {
 		t.Fatalf("review round 1: %v", err)
@@ -190,9 +191,10 @@ func TestOpenSessionReportsRequestCalibrationPresence(t *testing.T) {
 
 // TestSessionCalibrationIsPerRequest is the regression guard for the
 // cross-talk bug where review_context cached at server startup leaked into
-// later sessions even after mercurius.yaml had been edited. Two consecutive
-// OpenSession calls with different request values must produce round prompts
-// that contain only their own per-session calibration.
+// later rounds even after mercurius.yaml had been edited. Calibration is now
+// carried per round on StartRoundRequest (the MCP layer re-reads it from the
+// YAML at the start of every round), so two rounds with different request
+// values must produce prompts that contain only their own calibration.
 func TestSessionCalibrationIsPerRequest(t *testing.T) {
 	ctx := context.Background()
 	r := newScriptedReviewer(
@@ -205,16 +207,15 @@ func TestSessionCalibrationIsPerRequest(t *testing.T) {
 		ReviewerInfo:   ReviewerInfo{Name: "dummy", Impl: "dummy"},
 	})
 
-	openA, err := b.OpenSession(ctx, OpenSessionRequest{
-		ReviewContext: "calibration-alpha",
-		ReviewFocus:   "focus-alpha",
-	})
+	openA, err := b.OpenSession(ctx, OpenSessionRequest{})
 	if err != nil {
 		t.Fatalf("open A: %v", err)
 	}
 	if _, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
-		SessionID: openA.SessionID,
-		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "alpha")}},
+		SessionID:     openA.SessionID,
+		Artifacts:     []Artifact{{Name: "design", Path: writeArtifactFile(t, "alpha")}},
+		ReviewContext: "calibration-alpha",
+		ReviewFocus:   "focus-alpha",
 	}); err != nil {
 		t.Fatalf("round A: %v", err)
 	}
@@ -223,16 +224,15 @@ func TestSessionCalibrationIsPerRequest(t *testing.T) {
 		t.Fatalf("prompt A missing alpha calibration:\n%s", promptA)
 	}
 
-	openB, err := b.OpenSession(ctx, OpenSessionRequest{
-		ReviewContext: "calibration-bravo",
-		ReviewFocus:   "focus-bravo",
-	})
+	openB, err := b.OpenSession(ctx, OpenSessionRequest{})
 	if err != nil {
 		t.Fatalf("open B: %v", err)
 	}
 	if _, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
-		SessionID: openB.SessionID,
-		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "bravo")}},
+		SessionID:     openB.SessionID,
+		Artifacts:     []Artifact{{Name: "design", Path: writeArtifactFile(t, "bravo")}},
+		ReviewContext: "calibration-bravo",
+		ReviewFocus:   "focus-bravo",
 	}); err != nil {
 		t.Fatalf("round B: %v", err)
 	}
@@ -242,6 +242,47 @@ func TestSessionCalibrationIsPerRequest(t *testing.T) {
 	}
 	if strings.Contains(promptB, "calibration-alpha") || strings.Contains(promptB, "focus-alpha") {
 		t.Fatalf("prompt B leaked alpha calibration:\n%s", promptB)
+	}
+}
+
+func TestRoundSnapshotsRawConfigAndRendersGuards(t *testing.T) {
+	ctx := context.Background()
+	r := newScriptedReviewer(scriptedResponse{raw: validReviewOutput("ready_to_build")})
+	b := New(Options{
+		LogDestination: filepath.Join(t.TempDir(), "reviews"),
+		Reviewer:       r,
+		ReviewerInfo:   ReviewerInfo{Name: "dummy", Impl: "dummy"},
+	})
+
+	open, err := b.OpenSession(ctx, OpenSessionRequest{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	rawConfig := []byte("settled_decisions:\n  - id: recall-deferred\n    do_not_flag: the absence of a 'recall' concept\n")
+	if _, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
+		SessionID:        open.SessionID,
+		Artifacts:        []Artifact{{Name: "design", Path: writeArtifactFile(t, "design")}},
+		SettledDecisions: []SettledDecision{{ID: "recall-deferred", DoNotFlag: "the absence of a 'recall' concept"}},
+		RawConfig:        rawConfig,
+	}); err != nil {
+		t.Fatalf("round: %v", err)
+	}
+
+	// _config.yaml is the input snapshot, byte-identical to what the round ran with.
+	configPath := filepath.Join(open.SessionDir, "round-01", roundConfigName)
+	got := readFile(t, configPath)
+	if got != string(rawConfig) {
+		t.Fatalf("_config.yaml not byte-identical:\n--- got ---\n%s\n--- want ---\n%s", got, rawConfig)
+	}
+
+	// the guard's load-bearing text reaches the prompt; its operator-side id does not.
+	prompt := readFile(t, filepath.Join(open.SessionDir, "round-01", roundPromptName))
+	if !strings.Contains(prompt, "the absence of a 'recall' concept") {
+		t.Fatalf("expected guard text in prompt:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "recall-deferred") {
+		t.Fatal("guard id must not be rendered into the prompt")
 	}
 }
 

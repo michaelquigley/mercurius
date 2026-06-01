@@ -235,6 +235,93 @@ func TestResolveHomePath(t *testing.T) {
 	}
 }
 
+func TestLoadParsesSettledDecisions(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mercurius.yaml")
+	writeConfig(t, cfgPath, `
+log_destination: ./reviews
+settled_decisions:
+  - id: recall-deferred
+    do_not_flag: >
+      the absence of a 'recall' concept, or suggestions to add it now
+  - id: observability-out-of-scope
+    do_not_flag: missing production-grade observability
+reviewer:
+  name: dummy
+  impl: dummy
+`)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.SettledDecisions) != 2 {
+		t.Fatalf("settled decisions = %d, want 2", len(cfg.SettledDecisions))
+	}
+	if cfg.SettledDecisions[0].ID != "recall-deferred" {
+		t.Fatalf("first id = %q", cfg.SettledDecisions[0].ID)
+	}
+	if !strings.Contains(cfg.SettledDecisions[0].DoNotFlag, "absence of a 'recall' concept") {
+		t.Fatalf("first do_not_flag = %q", cfg.SettledDecisions[0].DoNotFlag)
+	}
+	if cfg.SettledDecisions[1].DoNotFlag != "missing production-grade observability" {
+		t.Fatalf("second do_not_flag = %q", cfg.SettledDecisions[1].DoNotFlag)
+	}
+}
+
+func TestLoadToleratesEmptyAndDuplicateGuards(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mercurius.yaml")
+	writeConfig(t, cfgPath, `
+log_destination: ./reviews
+settled_decisions:
+  - id: dupe
+    do_not_flag: first
+  - id: dupe
+    do_not_flag: ""
+  - id: blank
+reviewer:
+  name: dummy
+  impl: dummy
+`)
+
+	// an empty do_not_flag and duplicate ids must not fail the load: a guard
+	// should cost almost nothing to write, and a too-strict validator would
+	// fail rounds on trivial guard typos.
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.SettledDecisions) != 3 {
+		t.Fatalf("settled decisions = %d, want 3 (all tolerated)", len(cfg.SettledDecisions))
+	}
+}
+
+func TestLoadWithRawReturnsExactBytes(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mercurius.yaml")
+	body := `log_destination: ./reviews
+settled_decisions:
+  - id: recall-deferred
+    do_not_flag: the absence of a 'recall' concept
+reviewer:
+  name: dummy
+  impl: dummy
+`
+	writeConfig(t, cfgPath, body)
+
+	cfg, raw, err := LoadWithRaw(cfgPath)
+	if err != nil {
+		t.Fatalf("load with raw: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("expected config")
+	}
+	if string(raw) != body {
+		t.Fatalf("raw bytes do not match file content:\n--- got ---\n%s\n--- want ---\n%s", raw, body)
+	}
+}
+
 func writeConfig(t *testing.T, path string, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {

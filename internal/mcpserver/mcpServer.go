@@ -198,12 +198,15 @@ type ErrorOutput struct {
 	At      string         `json:"at,omitempty"`
 }
 
-// CalibrationProvider returns the review_context and review_focus to attach to
-// a new session. Production wiring re-reads mercurius.yaml on each call so
-// edits between sessions take effect without a server restart. A nil provider
-// means no calibration is attached (the round prompt's calibration sections
-// stay empty); this is fine for tests that don't exercise calibration.
-type CalibrationProvider func(ctx context.Context) (reviewContext, reviewFocus string, err error)
+// CalibrationProvider returns the calibration to attach to a round: the
+// review_context and review_focus prose, the settled-decisions guards, and the
+// raw config bytes that produced them (snapshotted per round as _config.yaml).
+// Production wiring re-reads mercurius.yaml on each call so edits between rounds
+// take effect on the next round without a server restart. A nil provider means
+// no calibration is attached (the round prompt's calibration sections stay
+// empty and no _config.yaml is written); this is fine for tests that don't
+// exercise calibration.
+type CalibrationProvider func(ctx context.Context) (reviewContext, reviewFocus string, settled []broker.SettledDecision, raw []byte, err error)
 
 // New creates a configured MCP server and its backing broker.
 func New(cfg *config.Config) (*mcp.Server, *broker.Broker, error) {
@@ -225,9 +228,9 @@ func New(cfg *config.Config) (*mcp.Server, *broker.Broker, error) {
 }
 
 // BrokerOptions builds broker options from a project config. Calibration
-// (review_context, review_focus) is intentionally not included here; the MCP
-// layer re-reads it per open_session via a CalibrationProvider so YAML edits
-// between sessions are picked up.
+// (review_context, review_focus, settled_decisions) is intentionally not
+// included here; the MCP layer re-reads it per round via a CalibrationProvider
+// so YAML edits between rounds are picked up.
 func BrokerOptions(cfg *config.Config) (broker.Options, error) {
 	if cfg == nil {
 		return broker.Options{}, errors.New("config is nil")
@@ -252,34 +255,49 @@ func BrokerOptions(cfg *config.Config) (broker.Options, error) {
 
 // ConfigCalibrationProvider returns a CalibrationProvider that re-reads
 // mercurius.yaml at the given path on every call and returns its
-// review_context / review_focus fields.
+// review_context / review_focus / settled_decisions fields plus the exact bytes
+// it read. It reads the file once via config.LoadWithRaw, so the returned bytes
+// are exactly what produced the parsed calibration.
 func ConfigCalibrationProvider(configPath string) CalibrationProvider {
 	if configPath == "" {
 		return nil
 	}
-	return func(ctx context.Context) (string, string, error) {
+	return func(ctx context.Context) (string, string, []broker.SettledDecision, []byte, error) {
 		if err := ctx.Err(); err != nil {
-			return "", "", err
+			return "", "", nil, nil, err
 		}
-		cfg, err := config.Load(configPath)
+		cfg, raw, err := config.LoadWithRaw(configPath)
 		if err != nil {
-			return "", "", err
+			return "", "", nil, nil, err
 		}
-		return cfg.ReviewContext, cfg.ReviewFocus, nil
+		return cfg.ReviewContext, cfg.ReviewFocus, brokerSettledDecisions(cfg.SettledDecisions), raw, nil
 	}
 }
 
+// brokerSettledDecisions maps config guards into the broker's shape.
+func brokerSettledDecisions(in []config.SettledDecision) []broker.SettledDecision {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]broker.SettledDecision, 0, len(in))
+	for _, d := range in {
+		out = append(out, broker.SettledDecision{ID: d.ID, DoNotFlag: d.DoNotFlag})
+	}
+	return out
+}
+
 // RegisterTools installs the Mercurius MCP tool surface. The provider is
-// consulted on each open_session call so calibration tracks mercurius.yaml
-// edits without a server restart.
+// consulted at the start of each round (and once at open_session for the
+// at-open presence snapshot) so calibration tracks mercurius.yaml edits without
+// a server restart.
 func RegisterTools(server *mcp.Server, b *broker.Broker, calibration CalibrationProvider) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "open_session",
-		Description: "open a new Mercurius review session. review_context and review_focus are re-read from mercurius.yaml on every open_session call, so edits to the YAML take effect on the next session without restarting the server; calibration is fixed for the lifetime of the returned session. artifacts are not registered at session open; pass them to each start_review_round call.",
+		Description: "open a new Mercurius review session, a lightweight container for rounds. calibration (review_context, review_focus, settled_decisions) is not frozen here: it is re-read from mercurius.yaml at the start of every round, so edits between rounds take effect on the next round without restarting the server. the review_context_present and review_focus_present booleans on the response are an at-open snapshot only and are not a guarantee for later rounds. artifacts are not registered at session open; pass them to each start_review_round call.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ OpenSessionInput) (*mcp.CallToolResult, any, error) {
 		var reviewContext, reviewFocus string
 		if calibration != nil {
-			rc, rf, err := calibration(ctx)
+			rc, rf, _, _, err := calibration(ctx)
 			if err != nil {
 				return toolErrorResult(&broker.Error{
 					Code:    broker.CodeUserError,
@@ -309,11 +327,32 @@ func RegisterTools(server *mcp.Server, b *broker.Broker, calibration Calibration
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "start_review_round",
-		Description: "start one review round in the background and return immediately. artifacts are required and are scoped to this round only; nothing carries over between rounds in the same session. use the returned monitor_command to tell the user how to watch progress; the round may outlive the MCP client timeout.",
+		Description: "start one review round in the background and return immediately. artifacts are required and are scoped to this round only; nothing carries over between rounds in the same session. review_context, review_focus, and settled_decisions are re-read from mercurius.yaml at the start of this round, so edits between rounds take effect immediately with no session reopen. if the YAML is mid-edit or unreadable this errors with code 'user_error' and the session stays active; fix the file and start the round again. use the returned monitor_command to tell the user how to watch progress; the round may outlive the MCP client timeout.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input StartRoundInput) (*mcp.CallToolResult, any, error) {
+		var reviewContext, reviewFocus string
+		var settled []broker.SettledDecision
+		var rawConfig []byte
+		if calibration != nil {
+			rc, rf, sd, raw, err := calibration(ctx)
+			if err != nil {
+				return toolErrorResult(&broker.Error{
+					Code:    broker.CodeUserError,
+					Message: "reread mercurius.yaml",
+					Err:     err,
+				})
+			}
+			reviewContext = rc
+			reviewFocus = rf
+			settled = sd
+			rawConfig = raw
+		}
 		response, err := b.StartReviewRound(ctx, broker.StartRoundRequest{
-			SessionID: input.SessionID,
-			Artifacts: artifactsFromInput(input.Artifacts),
+			SessionID:        input.SessionID,
+			Artifacts:        artifactsFromInput(input.Artifacts),
+			ReviewContext:    reviewContext,
+			ReviewFocus:      reviewFocus,
+			SettledDecisions: settled,
+			RawConfig:        rawConfig,
 		})
 		if err != nil {
 			return toolErrorResult(err)

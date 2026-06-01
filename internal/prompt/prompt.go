@@ -18,12 +18,21 @@ type Artifact struct {
 	Content      []byte
 }
 
+// SettledDecision is a guard rendered into the review prompt: a decision already
+// made that the reviewer must not re-raise. Only DoNotFlag is rendered; the
+// operator-side id never reaches the reviewer.
+type SettledDecision struct {
+	ID        string
+	DoNotFlag string
+}
+
 // Request contains runtime values for the standard review prompt.
 type Request struct {
-	Artifacts     []Artifact
-	ReviewContext string
-	ReviewFocus   string
-	MaxFindings   int
+	Artifacts        []Artifact
+	ReviewContext    string
+	ReviewFocus      string
+	SettledDecisions []SettledDecision
+	MaxFindings      int
 }
 
 // Build assembles the standard review prompt and schema payload.
@@ -39,7 +48,11 @@ func Build(req Request) (string, json.RawMessage) {
 		b.WriteString(strings.TrimRight(strings.TrimSpace(req.ReviewContext), "\n"))
 		b.WriteString("\n\n")
 	}
-	b.WriteString("Weight every finding against this review context. Suppress concerns that do not realistically apply under the stated deployment constraints, implementation model, locked decisions, or out-of-scope boundaries. When a point is useful but not readiness-blocking, put it in `advisory_notes`, not `concerns` or `questions`.\n\n")
+	b.WriteString("Weight every finding against this review context. Suppress concerns that do not realistically apply under the stated deployment constraints, implementation model, or out-of-scope boundaries. When a point is useful but not readiness-blocking, put it in `advisory_notes`, not `concerns` or `questions`.\n\n")
+
+	if block := settledDecisionsBlock(req.SettledDecisions); block != "" {
+		b.WriteString(block)
+	}
 
 	b.WriteString("## What to flag\n\n")
 	b.WriteString("You are looking for SUBTLE issues — things an implementer (LLM or human) would not catch on their own through normal implementation friction. The implementer will discover obvious problems through compile errors, runtime errors, failing tests, and fail-fast preconditions. Your value is finding what those normal feedback loops will miss.\n\n")
@@ -105,6 +118,37 @@ func Build(req Request) (string, json.RawMessage) {
 	b.WriteString("Within a single review output, every id appearing in `concerns`, `questions`, or `advisory_notes` must be unique across all three arrays. Never reuse an id - not within a single array, and not across arrays.\n")
 
 	return b.String(), schema.ReviewOutputSchemaWithMaxFindings(req.MaxFindings)
+}
+
+// settledDecisionsBlock renders the settled-decisions section. It is kept as its
+// own section, distinct from the calibration block, so that suppressing it for a
+// single round (the deferred fresh-reader round) stays a cheap change. Entries
+// whose do_not_flag is empty after trimming are skipped, and the whole block is
+// omitted when no entry has load-bearing text; the operator-side id is never
+// rendered.
+func settledDecisionsBlock(decisions []SettledDecision) string {
+	var items []string
+	for _, d := range decisions {
+		text := strings.TrimSpace(d.DoNotFlag)
+		if text == "" {
+			continue
+		}
+		items = append(items, text)
+	}
+	if len(items) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("## Settled decisions (do not re-raise)\n\n")
+	b.WriteString("The following are decisions already made and out of scope for this review. Do not raise them as concerns, questions, or advisory notes, and do not suggest revisiting them:\n\n")
+	for _, item := range items {
+		b.WriteString("- ")
+		b.WriteString(item)
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 func writeArtifact(b *strings.Builder, artifact Artifact) {

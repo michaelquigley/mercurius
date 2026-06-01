@@ -64,6 +64,57 @@ func TestBuildRendersReviewContextAndFocus(t *testing.T) {
 	}
 }
 
+func TestBuildRendersSettledDecisionsBlock(t *testing.T) {
+	prompt, _ := Build(Request{
+		SettledDecisions: []SettledDecision{
+			{ID: "recall-deferred", DoNotFlag: "the absence of a 'recall' concept"},
+			{ID: "obs-out-of-scope", DoNotFlag: "missing production-grade observability"},
+		},
+	})
+
+	for _, want := range []string{
+		"## Settled decisions (do not re-raise)",
+		"decisions already made and out of scope",
+		"the absence of a 'recall' concept",
+		"missing production-grade observability",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected prompt to contain %q; got:\n%s", want, prompt)
+		}
+	}
+	// the operator-side id is a handle for editing guards and must never reach
+	// the reviewer.
+	for _, id := range []string{"recall-deferred", "obs-out-of-scope"} {
+		if strings.Contains(prompt, id) {
+			t.Fatalf("settled-decision id %q must not be rendered into the prompt", id)
+		}
+	}
+	// the block stands apart from calibration and ahead of what-to-flag.
+	if strings.Index(prompt, "## Settled decisions") >= strings.Index(prompt, "## What to flag") {
+		t.Fatal("settled-decisions block should render before the what-to-flag section")
+	}
+}
+
+func TestBuildOmitsSettledDecisionsWhenEmpty(t *testing.T) {
+	// no entries, and an entry whose do_not_flag is blank, both render nothing.
+	for _, req := range []Request{
+		{},
+		{SettledDecisions: []SettledDecision{{ID: "blank", DoNotFlag: "   "}}},
+	} {
+		prompt, _ := Build(req)
+		if strings.Contains(prompt, "## Settled decisions") {
+			t.Fatalf("expected no settled-decisions block; got:\n%s", prompt)
+		}
+	}
+}
+
+func TestBuildCalibrationDropsLockedDecisions(t *testing.T) {
+	prompt, _ := Build(Request{ReviewContext: "personal tool"})
+	if strings.Contains(prompt, "locked decisions") {
+		t.Fatal("calibration weighting sentence must no longer mention locked decisions; suppression-by-prior-decision is the settled-decisions block's job")
+	}
+}
+
 func TestBuildOmitsPriorDecisionsSection(t *testing.T) {
 	prompt, _ := Build(Request{})
 	if strings.Contains(prompt, "Prior decisions") {
@@ -117,4 +168,3 @@ func TestBuildUsesDynamicArtifactFences(t *testing.T) {
 		t.Fatalf("expected four-backtick wrapper, got:\n%s", prompt)
 	}
 }
-

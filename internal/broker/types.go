@@ -7,10 +7,11 @@ import (
 	"github.com/michaelquigley/mercurius/internal/reviewer"
 )
 
-// Options configures a broker instance. ReviewContext and ReviewFocus are not
-// cached on the broker; the MCP layer re-reads them from mercurius.yaml on each
-// open_session call and passes them in via OpenSessionRequest, so calibration
-// edits between sessions take effect without a server restart.
+// Options configures a broker instance. Calibration (review_context,
+// review_focus, settled_decisions) is not cached on the broker; the MCP layer
+// re-reads it from mercurius.yaml at the start of every round and passes it in
+// via StartRoundRequest, so edits between rounds take effect on the next round
+// without a server restart.
 type Options struct {
 	LogDestination string
 	ConfigPath     string
@@ -25,13 +26,22 @@ type Artifact struct {
 	Path string
 }
 
-// OpenSessionRequest starts a new review session. ReviewContext and
-// ReviewFocus calibrate the round prompt for every round in this session; they
-// are typically passed by the MCP layer after re-reading mercurius.yaml so
-// edits between sessions are picked up without a server restart.
+// OpenSessionRequest starts a new review session. ReviewContext and ReviewFocus
+// are used only to record the at-open presence snapshot on the response; they do
+// not calibrate rounds, because calibration is re-read from mercurius.yaml at the
+// start of every round (see StartRoundRequest).
 type OpenSessionRequest struct {
 	ReviewContext string
 	ReviewFocus   string
+}
+
+// SettledDecision is one operator-side guard carried into a round: a decision
+// already made that the reviewer must not re-raise. ID is operator-side and is
+// not rendered into the prompt; DoNotFlag is the instruction the reviewer acts
+// on.
+type SettledDecision struct {
+	ID        string
+	DoNotFlag string
 }
 
 // OpenSessionResponse describes a newly opened session.
@@ -45,10 +55,17 @@ type OpenSessionResponse struct {
 	Reviewer             ReviewerInfo
 }
 
-// StartRoundRequest runs a new round in the named session.
+// StartRoundRequest runs a new round in the named session. ReviewContext,
+// ReviewFocus, and SettledDecisions are the calibration the MCP layer re-read
+// from mercurius.yaml for this round; RawConfig is the exact bytes it read,
+// snapshotted to the round directory as _config.yaml.
 type StartRoundRequest struct {
-	SessionID string
-	Artifacts []Artifact
+	SessionID        string
+	Artifacts        []Artifact
+	ReviewContext    string
+	ReviewFocus      string
+	SettledDecisions []SettledDecision
+	RawConfig        []byte
 }
 
 // StartReviewRoundResponse describes a background review round.

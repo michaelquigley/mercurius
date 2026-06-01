@@ -32,6 +32,7 @@ const (
 	roundStateFailed    = "failed"
 	roundLogName        = "_round.md"
 	roundPromptName     = "_prompt.md"
+	roundConfigName     = "_config.yaml"
 	roundNotesName      = "_notes.md"
 	sessionSynopsisName = "_synopsis.md"
 )
@@ -46,17 +47,20 @@ type Broker struct {
 }
 
 type session struct {
-	id            string
-	dir           string
-	state         string
-	openedAt      time.Time
-	closedAt      *time.Time
-	reviewContext string
-	reviewFocus   string
-	rounds        []*round
-	lastError     *ErrorInfo
-	activeJob     *roundJob
-	lastRoundJob  *roundJob
+	id       string
+	dir      string
+	state    string
+	openedAt time.Time
+	closedAt *time.Time
+	// presence snapshots taken at open. calibration text is no longer held on
+	// the session: it is re-read from mercurius.yaml per round, so these only
+	// record what was present when the session opened.
+	reviewContextPresentAtOpen bool
+	reviewFocusPresentAtOpen   bool
+	rounds                     []*round
+	lastError                  *ErrorInfo
+	activeJob                  *roundJob
+	lastRoundJob               *roundJob
 }
 
 type round struct {
@@ -90,25 +94,27 @@ type snapshotResult struct {
 }
 
 type roundJob struct {
-	sessionID     string
-	sessionDir    string
-	roundNumber   int
-	state         string
-	reviewer      reviewer.Reviewer
-	reviewerName  string
-	artifacts     []Artifact
-	reviewContext string
-	reviewFocus   string
-	maxFindings   int
-	startedAt     time.Time
-	updatedAt     time.Time
-	completedAt   *time.Time
-	logPath       string
-	statusPath    string
-	result        CollectedRoundResponse
-	err           error
-	errorInfo     *ErrorInfo
-	done          chan struct{}
+	sessionID        string
+	sessionDir       string
+	roundNumber      int
+	state            string
+	reviewer         reviewer.Reviewer
+	reviewerName     string
+	artifacts        []Artifact
+	reviewContext    string
+	reviewFocus      string
+	settledDecisions []SettledDecision
+	rawConfig        []byte
+	maxFindings      int
+	startedAt        time.Time
+	updatedAt        time.Time
+	completedAt      *time.Time
+	logPath          string
+	statusPath       string
+	result           CollectedRoundResponse
+	err              error
+	errorInfo        *ErrorInfo
+	done             chan struct{}
 }
 
 // New creates an in-memory broker.
@@ -123,8 +129,9 @@ func New(options Options) *Broker {
 }
 
 // OpenSession creates a session directory and binds the configured reviewer.
-// The request's ReviewContext and ReviewFocus are stored on the session and
-// used for every round; the broker does not cache calibration across sessions.
+// The request's ReviewContext and ReviewFocus are used only to record the
+// at-open presence snapshot; calibration is not held on the session, because it
+// is re-read from mercurius.yaml and passed in per round (see StartReviewRound).
 func (b *Broker) OpenSession(ctx context.Context, req OpenSessionRequest) (OpenSessionResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return OpenSessionResponse{}, err
@@ -147,12 +154,12 @@ func (b *Broker) OpenSession(ctx context.Context, req OpenSessionRequest) (OpenS
 
 	openedAt := time.Now().UTC()
 	s := &session{
-		id:            id,
-		dir:           dir,
-		state:         stateActive,
-		openedAt:      openedAt,
-		reviewContext: strings.TrimSpace(req.ReviewContext),
-		reviewFocus:   strings.TrimSpace(req.ReviewFocus),
+		id:                         id,
+		dir:                        dir,
+		state:                      stateActive,
+		openedAt:                   openedAt,
+		reviewContextPresentAtOpen: strings.TrimSpace(req.ReviewContext) != "",
+		reviewFocusPresentAtOpen:   strings.TrimSpace(req.ReviewFocus) != "",
 	}
 	b.sessions[id] = s
 
@@ -167,8 +174,8 @@ func (b *Broker) OpenSession(ctx context.Context, req OpenSessionRequest) (OpenS
 		SessionDir:           dir,
 		OpenedAt:             openedAt,
 		MaxFindings:          b.options.MaxFindings,
-		ReviewContextPresent: s.reviewContext != "",
-		ReviewFocusPresent:   s.reviewFocus != "",
+		ReviewContextPresent: s.reviewContextPresentAtOpen,
+		ReviewFocusPresent:   s.reviewFocusPresentAtOpen,
 		Reviewer:             b.options.ReviewerInfo,
 	}, nil
 }
@@ -216,20 +223,22 @@ func (b *Broker) StartReviewRound(ctx context.Context, req StartRoundRequest) (S
 	roundNumber := len(s.rounds) + 1
 	startedAt := time.Now().UTC()
 	job := &roundJob{
-		sessionID:     s.id,
-		sessionDir:    s.dir,
-		roundNumber:   roundNumber,
-		state:         roundStateRunning,
-		reviewer:      b.options.Reviewer,
-		reviewerName:  b.options.ReviewerInfo.Name,
-		artifacts:     artifacts,
-		reviewContext: s.reviewContext,
-		reviewFocus:   s.reviewFocus,
-		maxFindings:   b.options.MaxFindings,
-		startedAt:     startedAt,
-		updatedAt:     startedAt,
-		statusPath:    monitor.StatusPath(s.dir),
-		done:          make(chan struct{}),
+		sessionID:        s.id,
+		sessionDir:       s.dir,
+		roundNumber:      roundNumber,
+		state:            roundStateRunning,
+		reviewer:         b.options.Reviewer,
+		reviewerName:     b.options.ReviewerInfo.Name,
+		artifacts:        artifacts,
+		reviewContext:    req.ReviewContext,
+		reviewFocus:      req.ReviewFocus,
+		settledDecisions: req.SettledDecisions,
+		rawConfig:        req.RawConfig,
+		maxFindings:      b.options.MaxFindings,
+		startedAt:        startedAt,
+		updatedAt:        startedAt,
+		statusPath:       monitor.StatusPath(s.dir),
+		done:             make(chan struct{}),
 	}
 	s.activeJob = job
 	s.lastRoundJob = job
@@ -259,6 +268,19 @@ func (b *Broker) StartReviewRound(ctx context.Context, req StartRoundRequest) (S
 	return response, nil
 }
 
+// promptSettledDecisions maps broker guards into the prompt package's shape. It
+// mirrors the Artifact mapping pattern that already spans broker/prompt/reviewer.
+func promptSettledDecisions(in []SettledDecision) []prompt.SettledDecision {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]prompt.SettledDecision, 0, len(in))
+	for _, d := range in {
+		out = append(out, prompt.SettledDecision{ID: d.ID, DoNotFlag: d.DoNotFlag})
+	}
+	return out
+}
+
 func (b *Broker) executeRoundJob(job *roundJob) {
 	b.touchRoundStatus(job)
 
@@ -271,10 +293,11 @@ func (b *Broker) executeRoundJob(job *roundJob) {
 	b.touchRoundStatus(job)
 
 	promptText, schemaBytes := prompt.Build(prompt.Request{
-		Artifacts:     snapshots.promptArtifacts,
-		ReviewContext: job.reviewContext,
-		ReviewFocus:   job.reviewFocus,
-		MaxFindings:   job.maxFindings,
+		Artifacts:        snapshots.promptArtifacts,
+		ReviewContext:    job.reviewContext,
+		ReviewFocus:      job.reviewFocus,
+		SettledDecisions: promptSettledDecisions(job.settledDecisions),
+		MaxFindings:      job.maxFindings,
 	})
 
 	promptLogPath := filepath.Join(snapshots.roundDir, roundPromptName)
@@ -282,6 +305,19 @@ func (b *Broker) executeRoundJob(job *roundJob) {
 		cleanupRoundDir(snapshots.roundDir)
 		b.finishRoundFailure(job, brokerError(CodeInternalError, "write prompt log", err, map[string]any{"prompt_path": promptLogPath}))
 		return
+	}
+
+	// snapshot the exact config bytes this round ran with, beside the rendered
+	// prompt. _config.yaml is the input, _prompt.md is the output, so a guard
+	// present in the config but absent from the prompt (rendered empty) stays
+	// diagnosable from the round directory.
+	if len(job.rawConfig) > 0 {
+		configLogPath := filepath.Join(snapshots.roundDir, roundConfigName)
+		if err := os.WriteFile(configLogPath, job.rawConfig, 0o600); err != nil {
+			cleanupRoundDir(snapshots.roundDir)
+			b.finishRoundFailure(job, brokerError(CodeInternalError, "write config log", err, map[string]any{"config_path": configLogPath}))
+			return
+		}
 	}
 
 	b.touchRoundStatus(job)
@@ -600,8 +636,8 @@ func (b *Broker) synopsisEntryFromSession(s *session, lastError *ErrorInfo) roun
 			Impl:  b.options.ReviewerInfo.Impl,
 			Model: b.options.ReviewerInfo.Model,
 		},
-		ReviewContextPresent: s.reviewContext != "",
-		ReviewFocusPresent:   s.reviewFocus != "",
+		ReviewContextPresent: s.reviewContextPresentAtOpen,
+		ReviewFocusPresent:   s.reviewFocusPresentAtOpen,
 	}
 	if s.closedAt != nil {
 		entry.ClosedAt = *s.closedAt
@@ -720,8 +756,8 @@ func (s *session) status(options Options) SessionStatusResponse {
 		OpenedAt:             s.openedAt,
 		ClosedAt:             cloneTimePtr(s.closedAt),
 		MaxFindings:          options.MaxFindings,
-		ReviewContextPresent: s.reviewContext != "",
-		ReviewFocusPresent:   s.reviewFocus != "",
+		ReviewContextPresent: s.reviewContextPresentAtOpen,
+		ReviewFocusPresent:   s.reviewFocusPresentAtOpen,
 		RoundCount:           len(s.rounds),
 		Reviewer:             options.ReviewerInfo,
 		LastError:            cloneErrorInfo(s.lastError),
@@ -1016,7 +1052,7 @@ func monitorErrorInfo(info *ErrorInfo) *monitor.ErrorInfo {
 		Code:    info.Code,
 		Message: info.Message,
 		Details: cloneDetails(info.Details),
-		At:     info.At,
+		At:      info.At,
 	}
 }
 
