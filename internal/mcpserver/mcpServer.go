@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/michaelquigley/mercurius/internal/broker"
 	"github.com/michaelquigley/mercurius/internal/config"
 	"github.com/michaelquigley/mercurius/internal/reviewer"
@@ -286,6 +287,61 @@ func brokerSettledDecisions(in []config.SettledDecision) []broker.SettledDecisio
 	return out
 }
 
+// recordRoundNotesDispositions are the valid disposition values, surfaced on the
+// record_round_notes input schema so a client sees them at the boundary. They
+// mirror broker.validDisposition, which stays as a defense-in-depth backstop.
+var recordRoundNotesDispositions = []any{"fixed", "rejected", "deferred"}
+
+// recordRoundNotesInputSchema is an explicit input schema for record_round_notes.
+// reflection inference leaves disposition an unconstrained string with no
+// description, so a client cannot see the valid values from the schema and often
+// malforms the first call (the dropped-decisions defect). spelling the schema out
+// surfaces the disposition enum and field descriptions, and because the SDK
+// validates incoming arguments against the resolved schema, an invalid
+// disposition is rejected at the boundary before the broker is reached.
+func recordRoundNotesInputSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		Type: "object",
+		Properties: map[string]*jsonschema.Schema{
+			"session_id": {
+				Type:        "string",
+				Description: "the session id returned by open_session.",
+			},
+			"round_number": {
+				Type:        "integer",
+				Description: "the round number whose notes are being recorded.",
+			},
+			"commentary": {
+				Type:        "string",
+				Description: "free-form human commentary for the round.",
+			},
+			"decisions": {
+				Type:        "array",
+				Description: "one entry per reviewer finding triaged this round; include the full array on the first call rather than a later one.",
+				Items: &jsonschema.Schema{
+					Type:     "object",
+					Required: []string{"ref", "disposition"},
+					Properties: map[string]*jsonschema.Schema{
+						"ref": {
+							Type:        "string",
+							Description: "the reviewer finding id this decision is about (a concern, question, or advisory id from the round).",
+						},
+						"disposition": {
+							Type:        "string",
+							Enum:        recordRoundNotesDispositions,
+							Description: "how the finding was handled: 'fixed' (addressed in the artifacts), 'rejected' (declined, e.g. out of scope), or 'deferred' (acknowledged, to be handled later).",
+						},
+						"note": {
+							Type:        "string",
+							Description: "optional human note explaining the decision.",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 // RegisterTools installs the Mercurius MCP tool surface. The provider is
 // consulted at the start of each round (and once at open_session for the
 // at-open presence snapshot) so calibration tracks mercurius.yaml edits without
@@ -393,7 +449,8 @@ func RegisterTools(server *mcp.Server, b *broker.Broker, calibration Calibration
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "record_round_notes",
-		Description: "record commentary and human decisions for a completed round. notes land in a sibling _notes.md file inside the round directory; there is no separate close_round step. after this returns, pause and ask the user whether to start another round, open a new session, or stop; do not immediately call another Mercurius tool unless the user explicitly asks you to continue.",
+		Description: "record commentary and human decisions for a completed round. each decision is {ref, disposition, note}; disposition must be one of 'fixed', 'rejected', or 'deferred'. include the full decisions array on the FIRST call rather than recording commentary first and decisions on a later call. notes land in a sibling _notes.md file inside the round directory; there is no separate close_round step. after this returns, pause and ask the user whether to start another round, open a new session, or stop; do not immediately call another Mercurius tool unless the user explicitly asks you to continue.",
+		InputSchema: recordRoundNotesInputSchema(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RecordRoundNotesInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.RecordRoundNotes(ctx, broker.RecordRoundNotesRequest{
 			SessionID:   input.SessionID,
@@ -678,7 +735,7 @@ func severityRank(severity *string) int {
 }
 
 func oneFindingTriageGuidance() string {
-	return "First present all entries in triage.findings as a concise overview so the user sees the full review landscape. Present triage.advisory_notes separately as non-blocking polish when present. Then walk findings one at a time, defaulting to triage.next_finding unless the user chooses another ref. For each finding: explain the finding and its proposed solution clearly and simply, using few words; discuss it with the user; implement the fix in the artifacts once you and the user are aligned. Then stop and wait - do not advance to the next finding, record notes, or call another Mercurius tool until the user explicitly responds. This preserves a fresh turn and tool-call budget for each finding."
+	return "First present all entries in triage.findings as a concise overview so the user sees the full review landscape. Present triage.advisory_notes separately as non-blocking polish when present. Then walk findings one at a time, defaulting to triage.next_finding unless the user chooses another ref. For each finding, compress it and its proposed solution to the plainest, fewest-words version you can - hedges stripped, jargon removed - so the user can make a fast call; this radical compression is the default, not a fallback. Present that, then stop and wait for the user's decision before acting - do not implement the fix until the user has actually responded, because confidence that you can predict their decision is not consent. Implement only after they respond. Then stop and wait again - do not advance to the next finding, record notes, or call another Mercurius tool until the user explicitly responds. One finding per turn, coming and going: this preserves a fresh turn and tool-call budget for each finding."
 }
 
 func noFindingsTriageGuidance() string {
@@ -687,7 +744,7 @@ func noFindingsTriageGuidance() string {
 
 func collectedRoundNextAction(triage RoundTriageOutput) string {
 	if triage.NextFinding != nil {
-		return "pause; present all triage.findings as a concise overview with triage.advisory_notes separate if present; then walk findings one at a time starting with triage.next_finding, explaining each finding and its proposed solution clearly and briefly in few words, discussing with the user, and implementing the fix once aligned; stop and wait between findings"
+		return "pause; present all triage.findings as a concise overview with triage.advisory_notes separate if present; then walk findings one at a time starting with triage.next_finding; for each, compress the finding and its proposed solution to the plainest, fewest-words version, present it, then stop and wait for the user's decision before acting - confidence that you can predict their decision is not consent; implement only after they respond, then stop and wait again before advancing to the next finding"
 	}
 	return "pause and tell the user this round returned no blocking findings, with triage.advisory_notes separate if present; ask whether to record notes, start another review round, or close the session"
 }

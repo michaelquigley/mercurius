@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -550,6 +551,43 @@ func TestRecordRoundNotesValidationAndReplacement(t *testing.T) {
 	}
 	if !strings.Contains(content, "second") || !strings.Contains(content, "_no decisions recorded_") {
 		t.Fatalf("replacement not written:\n%s", content)
+	}
+}
+
+func TestRecordRoundNotesUnknownRefListsValidRefs(t *testing.T) {
+	ctx := context.Background()
+	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithRefs()})
+	b := testBroker(t, r)
+	open, err := b.OpenSession(ctx, OpenSessionRequest{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := startAndCollectRound(t, b, ctx, StartRoundRequest{
+		SessionID: open.SessionID,
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}},
+	}); err != nil {
+		t.Fatalf("round: %v", err)
+	}
+
+	_, err = b.RecordRoundNotes(ctx, RecordRoundNotesRequest{
+		SessionID:   open.SessionID,
+		RoundNumber: 1,
+		Decisions:   []Decision{{Ref: "bogus", Disposition: "fixed", Note: "nope"}},
+	})
+	var be *Error
+	if !errors.As(err, &be) {
+		t.Fatalf("expected *Error, got %v", err)
+	}
+	if be.Code != CodeUserError {
+		t.Fatalf("code = %s, want %s", be.Code, CodeUserError)
+	}
+	got, ok := be.Details["valid_refs"].([]string)
+	if !ok {
+		t.Fatalf("expected valid_refs in details, got %+v", be.Details)
+	}
+	want := []string{"C-1", "Q-1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("valid_refs = %v, want %v (sorted)", got, want)
 	}
 }
 

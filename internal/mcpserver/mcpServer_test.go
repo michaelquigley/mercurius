@@ -326,8 +326,12 @@ func TestCollectRoundTriageConcernFirst(t *testing.T) {
 	for _, want := range []string{
 		"present all entries in triage.findings",
 		"walk findings one at a time",
-		"explain the finding and its proposed solution clearly and simply, using few words",
-		"implement the fix",
+		// radical compression is the stated default
+		"plainest, fewest-words version",
+		// the decision gate sits before the action
+		"stop and wait for the user's decision before acting",
+		"confidence that you can predict their decision is not consent",
+		"Implement only after they respond",
 	} {
 		if !strings.Contains(collected.Triage.Guidance, want) {
 			t.Fatalf("triage guidance missing %q:\n%s", want, collected.Triage.Guidance)
@@ -523,6 +527,117 @@ reviewer:
 	round := startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
 	if round.RoundNumber != 1 {
 		t.Fatalf("retry round number = %d, want 1", round.RoundNumber)
+	}
+}
+
+// TestRecordRoundNotesSchemaCarriesDispositionEnum asserts the registered
+// record_round_notes input schema is explicit: the decisions array is fully
+// typed and disposition carries the value enum. Reflection inference left
+// disposition an unconstrained string, which is what hid the valid values from
+// clients.
+func TestRecordRoundNotesSchemaCarriesDispositionEnum(t *testing.T) {
+	ctx, client := newTestClient(t)
+	result, err := client.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+
+	var schemaJSON []byte
+	for _, tool := range result.Tools {
+		if tool.Name == "record_round_notes" {
+			schemaJSON, err = json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatalf("marshal schema: %v", err)
+			}
+		}
+	}
+	if schemaJSON == nil {
+		t.Fatal("record_round_notes not registered")
+	}
+
+	var s map[string]any
+	if err := json.Unmarshal(schemaJSON, &s); err != nil {
+		t.Fatalf("unmarshal schema: %v", err)
+	}
+	items := mustMap(t, mustMap(t, mustMap(t, s, "properties"), "decisions"), "items")
+	itemProps := mustMap(t, items, "properties")
+	for _, field := range []string{"ref", "disposition", "note"} {
+		if _, ok := itemProps[field]; !ok {
+			t.Fatalf("decisions item missing property %q; schema=%s", field, schemaJSON)
+		}
+	}
+
+	enumAny, ok := mustMap(t, itemProps, "disposition")["enum"].([]any)
+	if !ok {
+		t.Fatalf("disposition has no enum; schema=%s", schemaJSON)
+	}
+	got := make([]string, 0, len(enumAny))
+	for _, v := range enumAny {
+		got = append(got, v.(string))
+	}
+	if want := []string{"fixed", "rejected", "deferred"}; !slices.Equal(got, want) {
+		t.Fatalf("disposition enum = %v, want %v", got, want)
+	}
+
+	required := make([]string, 0)
+	if rawReq, ok := items["required"].([]any); ok {
+		for _, v := range rawReq {
+			required = append(required, v.(string))
+		}
+	}
+	if !slices.Contains(required, "ref") || !slices.Contains(required, "disposition") {
+		t.Fatalf("decisions item required = %v, want ref and disposition", required)
+	}
+}
+
+// TestRecordRoundNotesPersistsDecisionsOnFirstCall is the regression guard for
+// the dropped-decisions defect. The in-process path always recorded a
+// well-formed decisions array; the field failure was a client malforming the
+// first call against a schema that did not expose the disposition enum. With the
+// explicit schema the first call lands, and an invalid disposition is rejected at
+// the boundary rather than silently recording zero decisions.
+func TestRecordRoundNotesPersistsDecisionsOnFirstCall(t *testing.T) {
+	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithConcernAndQuestion(t))
+	sessionID, artifactPath := openTestSession(t, ctx, client)
+	startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
+
+	result, err := client.CallTool(ctx, &mcp.CallToolParams{
+		Name: "record_round_notes",
+		Arguments: map[string]any{
+			"session_id":   sessionID,
+			"round_number": 1,
+			"commentary":   "triaged",
+			"decisions": []map[string]any{
+				{"ref": "C-1", "disposition": "fixed", "note": "addressed"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("record notes: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("first call errored: %+v", result.StructuredContent)
+	}
+	out := decodeStructured[RecordRoundNotesOutput](t, result)
+	if out.DecisionsRecorded != 1 {
+		t.Fatalf("decisions recorded on first call = %d, want 1", out.DecisionsRecorded)
+	}
+
+	// an invalid disposition is rejected at the schema boundary, not silently
+	// recorded as zero decisions.
+	bad, err := client.CallTool(ctx, &mcp.CallToolParams{
+		Name: "record_round_notes",
+		Arguments: map[string]any{
+			"session_id":   sessionID,
+			"round_number": 1,
+			"decisions":    []map[string]any{{"ref": "C-1", "disposition": "accepted"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("invalid-disposition call protocol error: %v", err)
+	}
+	if bad == nil || !bad.IsError {
+		t.Fatalf("expected invalid disposition to be rejected at the boundary, got %+v", bad)
 	}
 }
 
@@ -800,6 +915,15 @@ func assertToolError(t *testing.T, result *mcp.CallToolResult, err error, wantSt
 		t.Fatalf("stable code = %s, want %s; payload=%+v", payload.Error.Code, wantStableCode, payload)
 	}
 	return payload.Error
+}
+
+func mustMap(t *testing.T, m map[string]any, key string) map[string]any {
+	t.Helper()
+	v, ok := m[key].(map[string]any)
+	if !ok {
+		t.Fatalf("expected %q to be an object, got %T", key, m[key])
+	}
+	return v
 }
 
 func writeConfigFile(t *testing.T, path string, body string) {

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -526,7 +527,10 @@ func (b *Broker) RecordRoundNotes(ctx context.Context, req RecordRoundNotesReque
 	decisions := cloneDecisions(req.Decisions)
 	for _, decision := range decisions {
 		if _, ok := round.refs[decision.Ref]; !ok {
-			err := brokerError(CodeUserError, "decision ref is unknown", nil, map[string]any{"ref": decision.Ref})
+			err := brokerError(CodeUserError, "decision ref is unknown", nil, map[string]any{
+				"ref":        decision.Ref,
+				"valid_refs": sortedRefs(round.refs),
+			})
 			s.recordError(err)
 			return RecordRoundNotesResponse{}, err
 		}
@@ -952,6 +956,18 @@ func checkWritable(dir string) error {
 
 func validDisposition(disposition string) bool {
 	return disposition == "fixed" || disposition == "rejected" || disposition == "deferred"
+}
+
+// sortedRefs returns the ref ids known to a round, sorted, so an unknown-ref
+// error can list the valid set and the operator does not have to grep the round
+// log for the id format.
+func sortedRefs(refs map[string]refKind) []string {
+	out := make([]string, 0, len(refs))
+	for ref := range refs {
+		out = append(out, ref)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func refsFromOutput(output schema.ReviewOutput) map[string]refKind {
