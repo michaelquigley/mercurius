@@ -18,7 +18,7 @@ Mercurius is a local MCP server that lets a design agent ask a reviewer, usually
 
 - Single-project server process loaded from one `mercurius.yaml`.
 - One reviewer per server, configured singularly in the YAML.
-- Codex reviewer implementation plus dummy reviewer for tests and scaffolding.
+- Codex, Claude, and pi reviewer implementations plus a dummy reviewer for tests and scaffolding.
 - Single-shot rounds: artifacts and findings are scoped to one round. Sessions are light groupings; no shared state flows between rounds in the same session.
 - Background rounds with `start_review_round` and `collect_round`. Use `mercurius monitor --wait` to poll for completion.
 - Per-round artifact snapshots and markdown logs in a self-contained round directory; commentary and decisions land in a sibling `_notes.md` file.

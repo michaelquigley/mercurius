@@ -1,4 +1,9 @@
-package codex
+// Package jsonout extracts a single JSON object from raw reviewer output. A
+// reviewer subprocess may emit the object directly, wrapped in a markdown fence,
+// or surrounded by stray prose; Object recovers the object in each case. It does
+// not validate the object against any schema - the broker performs canonical
+// validation after the reviewer returns.
+package jsonout
 
 import (
 	"bytes"
@@ -7,10 +12,14 @@ import (
 	"strings"
 )
 
-func extractReviewOutput(output []byte) (json.RawMessage, error) {
+// Object returns the first plausible JSON object found in output. It accepts a
+// bare object, a fenced object, or an object embedded in surrounding prose, and
+// rejects output that is empty or carries no JSON object (for example a bare
+// JSON array).
+func Object(output []byte) (json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(output)
 	if len(trimmed) == 0 {
-		return nil, errors.New("codex reviewer produced no output")
+		return nil, errors.New("reviewer produced no output")
 	}
 
 	if isJSONObject(trimmed) {
@@ -23,19 +32,19 @@ func extractReviewOutput(output []byte) (json.RawMessage, error) {
 			return copyRaw(fenced), nil
 		}
 		if json.Valid(fenced) {
-			return nil, errors.New("codex reviewer output does not contain a json object")
+			return nil, errors.New("reviewer output does not contain a json object")
 		}
 	}
 
 	if json.Valid(trimmed) {
-		return nil, errors.New("codex reviewer output does not contain a json object")
+		return nil, errors.New("reviewer output does not contain a json object")
 	}
 
 	if raw, ok := firstJSONObject(trimmed); ok {
 		return raw, nil
 	}
 
-	return nil, errors.New("codex reviewer output does not contain a json object")
+	return nil, errors.New("reviewer output does not contain a json object")
 }
 
 func isJSONObject(raw []byte) bool {
@@ -107,4 +116,8 @@ func firstJSONObject(raw []byte) (json.RawMessage, bool) {
 	}
 
 	return nil, false
+}
+
+func copyRaw(raw []byte) json.RawMessage {
+	return append(json.RawMessage(nil), raw...)
 }

@@ -36,7 +36,7 @@ reviewer:
 ## Required Fields
 
 - `reviewer.name`: unique reviewer name (free-form).
-- `reviewer.impl`: reviewer implementation. Current implementations are `codex` and `dummy`.
+- `reviewer.impl`: reviewer implementation. Current implementations are `codex`, `claude`, `pi`, and `dummy`.
 
 ## Optional Fields
 
@@ -45,9 +45,9 @@ reviewer:
 - `review_context`: free-form markdown calibration - the stable framing of what kind of review this is (deployment model, stakes, scope, simplicity-vs-defensiveness preference). It does not hold guards; decisions the reviewer should stop raising go in `settled_decisions`.
 - `settled_decisions`: a list of guards - decisions already made that the reviewer should not re-raise. Each entry is `{id, do_not_flag}`: `do_not_flag` is the instruction rendered into the prompt as its own block; `id` is an operator-side handle for finding, editing, or removing the guard and is never shown to the reviewer. Entries whose `do_not_flag` is empty are ignored, and duplicate ids are tolerated. Earn guards by re-litigating a finding and deciding it is out of scope - do not add them speculatively, since a ledger that outgrows the artifacts slows every cold read.
 - `review_focus`: free-form markdown for project-specific things to look for that the base review philosophy does not already cover (typically one paragraph). Inserted in the project-specific focus section of the prompt.
-- `reviewer.binary_path`: reviewer binary path. For `codex`, omitted means use normal executable lookup.
-- `reviewer.model`: reviewer model string passed to the reviewer implementation.
-- `reviewer.extra_args`: additional reviewer-specific CLI arguments.
+- `reviewer.binary_path`: reviewer binary path. Omitted means normal executable lookup of the impl's default binary (`codex`, `claude`, or `pi`).
+- `reviewer.model`: reviewer model string passed to the reviewer implementation. `codex` takes a model id (for example `gpt-5.5`); `claude` takes an alias or full name (for example `sonnet` or `claude-opus-4-8`); `pi` takes the `provider/model` form (for example `openai-codex/gpt-5.5`).
+- `reviewer.extra_args`: additional reviewer-specific CLI arguments, appended after the Mercurius-managed flags.
 
 `review_context`, `review_focus`, and `settled_decisions` are configuration-only - they are not MCP tool inputs. Mercurius re-reads `mercurius.yaml` at the start of every round, so editing them between rounds takes effect on the very next round with no session reopen. (Hand-editing `settled_decisions` between rounds is therefore the way to amend the settled context mid-arc; there is no separate amend tool.) A broken or unreadable YAML fails `start_review_round` with a `user_error` naming the problem and leaves the session active, so a fixed file simply succeeds on the next try.
 

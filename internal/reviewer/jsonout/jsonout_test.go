@@ -1,8 +1,8 @@
-package codex
+package jsonout
 
 import "testing"
 
-func TestExtractReviewOutput(t *testing.T) {
+func TestObject(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
@@ -47,7 +47,7 @@ func TestExtractReviewOutput(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := extractReviewOutput([]byte(test.input))
+			got, err := Object([]byte(test.input))
 			if test.wantErr {
 				if err == nil {
 					t.Fatal("expected error")

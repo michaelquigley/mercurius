@@ -30,7 +30,7 @@ mercurius monitor --config /abs/path/to/mercurius.yaml --all
 
 ## Iterating on `review_context` / `review_focus`
 
-`mercurius.yaml` is the only source for these fields. To preview how the assembled prompt looks before running a real round against codex, configure a `dummy` reviewer in `mercurius.yaml`, open a session, and run a round — the dummy reviewer returns instantly, and the assembled prompt is written to `<session>/round-01/_prompt.md` for inspection.
+`mercurius.yaml` is the only source for these fields. To preview how the assembled prompt looks before running a real round against the configured reviewer, configure a `dummy` reviewer in `mercurius.yaml`, open a session, and run a round — the dummy reviewer returns instantly, and the assembled prompt is written to `<session>/round-01/_prompt.md` for inspection.
 
 ## Long Reviews and MCP Timeouts
 

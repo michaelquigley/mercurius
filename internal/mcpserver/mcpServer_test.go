@@ -1070,3 +1070,24 @@ func reviewOutputWithAdvisoryOnly(t *testing.T) json.RawMessage {
 	}
 	return raw
 }
+
+func TestBuildReviewerKnownImpls(t *testing.T) {
+	for _, impl := range []string{"codex", "claude", "pi", "dummy"} {
+		t.Run(impl, func(t *testing.T) {
+			r, info, err := buildReviewer(&config.ReviewerConfig{Name: impl, Impl: impl, Model: "m"})
+			if err != nil {
+				t.Fatalf("buildReviewer(%q): %v", impl, err)
+			}
+			if r == nil {
+				t.Fatalf("buildReviewer(%q) returned a nil reviewer", impl)
+			}
+			if info.Name != impl || info.Impl != impl {
+				t.Fatalf("reviewer info = %+v, want name and impl %q", info, impl)
+			}
+		})
+	}
+
+	if _, _, err := buildReviewer(&config.ReviewerConfig{Name: "x", Impl: "nope"}); err == nil {
+		t.Fatal("expected error for unknown impl")
+	}
+}

@@ -121,6 +121,38 @@ reviewer:
 	}
 }
 
+func TestLoadAcceptsKnownImpls(t *testing.T) {
+	cases := []struct {
+		impl  string
+		model string
+	}{
+		{impl: "codex", model: "gpt-5.5"},
+		{impl: "claude", model: "sonnet"},
+		{impl: "pi", model: "openai-codex/gpt-5.5"},
+		{impl: "dummy"},
+	}
+	for _, test := range cases {
+		t.Run(test.impl, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "mercurius.yaml")
+			body := "\nlog_destination: ./reviews\nreviewer:\n  name: " + test.impl + "\n  impl: " + test.impl + "\n"
+			if test.model != "" {
+				body += "  model: " + test.model + "\n"
+			}
+			writeConfig(t, path, body)
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("load config: %v", err)
+			}
+			if cfg.Reviewer.Impl != test.impl {
+				t.Fatalf("impl = %q, want %q", cfg.Reviewer.Impl, test.impl)
+			}
+			if cfg.Reviewer.Model != test.model {
+				t.Fatalf("model = %q, want %q", cfg.Reviewer.Model, test.model)
+			}
+		})
+	}
+}
+
 func TestLoadValidatesConfig(t *testing.T) {
 	tests := []struct {
 		name string

@@ -26,11 +26,11 @@ The design agent then walks the blocking findings one at a time, compressing eac
 
 Rounds are single-shot and self-contained: artifacts and findings are scoped to one round; nothing carries forward between rounds in the same session. The common workflow is `open session → review → fix → review → … → close`: multiple rounds in one session, editing the artifacts (and, if needed, the YAML's calibration or guards) between them. The config is re-read at the start of each round, so edits take effect on the next round with no reopen.
 
-Mercurius is reviewer-agnostic by design. Codex is the first implementation; the interface is built so other implementing agents can be swapped in without touching the orchestration layer.
+Mercurius is reviewer-agnostic by design. Codex, Claude, and pi are implemented today; the interface is built so other implementing agents can be swapped in without touching the orchestration layer.
 
 ## Status
 
-Mercurius has a working local MCP server, Codex and dummy reviewers, background single-shot review rounds, structured output validation, per-round logs, and CLI monitoring.
+Mercurius has a working local MCP server, Codex, Claude, pi, and dummy reviewers, background single-shot review rounds, structured output validation, per-round logs, and CLI monitoring.
 
 - [`docs/current/`](docs/current/README.md) — documentation for the current implementation
 - [`docs/current/user-guide.md`](docs/current/user-guide.md) — real-world usage guide

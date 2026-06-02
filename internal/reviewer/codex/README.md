@@ -14,6 +14,8 @@ If `Options.Model` is set, `-m <model>` is appended. `Options.ExtraArgs` are app
 
 `Options.BinaryPath` defaults to `codex`. `Options.WorkingDir` is required and should be the Mercurius session log directory. That directory becomes the Codex working root via `-C`.
 
+Because that working root is the round's snapshot directory inside the project tree, Codex discovers and loads the project's `AGENTS.md` by walking up from it; the review carries whatever instructions that file holds. This matches the claude reviewer (which loads `CLAUDE.md`) and differs from the pi reviewer, which suppresses context files with `--no-context-files`. See `docs/current/architecture.md` for the cross-reviewer comparison.
+
 ## Temp Files
 
 Each review creates a private temporary directory containing:

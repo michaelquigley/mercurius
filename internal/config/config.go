@@ -18,8 +18,10 @@ const (
 )
 
 var knownImpls = map[string]struct{}{
-	"codex": {},
-	"dummy": {},
+	"codex":  {},
+	"claude": {},
+	"pi":     {},
+	"dummy":  {},
 }
 
 // Config is the resolved Mercurius project configuration.

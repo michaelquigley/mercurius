@@ -114,7 +114,11 @@ The log is immutable after creation. Recording commentary and decisions through 
 Current implementations:
 
 - `codex`: runs the local `codex` CLI as a subprocess.
+- `claude`: runs the Claude Code CLI (`claude`) as a subprocess.
+- `pi`: runs the [pi](https://pi.dev) coding agent as a subprocess.
 - `dummy`: returns a fixed valid response for tests and scaffolding.
+
+Every reviewer is given the same broker-assembled prompt (which inlines the artifact content and the output schema) and returns the best JSON object it can. Reviewers perform output extraction only; canonical schema validation belongs to the broker, which validates the returned object after the reviewer returns. The shared `internal/reviewer/jsonout` package holds the JSON-object extraction logic used across reviewers.
 
 The Codex reviewer runs `codex exec` with:
 
@@ -124,4 +128,29 @@ The Codex reviewer runs `codex exec` with:
 - final message captured through `--output-last-message`
 - assembled prompt delivered on stdin
 
-The reviewer performs output extraction only. Schema validation belongs to the broker.
+The Claude reviewer runs `claude -p` with:
+
+- `--output-format json` and native `--json-schema` enforcement
+- `--permission-mode plan` (read-only) and `--no-session-persistence` (ephemeral)
+- assembled prompt delivered on stdin
+- the schema-validated object read from the envelope's `structured_output` field, falling back to extracting a JSON object from the `result` text
+
+`--bare` is intentionally not passed, so claude inherits the operator's logged-in credentials; a logged-out operator surfaces as a clear reviewer error. Usage notes record the model, subtype, cost, turn count, and duration.
+
+The pi reviewer runs `pi -p --mode json` with:
+
+- `--no-session` (ephemeral) and `--no-context-files` (so the project's `AGENTS.md`/`CLAUDE.md` above the round directory do not colour the review)
+- `--tools read,grep,find,ls` (read-only)
+- the assembled prompt passed as an `@file` reference, with stdin closed
+- the final assistant message parsed out of the JSON event stream, then the JSON object extracted from it
+
+pi has no native JSON-schema enforcement, so the schema is carried only by the prompt and the broker's post-return validation is the backstop.
+
+### Working directory and project context files
+
+Every reviewer runs with its working directory set to the round's snapshot directory (`<session>/round-NN/`), which sits inside the project tree. The reviewers differ in how much of the surrounding project they pull into the review:
+
+- `codex` and `claude` discover and load the project's agent context files (`AGENTS.md` for codex, `CLAUDE.md` for claude) by walking up from the working directory, so a review carries whatever instructions those files hold. Codex runs with an isolated `CODEX_HOME`, and claude is not run with `--bare` (so it uses the operator's login); neither suppresses context-file discovery.
+- `pi` is run with `--no-context-files`, so it does not load `AGENTS.md`/`CLAUDE.md` and reviews the artifacts on their own merits.
+
+This is a deliberate, tunable difference rather than a guarantee of identical context across reviewers. The artifact content itself is always inlined into the prompt, so context-file discovery only adds the project's own agent instructions, not the artifacts. An operator who wants codex/claude to review without that surrounding context can suppress it per reviewer (for example, run claude with `--bare` plus `ANTHROPIC_API_KEY` via `extra_args`).

@@ -3,7 +3,6 @@ package codex
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/michaelquigley/mercurius/internal/reviewer"
+	"github.com/michaelquigley/mercurius/internal/reviewer/jsonout"
 )
 
 const defaultBinaryPath = "codex"
@@ -70,7 +70,7 @@ func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (revi
 		}
 		return reviewer.ReviewResponse{}, fmt.Errorf("read codex last message file: %w", err)
 	}
-	raw, err := extractReviewOutput(output)
+	raw, err := jsonout.Object(output)
 	if err != nil {
 		if runErr != nil {
 			return reviewer.ReviewResponse{}, fmt.Errorf("%w; extract codex last message: %v", runErr, err)
@@ -201,8 +201,4 @@ func commandOutputSuffix(stdout []byte, stderr []byte) string {
 		return ""
 	}
 	return "; " + strings.Join(parts, "; ")
-}
-
-func copyRaw(raw []byte) json.RawMessage {
-	return append(json.RawMessage(nil), raw...)
 }

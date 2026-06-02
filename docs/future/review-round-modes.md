@@ -6,10 +6,10 @@ None of the modes below are implemented. The standard round is the only one that
 
 A round can be thought of as parameterized on two axes:
 
-- **What it compares against** — the current artifacts (standard), an earlier version of them (diff/drift), the artifacts' declared scope or the real code surface (completeness), or the artifacts with guards suppressed (the fresh-reader round, deferred in `settled-decisions.md`).
+- **What it compares against** — the current artifacts (standard), an earlier version of them (diff/drift), the artifacts' declared scope or the real code surface (completeness), or the artifacts with guards suppressed (the fresh-reader round, below).
 - **What posture it takes** — find real problems in what is there (conservative, the standard reviewer), or find what is absent or has shifted (expansive).
 
-The discipline is the same one the spec applies to the fresh-reader round: earn each mode on real arcs before building it. The standard, diff/drift, completeness, and fresh-reader rounds are four members of one family that differ only by comparison-target and posture; the worthwhile design, once two or three are concrete, is the *mode* concept itself rather than each mode bolted on as a one-off. Panel mode (below) is orthogonal — it varies the *number* of reviewers, not the question asked, so it composes with any of the others.
+The discipline is the same across all of them: earn each mode on real arcs before building it. The standard, diff/drift, completeness, and fresh-reader rounds are four members of one family that differ only by comparison-target and posture; the worthwhile design, once two or three are concrete, is the *mode* concept itself rather than each mode bolted on as a one-off. Panel mode (below) is orthogonal — it varies the *number* of reviewers, not the question asked, so it composes with any of the others.
 
 ## Panel Mode
 
@@ -73,7 +73,7 @@ The anchor is the whole game. A completeness critic with no anchor is a "have yo
 - **Code / data surface.** What consumers or integration points of a touched component went unmentioned? What is persisted but never read?
 - **Failure modes / journeys.** What happens when an external dependency is down? Does each user journey have an end, not just a start?
 
-Because it over-generates absences by nature, a completeness round needs `settled_decisions` and the spec's Deferred section as its suppression floor: *these absences are intentional; find the unintentional ones.* The settled-decisions feature is what makes this mode tractable at all.
+Because it over-generates absences by nature, a completeness round needs the shipped `settled_decisions` guards as its suppression floor: *these absences are intentional; find the unintentional ones.* The settled-decisions feature is what makes this mode tractable at all.
 
 Expected shape:
 
@@ -87,7 +87,27 @@ Open design questions:
 - Trigger: late only? Early rounds are legitimately incomplete; "what is still missing" is a meaningful question only near convergence.
 - How hard to lean on the code surface versus the artifacts alone — reading the real code catches "written but never read," but pulls the reviewer toward implementation it is meant to precede.
 
+## Fresh-Reader Rounds
+
+A fresh-reader round suppresses the `settled_decisions` guards for one round only, keeping the calibration. It asks whether the artifacts hold up on their own merits rather than under the accumulated permission slips a long arc builds up. The calibration-versus-guards split that shipped with the settled-decisions feature is what makes this cheap: the guards already render as their own prompt block, so dropping them for a single round is a localized change rather than an untangling.
+
+Expected shape:
+
+- `start_review_round` takes a flag (for example `fresh_reader: true`) that omits the settled-decisions block for that round alone.
+- Calibration (`review_context`, `review_focus`) is unchanged; only the guards are withheld.
+- Output reuses the current schema; the round log records that guards were suppressed, so a finding the guards would normally have silenced is legible as such.
+
+Main reason to add this: guards are, by nature, instructions to *not see* something. Over an arc they accumulate, and a reviewer reading under a thick stack of them is a primed witness rather than a cold reader. A fresh-reader round is the periodic check that the artifacts still survive a reader who was told nothing to ignore — that the guards are suppressing settled noise and not load-bearing problems.
+
+Why it is deferred: guards earn their keep on real arcs, so this is an occasional verification move, not part of the core loop. There is no clean approximation today — because `settled_decisions` is re-read every round, even closing and reopening the session re-applies the guards from the file; getting a guard-free round currently means hand-commenting the guards out of `mercurius.yaml` and restoring them afterward, which is exactly the friction the flag removes.
+
+Open design questions:
+
+- Whether a fresh-reader round consumes the normal finding budget.
+- Whether it is operator-triggered only, or suggested near convergence as a late-arc sanity pass.
+
 ## Related
 
-- `settled-decisions.md` — the fresh-reader round (another member of this family: suppress the guards for one round to test the artifacts on their own merits) and the `settled_decisions` guards a completeness round leans on as its suppression floor.
+- `docs/current/` (configuration, architecture) — the shipped `settled_decisions` guards that the fresh-reader and completeness rounds both lean on.
+- `settled-decisions-followups.md` — the deferred richer-entry shape for those guards.
 - `web-monitor-and-trajectory.md` — trajectory visualization and reading convergence across rounds.

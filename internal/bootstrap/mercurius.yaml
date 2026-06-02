@@ -46,7 +46,28 @@ review_focus: |
   pay particular attention to invariants specific to this project that the
   universal what-to-flag criteria do not already cover.
 
+# reviewer selects the harness that runs each round. impl is one of codex,
+# claude, pi, or dummy. binary_path (optional) overrides the binary on PATH;
+# extra_args (optional) are appended after the mercurius-managed flags.
 reviewer:
   name: codex
   impl: codex
   model: gpt-5.5
+
+# alternative reviewers - uncomment one and comment out the codex block above.
+#
+# claude code, run headless with native json-schema output. omit model to use
+# the binary default; uses your logged-in claude credentials (pass --bare via
+# extra_args with ANTHROPIC_API_KEY set for api-key-only auth).
+# reviewer:
+#   name: claude
+#   impl: claude
+#   model: sonnet
+#
+# pi (https://pi.dev), run headless in json-event mode. model uses the
+# provider/id form. pi has no native schema enforcement; the schema is carried
+# by the prompt and validated by mercurius after the round.
+# reviewer:
+#   name: pi
+#   impl: pi
+#   model: openai-codex/gpt-5.5

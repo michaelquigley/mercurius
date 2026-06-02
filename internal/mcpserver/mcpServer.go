@@ -11,8 +11,10 @@ import (
 	"github.com/michaelquigley/mercurius/internal/broker"
 	"github.com/michaelquigley/mercurius/internal/config"
 	"github.com/michaelquigley/mercurius/internal/reviewer"
+	"github.com/michaelquigley/mercurius/internal/reviewer/claude"
 	"github.com/michaelquigley/mercurius/internal/reviewer/codex"
 	"github.com/michaelquigley/mercurius/internal/reviewer/dummy"
+	"github.com/michaelquigley/mercurius/internal/reviewer/pi"
 	"github.com/michaelquigley/mercurius/internal/schema"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -504,6 +506,18 @@ func buildReviewer(cfg *config.ReviewerConfig) (reviewer.Reviewer, broker.Review
 	switch cfg.Impl {
 	case "codex":
 		return codex.New(codex.Options{
+			BinaryPath: cfg.BinaryPath,
+			Model:      cfg.Model,
+			ExtraArgs:  append([]string(nil), cfg.ExtraArgs...),
+		}), info, nil
+	case "claude":
+		return claude.New(claude.Options{
+			BinaryPath: cfg.BinaryPath,
+			Model:      cfg.Model,
+			ExtraArgs:  append([]string(nil), cfg.ExtraArgs...),
+		}), info, nil
+	case "pi":
+		return pi.New(pi.Options{
 			BinaryPath: cfg.BinaryPath,
 			Model:      cfg.Model,
 			ExtraArgs:  append([]string(nil), cfg.ExtraArgs...),
