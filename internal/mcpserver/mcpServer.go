@@ -16,6 +16,7 @@ import (
 	"github.com/michaelquigley/mercurius/internal/reviewer/dummy"
 	"github.com/michaelquigley/mercurius/internal/reviewer/pi"
 	"github.com/michaelquigley/mercurius/internal/schema"
+	"github.com/michaelquigley/push/build"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -225,7 +226,7 @@ func New(cfg *config.Config) (*mcp.Server, *broker.Broker, error) {
 		return nil, nil, err
 	}
 	b := broker.New(options)
-	server := mcp.NewServer(&mcp.Implementation{Name: cfg.Name, Version: Version}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: cfg.Name, Version: build.String()}, nil)
 	RegisterTools(server, b, ConfigCalibrationProvider(cfg.ConfigPath))
 	return server, b, nil
 }

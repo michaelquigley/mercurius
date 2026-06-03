@@ -14,6 +14,7 @@ import (
 	"github.com/michaelquigley/mercurius/internal/config"
 	"github.com/michaelquigley/mercurius/internal/mcpserver"
 	monitorpkg "github.com/michaelquigley/mercurius/internal/monitor"
+	"github.com/michaelquigley/push/build"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 )
@@ -65,6 +66,7 @@ func newRootCommand() *cobra.Command {
 	root.Flags().BoolVar(&verbose, "verbose", false, "enable verbose stderr logging")
 	root.AddCommand(newMonitorCommand(&configPath))
 	root.AddCommand(newBootstrapCommand())
+	root.AddCommand(build.NewVersionCmd("mercurius"))
 	return root
 }
 
