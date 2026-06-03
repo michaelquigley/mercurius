@@ -64,7 +64,7 @@ jobs:
           fi
 
       - name: package artifact
-        run: tar -czf mercurius-linux-amd64.tar.gz mercurius README.md LICENSE
+        run: tar -czf mercurius-linux-amd64.tar.gz mercurius README.md CHANGELOG.md LICENSE
 
       - name: upload artifact
         uses: actions/upload-artifact@v4
