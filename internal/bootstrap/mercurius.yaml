@@ -52,7 +52,7 @@ review_focus: |
 reviewer:
   name: codex
   impl: codex
-  model: gpt-5.5
+  model: gpt-5.6-sol
 
 # alternative reviewers - uncomment one and comment out the codex block above.
 #
