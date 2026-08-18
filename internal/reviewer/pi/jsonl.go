@@ -10,7 +10,7 @@ import (
 // piEvent is the subset of a pi '--mode json' stream event that mercurius reads.
 // the stream is newline-delimited json; each assistant turn ends with a
 // 'message_end' event whose message carries the answer in its content blocks.
-// verified against pi v0.78.0 - a version bump is the place to re-check these
+// verified against pi v0.80.7 - a version bump is the place to re-check these
 // field names.
 type piEvent struct {
 	Type    string `json:"type"`

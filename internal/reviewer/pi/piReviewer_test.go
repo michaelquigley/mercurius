@@ -47,6 +47,11 @@ func TestReviewerRunsPiWithArgsAndPrompt(t *testing.T) {
 		"--no-session",
 		"--no-context-files",
 		"--tools", "read,grep,find,ls",
+		"--no-extensions",
+		"--no-skills",
+		"--no-prompt-templates",
+		"--no-approve",
+		"--offline",
 	})
 	assertArgSequence(t, args, []string{"--model", "openai-codex/gpt-5.5", "--verbose"})
 
