@@ -23,11 +23,9 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: vet
-        run: go vet ./...
-
+      # the ordinary repository gate, the same one a developer runs; see the Makefile
       - name: test
-        run: go test ./...
+        run: make test
 
   build:
     runs-on: ubuntu-latest
