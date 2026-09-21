@@ -1,11 +1,11 @@
 .DEFAULT_GOAL := build
 GOBIN ?= $(shell go env GOPATH)/bin
 
-.PHONY: clean build test push
+ifeq ($(filter-out /,$(abspath $(GOBIN))),)
+$(error GOBIN is '$(GOBIN)'; it must name a real directory)
+endif
 
-clean:
-	go clean
-	rm -f $(GOPATH)/bin/mercurius
+.PHONY: build test clean push
 
 build:
 	go install ./...
@@ -14,5 +14,9 @@ test:
 	go test ./... -count=1
 	go vet ./...
 
-push:
-	push vendor ${GOBIN}/mercurius mercurius
+clean:
+	go clean ./...
+	rm -f "$(GOBIN)"/*
+
+push: build
+	push vendor "$(GOBIN)/mercurius" mercurius
