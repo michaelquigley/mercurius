@@ -150,7 +150,7 @@ pi has no native JSON-schema enforcement, so the schema is carried only by the p
 
 Every reviewer runs with its working directory set to the round's snapshot directory (`<session>/round-NN/`), which sits inside the project tree. The reviewers differ in how much of the surrounding project they pull into the review:
 
-- `codex` and `claude` discover and load the project's agent context files (`AGENTS.md` for codex, `CLAUDE.md` for claude) by walking up from the working directory, so a review carries whatever instructions those files hold. Codex runs with an isolated `CODEX_HOME`, and claude is not run with `--bare` (so it uses the operator's login); neither suppresses context-file discovery.
+- `codex` and `claude` discover and load the project's agent context files (`AGENTS.md` for codex; `CLAUDE.md` for claude, which falls back to `AGENTS.md` when no `CLAUDE.md` is present) by walking up from the working directory, so a review carries whatever instructions those files hold. Codex runs with an isolated `CODEX_HOME`, and claude is not run with `--bare` (so it uses the operator's login); neither suppresses context-file discovery.
 - `pi` is run with `--no-context-files`, so it does not load `AGENTS.md`/`CLAUDE.md` and reviews the artifacts on their own merits.
 
 This is a deliberate, tunable difference rather than a guarantee of identical context across reviewers. The artifact content itself is always inlined into the prompt, so context-file discovery only adds the project's own agent instructions, not the artifacts. An operator who wants codex/claude to review without that surrounding context can suppress it per reviewer (for example, run claude with `--bare` plus `ANTHROPIC_API_KEY` via `extra_args`).
