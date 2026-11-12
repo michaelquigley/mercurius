@@ -81,7 +81,7 @@ review_focus: |
 reviewer:
   name: codex
   impl: codex
-  model: gpt-5.5
+  model: gpt-6.1-sol
 ```
 
 `review_context` (calibration), `settled_decisions` (guards — decisions already made that the reviewer should stop re-raising), and `review_focus` are read from this file; they are not MCP tool inputs. Mercurius re-reads the YAML at the start of every round, so edits between rounds take effect on the next round with no session reopen. Relative `log_destination` and `binary_path` values resolve relative to the config file, not the process working directory.

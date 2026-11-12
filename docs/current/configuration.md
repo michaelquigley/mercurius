@@ -30,7 +30,7 @@ reviewer:
   name: codex
   impl: codex
   binary_path: /usr/local/bin/codex
-  model: gpt-5.5
+  model: gpt-6.1-sol
   extra_args:
     - --some-flag
   timeout: 20m
@@ -51,7 +51,7 @@ A `reviewer` block is required to run a round and not to open a session: `open_s
 - `settled_decisions`: a list of guards - decisions already made that the reviewer should not re-raise. Each entry is `{id, do_not_flag}`: `do_not_flag` is the instruction rendered into the prompt as its own block; `id` is an operator-side handle for finding, editing, or removing the guard and is never shown to the reviewer. Entries whose `do_not_flag` is empty are ignored, and duplicate ids are tolerated. Earn guards by re-litigating a finding and deciding it is out of scope - do not add them speculatively, since a ledger that outgrows the artifacts slows every cold read.
 - `review_focus`: free-form markdown for project-specific things to look for that the base review philosophy does not already cover (typically one paragraph). Inserted in the project-specific focus section of the prompt.
 - `reviewer.binary_path`: reviewer binary path. Omitted means normal executable lookup of the impl's default binary (`codex`, `claude`, or `pi`).
-- `reviewer.model`: reviewer model string passed to the reviewer implementation. `codex` takes a model id (for example `gpt-5.5`); `claude` takes an alias or full name (for example `sonnet` or `claude-opus-4-8`); `pi` takes the `provider/model` form (for example `openai-codex/gpt-5.5`).
+- `reviewer.model`: reviewer model string passed to the reviewer implementation. `codex` takes a model id (for example `gpt-6.1-sol`); `claude` takes an alias or full name (for example `sonnet` or `claude-opus-4-8`); `pi` takes the `provider/model` form (for example `openai-codex/gpt-6.1-sol`).
 - `reviewer.extra_args`: additional reviewer-specific CLI arguments, appended after the Mercurius-managed flags.
 - `reviewer.timeout`: how long one round may run, as a duration string such as `20m` or `45m30s`. Default is `20m`. At the deadline the reviewer process is killed; a round whose reviewer had already produced a valid review completes with it, and any other round fails with `reviewer_failed` and `details.reason: timeout`. The default errs long on purpose: a timeout that fires early throws away a good review, while one that fires late only holds the project's runner lock a while longer. It lives in the reviewer block because how long a review takes depends on which reviewer runs it.
 

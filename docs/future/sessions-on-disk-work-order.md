@@ -58,7 +58,7 @@ This work order does not say which library binds these files, and `encoding/json
 | --- | --- |
 | `state` | `running`, `completed`, or `failed` |
 | `started_at`, `updated_at`, `completed_at` | timings |
-| `runner_pid`, `reviewer_pid` | for the operator; never used to signal a process |
+| `runner_pid`, `reviewer_pid` | for the operator; never used to signal a process. Present in the shape from stage 1 and filled from stage 2: under the in-process launcher the runner's pid is the server's, and naming it would invite the operator to kill the server |
 | `outlived_server` | set by the runner at finish (stage 2) |
 | `error` | on failure: `code`, `message`, `details`, `at` |
 
@@ -74,7 +74,7 @@ The error stored in `_state.json` is kept small. `details.cause` is cut to 8 KiB
 
 ### Failure codes
 
-No new error codes. A round's failure is stored with one of the existing five:
+No new error codes. The five codes are defined in `internal/store` and re-exported by `internal/broker`, because the runner records failures and cannot import the broker without a cycle. A round's failure is stored with one of them:
 
 | what happened | code | `details.reason` |
 | --- | --- | --- |
@@ -97,7 +97,7 @@ No new error codes. A round's failure is stored with one of the existing five:
 
 Taking the lock is a non-blocking attempt, retried up to five times 50 ms apart before it is reported as held. The retry exists because a server marking a dead round, or a monitor checking one, holds the lock for a moment.
 
-When the lock is held, the `conflict` is built from the lock file's note and from the named round's `_state.json`. Its details carry `running_session_id`, `running_round_number`, `started_at`, `running_for`, `runner_pid`, `started_by_this_server` (stage 2), the monitor command for that session, and a `next_action` that says to wait and then call `collect_round` on that session. If the note cannot be read, the `conflict` is returned without them.
+When the lock is held, the `conflict` is built from the lock file's note and from the named round's `_state.json`. Its details carry `running_session_id`, `running_round_number`, `started_at`, `running_for`, `runner_pid` and `started_by_this_server` (both stage 2), the monitor command for that session, and a `next_action` that says to wait and then call `collect_round` on that session. If the note cannot be read, the `conflict` is returned without them.
 
 `start_review_round`, in order:
 
@@ -112,8 +112,9 @@ sequenceDiagram
     Note over S,L: held → conflict, built from the lock file's note
     S->>L: read the previous holder's note
     S->>D: if that round still says running, write failed (runner_lost)
-    S->>L: write this round's note
     S->>D: remove any round directory with no _state.json
+    S->>S: number the round
+    S->>L: write this round's note
     S->>D: create round-NN: snapshots, _prompt.md, _config.yaml, _run.json
     S->>D: write _state.json: running
     S->>R: start, passing the lock descriptor
@@ -124,7 +125,7 @@ sequenceDiagram
     R->>L: exit releases the lock
 ```
 
-The round number is one more than the highest existing `round-NN` in the session, counted after the leftover directories are removed. The project-wide lock serializes every round start, so there is no second allocator to race.
+The round number is one more than the highest existing `round-NN` in the session, counted after the leftover directories are removed. The project-wide lock serializes every round start, so there is no second allocator to race. The note is written once the number is known, since it names the round, and before the round directory is created, so it always precedes the round's first state.
 
 Only one round can be marked `running` with the lock free: the one named in the lock file's note, since every round that ever ran was named there when it started. That is why the server checks that one round and does not scan the log destination.
 
@@ -183,6 +184,8 @@ A session id from a tool call or from `monitor --session` is checked against `^s
 A directory that matches but has no `session.json` answers `not_found` with a detail saying the directory is not a session in this layout. A `session.json`, `_run.json`, or `_state.json` that exists and cannot be parsed answers `internal_error` naming the file.
 
 ## Stage 1 — the server holds nothing
+
+*Landed on the `sessions-on-disk` branch, 2026-11-12. The sections above were corrected afterward where the build read them differently: the note's place in the launch sequence, when the pids are filled, and where the error codes live.*
 
 The registry goes away. Sessions and rounds live in the new layout, any server process can serve any session, and the server starts with no config. Rounds still run inside the server process, through the in-process launcher.
 
@@ -251,7 +254,9 @@ These need real processes and are Linux-only. The test binary re-executes itself
 - **The timeout kills the group.** The reviewer script starts a child of its own and both sleep. After the timeout neither pid exists and the round is failed with `reason: timeout`.
 - **A finished runner is reaped.** After a round completes under a live server, the runner's pid is not a zombie.
 
-**Docs.** `architecture.md` (the three processes, the runner, the lock), `operations.md` (what a `conflict` on launch means, `_runner.log`, killing a round by hand, the residuals below), `mcp-tools.md`, `agent-guide.md` (on a launch `conflict`, tell the operator and collect; do not open a new session to get around it). A changelog entry.
+**Docs.** `architecture.md` (the three processes, the runner, the lock), `mcp-tools.md`, `agent-guide.md` (on a launch `conflict`, tell the operator and collect; do not open a new session to get around it). A changelog entry.
+
+`operations.md` already has the launch-`conflict` section and a residuals list, written in stage 1 because they describe stage 1 as built. This stage brings them up to date and does not add a second copy: add `_runner.log` and killing a round by hand now that the pids are recorded; rewrite the residual about a server death leaving the reviewer running, which stops being true, into the narrower one about a reviewer's own children; and correct the line saying the timeout kills only the reviewer process, since it now kills the group.
 
 **Exit.** `make test` passes. With a real reviewer, killing the server mid-round does not stop the round, and the round is collectable from a new server.
 
@@ -282,7 +287,7 @@ After stage 3 is accepted:
 - Remove `docs/future/sessions-on-disk.md` and this work order.
 - Remove `docs/future/status-json-error-bloat.md`, which stage 1 resolves.
 - Update `docs/future/web-monitor-and-trajectory.md` to read `session.json` and the round states where it names `status.json`.
-- Move the residuals below into `docs/current/operations.md`, if stage 2 has not already.
+- Check the residuals in `docs/current/operations.md` against the list below. Stage 1 put them there; what is left is making sure the two agree.
 - The roadmap card `session-rehydration` points at the spec being removed. Whether it is deleted is the operator's call.
 
 ## Residuals
@@ -299,7 +304,7 @@ Hazards this plan leaves open on purpose. They describe how the shipped system b
 
 | file | stage | change |
 | --- | --- | --- |
-| `internal/store/` | 1 | new: file shapes, atomic write, paths, id check |
+| `internal/store/` | 1 | new: file shapes, atomic write, paths, id check, the error codes |
 | `internal/runlock/` | 1 | new: the kernel lock and its note |
 | `internal/runner/` | 1, 2 | new: `Run`, launchers, `buildReviewer` |
 | `internal/broker/broker.go`, `types.go` | 1, 2, 3 | registry removed, operations over the store; then `started_by_this_server`; then the reviewer's source |

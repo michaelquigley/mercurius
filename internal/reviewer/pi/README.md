@@ -12,7 +12,7 @@ pi -p --mode json --no-session --no-context-files --tools read,grep,find,ls --mo
 
 The assembled `ReviewRequest.Prompt` is written to a temporary file and passed as an `@file` reference (pi reads the file content into the message). The prompt inlines artifact content and can be large, so a file reference avoids argument-length limits. The subprocess stdin is left closed (the null device): pi consumes stdin as additional input, and an open stdin with no EOF would hang the run. `ReviewRequest.WorkingDir` becomes the process working directory via `cmd.Dir`.
 
-If `Options.Model` is set, `--model <provider/model>` is appended (pi uses the `provider/id` form, for example `openai-codex/gpt-5.5`). `Options.ExtraArgs` are appended after the Mercurius-managed flags and before the `@file`. `Options.BinaryPath` defaults to `pi`.
+If `Options.Model` is set, `--model <provider/model>` is appended (pi uses the `provider/id` form, for example `openai-codex/gpt-6.1-sol`). `Options.ExtraArgs` are appended after the Mercurius-managed flags and before the `@file`. `Options.BinaryPath` defaults to `pi`.
 
 `--tools read,grep,find,ls` keeps the run read-only (no file modifications). `--no-session` makes the run ephemeral. `--no-context-files` suppresses `AGENTS.md`/`CLAUDE.md` discovery, which matters because the round directory sits inside the project tree; without it pi would fold the project's own agent instructions into the review. This differs from the codex and claude reviewers, which do load those context files; see `docs/current/architecture.md` for the cross-reviewer comparison.
 
@@ -35,4 +35,4 @@ go test -tags integration ./internal/reviewer/pi
 Environment variables:
 
 - `MERCURIUS_PI_BINARY` - optional pi binary path; defaults to `pi` on `PATH`.
-- `MERCURIUS_PI_MODEL` - optional model in `provider/model` form; defaults to `openai-codex/gpt-5.5`.
+- `MERCURIUS_PI_MODEL` - optional model in `provider/model` form; defaults to `openai-codex/gpt-6.1-sol`.

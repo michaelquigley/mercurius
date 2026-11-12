@@ -28,7 +28,7 @@ review_focus: |
 reviewer:
   name: codex
   impl: codex
-  model: gpt-5.5
+  model: gpt-6.1-sol
 ```
 
 `review_context`, `settled_decisions`, and `review_focus` are configuration-only - they are not MCP tool inputs. Mercurius re-reads `mercurius.yaml` at the start of every round, so editing them between rounds takes effect on the next round with no session reopen.

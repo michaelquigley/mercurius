@@ -27,7 +27,7 @@ func TestReviewerIntegration(t *testing.T) {
 
 	model := os.Getenv("MERCURIUS_PI_MODEL")
 	if model == "" {
-		model = "openai-codex/gpt-5.5"
+		model = "openai-codex/gpt-6.1-sol"
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
