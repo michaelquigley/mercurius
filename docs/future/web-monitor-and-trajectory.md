@@ -20,13 +20,18 @@ File-watch only. No new RPC surface, no daemon protocol with the broker.
 
 The broker already writes everything important to disk:
 
-- `<session_dir>/status.json` — latest session/round state
-- `<session_dir>/round-NN/_round.md` — immutable round log with frontmatter, manifest, reviewer output
+- `<session_dir>/session.json` — the session's id, when it opened, and whether and when it closed
+- `<session_dir>/round-NN/_state.json` — the round's state (running, completed, or failed), its timings, and its failure if it failed
+- `<session_dir>/round-NN/_run.json` — the round's inputs: the reviewer and where it came from, the finding limit, the artifact manifest
+- `<session_dir>/round-NN/_review.json` — the raw reviewer output, on success
+- `<session_dir>/round-NN/_notes.json` — commentary and decisions, once recorded
+- `<session_dir>/round-NN/_round.md` and `_notes.md` — the same round log and notes as documents for people
 - `<session_dir>/round-NN/_prompt.md` — assembled prompt for that round
-- `<session_dir>/round-NN/_notes.md` — optional sibling file with commentary and decisions for that round
 - `<session_dir>/round-NN/<artifact-name>` — artifact snapshots for that round
 
-Note: sessions are light groupings of independent rounds. There is no session-level decisions log, convergence signal, or append-only event stream — any trajectory analytics this app surfaces are computed by reading the on-disk round logs.
+The JSON files are the machine record and the markdown files are for reading; the app reads the JSON and never parses the markdown. There is no `status.json`; a session's view is composed from `session.json` and its rounds' state files, as `mercurius monitor` does. Failed rounds keep their directories, so a trajectory can show them.
+
+Note: sessions are light groupings of independent rounds. There is no session-level decisions log, convergence signal, or append-only event stream — any trajectory analytics this app surfaces are computed by reading each round's `_review.json` and `_notes.json`.
 
 The web app watches `.mercurius/` directories under a configured root, parses on-disk state, serves a local HTTP UI (port configurable, localhost-bound by default), and pushes updates via SSE or websocket as files change. Brokers stay unchanged. No new protocol to design or version. The web app can be killed and restarted without disturbing in-flight sessions.
 

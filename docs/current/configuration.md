@@ -32,6 +32,8 @@ It writes the starter only if no file is there; `--force` overwrites one.
 
 A missing user-level file is not an error: it means no reviewer is configured. `open_session` still succeeds and reports no reviewer; `start_review_round` answers `user_error` naming the user-level path.
 
+A user-level file that exists and is invalid is different. Both config files are read on every tool call and by `mercurius monitor`, so an invalid user-level config fails every call with a `user_error` naming it, including calls that use no reviewer, such as `collect_round` and `record_round_notes`, and including projects that set `reviewer_override`. Fix the file and call again.
+
 ### Example
 
 ```yaml

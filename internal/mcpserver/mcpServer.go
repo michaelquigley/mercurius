@@ -204,7 +204,8 @@ type ErrorOutput struct {
 type Options struct {
 	// ConfigPath is the project mercurius.yaml, resolved on every tool call.
 	ConfigPath string
-	// UserConfigPath is the user-level config. It is accepted and not yet read.
+	// UserConfigPath is the user-level config, which holds the reviewer. It is
+	// read on every tool call, alongside the project file.
 	UserConfigPath string
 	// Launcher starts rounds. nil means the production launcher: each round in
 	// its own detached mercurius process.

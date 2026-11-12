@@ -14,7 +14,8 @@ import (
 type Options struct {
 	// ConfigPath is the project mercurius.yaml.
 	ConfigPath string
-	// UserConfigPath is the user-level config. It is accepted and not yet read.
+	// UserConfigPath is the user-level config, which holds the reviewer. It is
+	// read on every call, alongside the project file.
 	UserConfigPath string
 	// Launcher starts a prepared round.
 	Launcher runner.Launcher
