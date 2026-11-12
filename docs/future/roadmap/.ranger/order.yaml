@@ -1,6 +1,6 @@
 researching:
+  - bind-project-data-through-dd.md
   - artifact-paths-and-naming.md
   - quorums.md
-  - session-rehydration.md
   - implementation-divergence-review.md
 horizon:

@@ -3,7 +3,7 @@ title: artifact paths and naming
 state: researching
 created: 2026-09-18
 tags: [defect]
-milestone: v0.1.x
+milestone: v0.2.x
 ---
 
 two issues with artifacts:

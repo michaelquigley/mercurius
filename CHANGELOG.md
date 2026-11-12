@@ -2,27 +2,31 @@
 
 ## Unreleased
 
-CHANGE: **Session directories written by earlier versions are not read, and `session_status` no longer reports a session-level reviewer, `max_findings`, calibration flags, `last_error`, or `active_round`.** Sessions now live entirely on disk. The server keeps no session registry in memory: every tool call reads `mercurius.yaml` and the session directory, acts, and writes, so a session survives a server restart (a harness's idle shutdown during triage no longer loses it) and any server process can collect, note, or close any session. Each session has a `session.json`; each round directory gains machine records beside the human documents (`_state.json`, `_run.json`, `_review.json`, `_notes.json`), and Mercurius never reads its own markdown back. `status.json` is gone; rounds now report their own state, reviewer, finding limit, and failure.
+## v0.2.0
 
-CHANGE: **A `reviewer` block in a project's `mercurius.yaml` is now an error; the reviewer moves to the user-level config `~/.config/mercurius/config.yaml`.** Which reviewer runs is a fact about the installation, so it is set once there and every project uses it; `mercurius bootstrap --user` writes a starter, and `mercurius bootstrap` no longer writes a reviewer into the project template. Move the block from each project file to the user-level file. A project that genuinely needs its own reviewer uses a `reviewer_override` block, which replaces the installation's reviewer whole, timeout included. Each round records where its reviewer came from (`user config` or `project override`), and `open_session`, `start_review_round`, `session_status`, the monitor, and the synopsis report it; a round launched on an override tells the agent to tell the operator. With no reviewer in either file, `open_session` still succeeds and `start_review_round` answers `user_error` naming the user-level path.
+CHANGE: **The reviewer moves out of `mercurius.yaml` into a user-level config, `~/.config/mercurius/config.yaml`.** It is set once per installation and every project uses it. Run `mercurius bootstrap --user` to write a starter, then remove the `reviewer` block from each project file; a project file that still has one is refused. A project that needs its own reviewer uses a `reviewer_override` block, and each round reports which of the two it ran on.
 
-FEATURE: A review round now runs in its own detached process rather than inside the MCP server, so a round survives the server that started it: a harness restart or idle shutdown mid-round no longer costs the review, and the next server collects it as usual. The round records whether it outlived its server, shown per round in `session_status` and the synopsis, which makes visible how often that happens. The reviewer's life is tied to the runner's by the kernel, so killing a round's runner takes its reviewer with it, and the round timeout now kills the reviewer's whole process group. Each round's `_state.json` records the runner's and reviewer's pids for the operator, the launch `conflict` names the runner's pid and whether the answering server started the running round, and each round directory gains `_runner.log`.
+CHANGE: **Session directories written by earlier versions are not read, and `status.json` is gone.** Sessions now live entirely on disk, so a session survives a server restart and any server process can collect, note, or close it. `session_status` reports the reviewer, finding limit, state, and failure per round instead of per session.
 
-CHANGE: The server starts without a `mercurius.yaml`. A missing or broken config is a `user_error` from the tool call, naming the path, instead of a server that exits at launch and shows only a closed connection. `open_session` no longer needs a reviewer configured and reports the current configuration as information; `start_review_round` answers `user_error` when no reviewer is configured. The reviewer and `max_findings` are resolved per round, like the calibration, and recorded on each round.
+FEATURE: A review round runs in its own detached process, so a harness restart or idle shutdown mid-round no longer costs the review; the next server collects it as usual. The synopsis marks each round that outlived its server.
 
-FEATURE: One round runs at a time per log destination, enforced by a kernel lock on `<log_destination>/runner.lock`. A second `start_review_round`, from any session, answers `conflict` naming the running round, how long it has been running, and its monitor command, so a lost session id no longer quietly turns into a second review. A round marked running whose runner is gone is recorded as failed with `details.reason: runner_lost` by the next reader.
+FEATURE: Only one round runs at a time per project. A second `start_review_round`, from any session, answers `conflict` naming the round that is running, so a lost session id no longer turns into a duplicate review.
 
-FEATURE: Rounds have a timeout, `reviewer.timeout`, defaulting to 20 minutes. A reviewer still running at the deadline is killed and its round fails with `details.reason: timeout`, unless it had already produced a valid review, in which case the round completes with it. Subprocess reviewers also stop waiting for output pipes ten seconds after the reviewer exits, so a child process left behind cannot hold a round open.
+FEATURE: Rounds have a timeout, `reviewer.timeout`, defaulting to 20 minutes. A reviewer that hangs is killed and its round fails, unless it had already produced a valid review, which is kept.
 
-CHANGE: Failed rounds stay on disk under their number; the retry is the next round. `collect_round` returns a failed round's stored failure for as long as its directory exists, and the synopsis lists failed rounds. Reviewer output from a failed round goes to `_raw.txt` rather than into the error, which keeps the stored error small (`details.cause` is capped at 8 KiB); the codex, claude, and pi reviewers now carry their captured output on the error instead of appending it to the message, including output they previously dropped on a clean exit that could not be parsed.
+CHANGE: The server starts without a `mercurius.yaml`. A missing or broken config comes back from the tool call as a `user_error` naming the file, instead of a server that exits at launch and shows only a closed connection.
 
-CHANGE: `mercurius monitor` reads the session and round files directly and never writes. It prints every round with its state and reviewer, reports a round whose runner is gone as lost, and `--wait` watches the latest round's `_state.json`. Session ids passed to the tools or to `--session` are checked before they are used as paths.
+CHANGE: The reviewer and `max_findings` are read fresh for every round, like the calibration, so an edit takes effect on the next round without restarting the server.
 
-CHANGE: The pi reviewer now hermetically seals review runs off from the host's development-flavoured pi configuration. Extension discovery (`--no-extensions` — extensions are how MCP servers arrive in pi), skills (`--no-skills`), and prompt templates (`--no-prompt-templates`) are disabled; the working directory is forced untrusted for the run (`--no-approve`), so a directory trusted in pi's trust store for interactive development can't execute its project `.pi/` extensions inside a review; and startup network operations are disabled (`--offline` — version check, managed binary and package installs, model catalog refresh; the model API call and oauth token refresh are unaffected). Flag set and `--mode json` event shape re-verified live against pi v0.80.7.
+CHANGE: Failed rounds stay on disk under their own number, and the retry is the next round. `collect_round` returns the stored failure, and the reviewer's raw output is kept in the round directory for troubleshooting.
+
+CHANGE: `mercurius monitor` shows every round with its state and reviewer, and reports a round whose runner has died as lost.
+
+CHANGE: The pi reviewer is sealed off from the host's own pi configuration during a review. Extensions, skills, prompt templates, directory trust, and startup network operations are all disabled, so a project's `.pi/` setup cannot run inside a review.
 
 ## v0.1.1
 
-- FEATURE: Now includes release build infrastructure for linux/amd64.
+FEATURE: Now includes release build infrastructure for linux/amd64.
 
 ## v0.1.0
 

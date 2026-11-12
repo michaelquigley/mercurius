@@ -1,11 +1,12 @@
 ---
 title: bind project data through dd
-state: inbox
+state: researching
 created: 2026-11-11
 tags: [enhancement]
 log:
   - stamp: 2026-11-11
     note: surfaced while bootstrapping the terminus rubric — docs/journal/2026-11-11.md
+milestone: v0.2.x
 ---
 
 move the project structs that still carry json tags onto `github.com/michaelquigley/df/dd`. three surfaces: the on-disk session files (`internal/store` and the runner lock's note), the MCP tool payloads and error envelope (`internal/mcpserver`), and the review-output parse (`internal/schema`). keep every file key and tool field name exactly as it is. leave the claude envelope and pi event-stream types alone; those are other tools' formats.
