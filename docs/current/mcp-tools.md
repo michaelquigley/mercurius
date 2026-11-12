@@ -9,7 +9,7 @@ Mercurius exposes six MCP tools:
 - `close_session`
 - `session_status`
 
-Every tool call reads `mercurius.yaml` and the session directory afresh; the server holds no session state between calls, so any server process can serve any session. A missing or unparseable `mercurius.yaml` is a `user_error` from whichever tool is called, naming the path in `details.config_path`; write or fix the file and call again, with no reconnect.
+Every tool call reads the configuration and the session directory afresh; the server holds no session state between calls, so any server process can serve any session. A missing or unparseable `mercurius.yaml`, or one with a plain `reviewer` block, is a `user_error` from whichever tool is called, naming the path in `details.config_path`. An unparseable or invalid user-level config is a `user_error` naming it in `details.user_config_path`. Write or fix the file and call again, with no reconnect. See [Configuration](configuration.md) for the two files.
 
 Expected broker failures are returned as tool error results with structured content:
 
@@ -25,7 +25,7 @@ Expected broker failures are returned as tool error results with structured cont
 
 Error codes (five stable classes):
 
-- `user_error`: caller can fix it (missing or unparseable `mercurius.yaml`, no reviewer configured, artifact validation, decision validation, bad log destination)
+- `user_error`: caller can fix it (missing or unparseable `mercurius.yaml`, a reviewer block in it, an invalid user-level config, no reviewer configured, artifact validation, decision validation, bad log destination)
 - `not_found`: session or round doesn't exist, or the session id is malformed
 - `conflict`: operation can't run in the current state (closed session, another round running in the project, round still running, notes on a failed round)
 - `reviewer_failed`: a round's reviewer failed, its output failed validation, it timed out, or its runner was lost (retryable; the retry is the next round)
@@ -43,18 +43,18 @@ Request:
 {}
 ```
 
-Response includes `session_id`, `opened_at`, and, as information about the configuration at this moment, `max_findings`, `reviewer` (the resolved reviewer block, or `null` when none is configured), and the `review_context_present` and `review_focus_present` booleans. None of these is stored on the session: the reviewer, `max_findings`, and calibration are resolved again at the start of every round and recorded on that round. `open_session` succeeds with no reviewer configured; `start_review_round` is where the absence becomes an error.
+Response includes `session_id`, `opened_at`, and, as information about the configuration at this moment, `max_findings`, `reviewer` (the resolved reviewer block with its `source`, or `null` when none is configured), and the `review_context_present` and `review_focus_present` booleans. None of these is stored on the session: the reviewer, `max_findings`, and calibration are resolved again at the start of every round and recorded on that round. `open_session` succeeds with no reviewer configured; `start_review_round` is where the absence becomes an error.
 
 ## `start_review_round`
 
 Starts one background review round and returns immediately. Artifacts are required and scoped to this round only - nothing from a prior round in the same session carries over.
 
-The reviewer, `max_findings`, and calibration (`review_context`, `review_focus`, `settled_decisions`) are resolved from `mercurius.yaml` at the start of this round and recorded in the round's `_run.json`, so edits between rounds take effect immediately with no session reopen. The round also snapshots the exact config bytes it read to `_config.yaml` in the round directory, beside the rendered `_prompt.md`.
+The reviewer (from the user-level config, or the project's `reviewer_override`), `max_findings`, and calibration (`review_context`, `review_focus`, `settled_decisions`) are resolved at the start of this round and recorded in the round's `_run.json`, the reviewer with its `reviewer_source`, so edits between rounds take effect immediately with no session reopen. The round also snapshots the exact config bytes it read to `_config.yaml` in the round directory, beside the rendered `_prompt.md`.
 
 Everything is checked before the round is handed to its runner, and a failure leaves no round behind:
 
 - a missing, mid-edit, or unreadable YAML is a `user_error`; fix the file and start the round again;
-- no `reviewer` block is a `user_error` naming the project file;
+- no reviewer configured anywhere is a `user_error` naming the user-level config path, where the `reviewer` block belongs;
 - a closed session is a `conflict`; artifact problems are a `user_error`;
 - another round running anywhere in the project, in this session or any other, is a `conflict`.
 
@@ -74,7 +74,7 @@ Request:
 }
 ```
 
-Response includes `round_number`, `state` (`running`), `reviewer` (the resolved reviewer block the round runs with: `name`, `impl`, `model`, `binary_path`, `extra_args`, `timeout`), `started_at`, `status_path` (the round's `_state.json`), `monitor_command`, and a `next_action` hint. The design agent should tell the user to monitor and re-engage when the round completes.
+Response includes `round_number`, `state` (`running`), `reviewer` (the resolved reviewer block the round runs with: `name`, `impl`, `model`, `binary_path`, `extra_args`, `timeout`, and `source`, either `user config` or `project override`), `started_at`, `status_path` (the round's `_state.json`), `monitor_command`, and a `next_action` hint. The design agent should tell the user to monitor and re-engage when the round completes. When the round runs on a project override, `next_action` also tells the agent to tell the user so.
 
 There is no separate `round_status` tool; to check progress, call `collect_round`. If the round is still running, it returns a `conflict` error with the status path embedded in `details`.
 
@@ -142,7 +142,7 @@ Response fields: `session_id`, `closed_at`, `synopsis_path`.
 Returns a read-only session view: `session_id`, `state`, `opened_at`, `closed_at`, `round_count`, and `rounds`, which lists every round that was started, failed ones included. There is no session-level reviewer, finding limit, or error. Each round carries:
 
 - `round_number`, `opened_at`, `state` (`running`, `completed`, or `failed`), and `completed_at`;
-- `reviewer` (the block the round ran with) and `max_findings`;
+- `reviewer` (the block the round ran with, with its `source`) and `max_findings`;
 - `state_path` (its `_state.json`) and, once completed, `log_path` (its `_round.md`);
 - `has_notes` and `decision_count`;
 - `outlived_server`, true when the round finished after the server that started it was gone;

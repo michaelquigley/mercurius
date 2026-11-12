@@ -30,19 +30,21 @@ func TestReviewerRoundIntegration(t *testing.T) {
 	}
 
 	// the broker resolves its config per call, so the round's reviewer comes from
-	// a real mercurius.yaml naming the claude binary.
+	// a user-level config naming the claude binary.
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "mercurius.yaml")
-	body := "log_destination: reviews\nreviewer:\n  name: claude\n  impl: claude\n  binary_path: " + resolved + "\n"
+	userPath := filepath.Join(dir, "user.yaml")
+	user := "reviewer:\n  name: claude\n  impl: claude\n  binary_path: " + resolved + "\n"
 	if model := os.Getenv("MERCURIUS_CLAUDE_MODEL"); model != "" {
-		body += "  model: " + model + "\n"
+		user += "  model: " + model + "\n"
 	}
-	writeConfigFile(t, configPath, body)
+	writeConfigFile(t, configPath, "log_destination: reviews\n")
+	writeConfigFile(t, userPath, user)
 	launcher := runner.NewInProcess(runner.BuildReviewer)
 	t.Cleanup(launcher.Wait)
 	b := broker.New(broker.Options{
 		ConfigPath:     configPath,
-		UserConfigPath: filepath.Join(dir, "user.yaml"),
+		UserConfigPath: userPath,
 		Launcher:       launcher,
 	})
 

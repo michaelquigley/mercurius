@@ -10,9 +10,28 @@ A **session** is a lightweight grouping of one or more **rounds**. Each round is
 
 Mercurius is a reviewer broker, not an editor. It reads artifacts, snapshots them, asks for review, and records the audit trail. Artifact edits happen outside Mercurius.
 
+## Choose the Reviewer, Once
+
+The reviewer is set once per installation, in the user-level config, and every project uses it. Write a starter and edit its `reviewer` block:
+
+```sh
+mercurius bootstrap --user
+```
+
+That writes `~/.config/mercurius/config.yaml` (or `$XDG_CONFIG_HOME/mercurius/config.yaml`):
+
+```yaml
+reviewer:
+  name: codex
+  impl: codex
+  model: gpt-6.1-sol
+```
+
+`impl` is one of `codex`, `claude`, `pi`, or `dummy`. The block also takes `binary_path`, `extra_args`, and `timeout` (default `20m`); see [Configuration](configuration.md). Edits take effect on the next round in every project.
+
 ## Prepare a Project
 
-Create a `mercurius.yaml` in the project you want reviewed:
+Create a `mercurius.yaml` in the project you want reviewed (`mercurius bootstrap` writes a starter). It holds the calibration for this project and names no reviewer:
 
 ```yaml
 max_findings: 8
@@ -25,11 +44,9 @@ settled_decisions:
 review_focus: |
   Pay particular attention to invariants specific to this project that the
   universal what-to-flag criteria do not already cover.
-reviewer:
-  name: codex
-  impl: codex
-  model: gpt-6.1-sol
 ```
+
+A `reviewer` block in `mercurius.yaml` is an error: every tool answers with a `user_error` telling you to remove it, because the reviewer belongs to the user-level config. When one project genuinely needs a different reviewer, say for a second opinion on one arc, give it a `reviewer_override` block instead; Mercurius reports every round that runs on one. See [Configuration](configuration.md#overriding-the-reviewer-for-one-project).
 
 `review_context`, `settled_decisions`, and `review_focus` are configuration-only - they are not MCP tool inputs. Mercurius re-reads `mercurius.yaml` at the start of every round, so editing them between rounds takes effect on the next round with no session reopen.
 
@@ -68,13 +85,13 @@ Sessions live on disk, not in the server's memory. If the harness restarts the s
 
 ## Open a Session
 
-Ask the design agent to open a Mercurius session. The session itself takes no inputs: the reviewer and calibration are read from `mercurius.yaml` at the start of each round, and artifacts are passed at round-start time:
+Ask the design agent to open a Mercurius session. The session itself takes no inputs: the reviewer and calibration are read from the configuration at the start of each round, and artifacts are passed at round-start time:
 
 ```json
 {}
 ```
 
-The response reports the session id and, as information about `mercurius.yaml` at that moment, the configured `max_findings`, the reviewer (or none, if the file has no `reviewer` block yet), and `review_context_present` / `review_focus_present` booleans. None of these is bound to the session. The reviewer, `max_findings`, and calibration are resolved again at the start of every round and recorded on that round, so the session's status and synopsis report the reviewer round by round.
+The response reports the session id and, as information about the configuration at that moment, the configured `max_findings`, the reviewer and where it came from (`user config` or `project override`; none, if no reviewer is configured yet), and `review_context_present` / `review_focus_present` booleans. None of these is bound to the session. The reviewer, `max_findings`, and calibration are resolved again at the start of every round and recorded on that round, so the session's status and synopsis report the reviewer round by round.
 
 ## Run a Round
 
@@ -144,7 +161,7 @@ Decision refs match a concern, question, or advisory_note id from this round. De
 
 After a round is finalized, you and the agent have three natural options:
 
-- **Run another round in the same session**: the normal next pass - re-snapshot the updated artifacts and get a fresh review. Any edits you made to `mercurius.yaml` between rounds (calibration, guards, the reviewer, or `max_findings`) are picked up automatically, since the config is re-read at the start of each round.
+- **Run another round in the same session**: the normal next pass - re-snapshot the updated artifacts and get a fresh review. Any edits you made between rounds, to `mercurius.yaml` (calibration, guards, `max_findings`) or to the user-level reviewer, are picked up automatically, since both files are re-read at the start of each round.
 - **Close the session and open a new one**: still available, but no longer necessary just to pick up YAML edits - closing and reopening used to be the only moment the config was re-read, and that is no longer the case.
 - **Stop**: the latest round verdict is `ready_to_build`, or the remaining findings are advisory / deferred / rejected and below the noise floor for your stated `review_context`.
 

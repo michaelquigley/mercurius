@@ -171,7 +171,8 @@ func newSubprocessHarness(t *testing.T, impl string) *harness {
 		t.Setenv("CODEX_HOME", codexHome)
 	}
 
-	h := newHarness(t, nil, "log_destination: reviews\nreviewer:\n  name: "+impl+"\n  impl: "+impl+"\n  binary_path: "+binaryPath+"\n  timeout: 30s\n")
+	h := newHarness(t, nil, baseConfig)
+	h.writeUserConfig("reviewer:\n  name: " + impl + "\n  impl: " + impl + "\n  binary_path: " + binaryPath + "\n  timeout: 30s\n")
 	h.launcher = runner.NewInProcess(runner.BuildReviewer)
 	t.Cleanup(h.launcher.Wait)
 	return h

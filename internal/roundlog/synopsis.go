@@ -21,12 +21,16 @@ type SynopsisEntry struct {
 	Rounds    []SynopsisRound
 }
 
-// SynopsisReviewer describes the reviewer one round ran with.
+// SynopsisReviewer describes the reviewer one round ran with and where it came
+// from ('user config' or 'project override').
 type SynopsisReviewer struct {
-	Name  string
-	Impl  string
-	Model string
+	Name   string
+	Impl   string
+	Model  string
+	Source string
 }
+
+const synopsisSourceOverride = "project override"
 
 // SynopsisError captures a failed round's stored error.
 type SynopsisError struct {
@@ -170,7 +174,7 @@ func writeSynopsisRoundOutcomes(b *strings.Builder, entry SynopsisEntry) {
 			round.Number,
 			round.OpenedAt.UTC().Format(time.RFC3339),
 			escapeTableCell(emptyDash(round.State)),
-			escapeTableCell(emptyDash(round.Reviewer.Name)),
+			escapeTableCell(tableReviewer(round.Reviewer)),
 			escapeTableCell(verdict),
 			concerns,
 			questions,
@@ -445,10 +449,25 @@ func formatSynopsisReviewer(r SynopsisReviewer) string {
 	if r.Model != "" {
 		parts = append(parts, fmt.Sprintf("model '%s'", r.Model))
 	}
+	if r.Source != "" {
+		parts = append(parts, fmt.Sprintf("from the %s", r.Source))
+	}
 	if len(parts) == 0 {
 		return fmt.Sprintf("'%s'", r.Name)
 	}
 	return fmt.Sprintf("'%s' (%s)", r.Name, strings.Join(parts, ", "))
+}
+
+// tableReviewer is the reviewer's name, marked when it came from a project
+// override so every round that ran that way stands out in the table.
+func tableReviewer(r SynopsisReviewer) string {
+	if r.Name == "" {
+		return "-"
+	}
+	if r.Source == synopsisSourceOverride {
+		return r.Name + " (override)"
+	}
+	return r.Name
 }
 
 func presence(present bool) string {

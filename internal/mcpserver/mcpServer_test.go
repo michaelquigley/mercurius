@@ -258,11 +258,16 @@ func TestServerStartsWithoutConfig(t *testing.T) {
 	}
 
 	writeConfigFile(t, configPath, baseTestConfig)
+	writeConfigFile(t, filepath.Join(dir, "user.yaml"), baseTestUser)
 	second, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
 	if err != nil || second.IsError {
 		t.Fatalf("open after writing the config: result=%+v err=%v", second, err)
 	}
-	sessionID := decodeStructured[OpenSessionOutput](t, second).SessionID
+	opened := decodeStructured[OpenSessionOutput](t, second)
+	if opened.Reviewer == nil || opened.Reviewer.Source != "user config" {
+		t.Fatalf("open must report the reviewer and where it came from: %+v", opened.Reviewer)
+	}
+	sessionID := opened.SessionID
 	collected := startAndCollectRoundTool(t, ctx, client, sessionID, writeArtifact(t, "design.md", "# design\n"))
 	if collected.RoundNumber != 1 || collected.Reviewers[0].ReviewerName != "dummy" {
 		t.Fatalf("collected = %+v", collected)
@@ -410,6 +415,9 @@ func TestOpenSessionRereadsConfig(t *testing.T) {
 	// drop review_context and the reviewer: open still succeeds and reports both
 	// as absent.
 	writeConfigFile(t, configPath, "log_destination: reviews\n")
+	if err := os.Remove(testUserPath(configPath)); err != nil {
+		t.Fatalf("remove user config: %v", err)
+	}
 	second, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
 	if err != nil {
 		t.Fatalf("open session 2: %v", err)
@@ -702,8 +710,12 @@ func TestCollectRoundTriageAdvisoryNotes(t *testing.T) {
 	}
 }
 
-const baseTestConfig = `log_destination: reviews
-reviewer:
+// baseTestConfig is a project mercurius.yaml. The reviewer lives in a
+// user-level file beside it, written by newTestClientWith; no test reads the
+// developer's real user-level config.
+const baseTestConfig = "log_destination: reviews\n"
+
+const baseTestUser = `reviewer:
   name: dummy
   impl: dummy
 `
@@ -716,8 +728,15 @@ func newTestClient(t *testing.T) (context.Context, *mcp.ClientSession) {
 
 func newTestClientWithFixedReviewer(t *testing.T, raw json.RawMessage) (context.Context, *mcp.ClientSession) {
 	t.Helper()
-	ctx, client, _ := newTestClientWith(t, fixedReviewer{raw: raw}, strings.Replace(baseTestConfig, "name: dummy", "name: triage", 1))
+	ctx, client, configPath := newTestClientWith(t, fixedReviewer{raw: raw}, baseTestConfig)
+	writeConfigFile(t, testUserPath(configPath), strings.Replace(baseTestUser, "name: dummy", "name: triage", 1))
 	return ctx, client
+}
+
+// testUserPath is the user-level config newTestClientWith writes beside the
+// project file.
+func testUserPath(configPath string) string {
+	return filepath.Join(filepath.Dir(configPath), "user.yaml")
 }
 
 // newTestClientWith writes a project mercurius.yaml and serves it through a
@@ -728,11 +747,12 @@ func newTestClientWith(t *testing.T, r reviewer.Reviewer, configBody string) (co
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfigFile(t, configPath, configBody)
+	writeConfigFile(t, testUserPath(configPath), baseTestUser)
 	launcher := runner.NewInProcess(func(store.RunReviewer) (reviewer.Reviewer, error) { return r, nil })
 	t.Cleanup(launcher.Wait)
 	b := broker.New(broker.Options{
 		ConfigPath:     configPath,
-		UserConfigPath: filepath.Join(dir, "user.yaml"),
+		UserConfigPath: testUserPath(configPath),
 		Launcher:       launcher,
 	})
 	server := mcp.NewServer(&mcp.Implementation{Name: "test-project", Version: Version}, nil)

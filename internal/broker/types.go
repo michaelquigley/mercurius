@@ -161,7 +161,8 @@ type RoundStatus struct {
 	Error          *ErrorInfo
 }
 
-// ReviewerInfo describes a resolved reviewer block.
+// ReviewerInfo describes a resolved reviewer block and where it came from:
+// config.SourceUserConfig or config.SourceProjectOverride.
 type ReviewerInfo struct {
 	Name       string
 	Impl       string
@@ -169,6 +170,7 @@ type ReviewerInfo struct {
 	BinaryPath string
 	ExtraArgs  []string
 	Timeout    time.Duration
+	Source     string
 }
 
 // ErrorInfo is a tool-visible broker error summary.

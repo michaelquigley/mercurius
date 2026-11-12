@@ -45,13 +45,13 @@ A **round** is the atomic review unit. It owns its artifacts, snapshot, prompt, 
 
 Nothing flows between rounds within a session: no decisions log carry-forward, no prior-decisions prompt block. To iterate, run another round in the same session with updated artifacts, or close the session and open a new one. Both are valid.
 
-Configuration is per round. The reviewer, `max_findings`, `review_context`, `review_focus`, and `settled_decisions` are resolved from `mercurius.yaml` when a round starts and recorded in that round's `_run.json`, so an edit to any of them takes effect on the next round, and every round's record says what it actually ran with.
+Configuration is per round. The reviewer (from the user-level config, or the project's `reviewer_override`), `max_findings`, `review_context`, `review_focus`, and `settled_decisions` are resolved when a round starts and recorded in that round's `_run.json`, with the reviewer's source in `reviewer_source`, so an edit to any of them takes effect on the next round, and every round's record says what it actually ran with.
 
 ## Round Lifecycle
 
 `start_review_round` does its checking up front, and anything that fails before the round is handed to its runner is returned directly from the tool call and leaves no round behind.
 
-1. Resolve `mercurius.yaml`. A missing or unparseable file, or one that names no reviewer, is a `user_error`.
+1. Resolve `mercurius.yaml` and the user-level config. A missing or unparseable project file, a `reviewer` block in it, an invalid user-level file, or no reviewer in either is a `user_error`.
 2. Check the session id, read `session.json`, and refuse a closed session.
 3. Validate the artifacts.
 4. Take the project's runner lock. If it is held, refuse with `conflict` naming the running round.
@@ -169,7 +169,7 @@ The human documents each have a machine twin written in the same motion: `_revie
 
 A round exists once its `_state.json` exists. A round directory without one is a leftover from a server that died while preparing it; it is not listed, and the next `start_review_round` in that session removes it.
 
-`_config.yaml` is the exact `mercurius.yaml` bytes this round ran with, captured beside the rendered prompt so the round's input and output sit together: a guard present in `_config.yaml` but absent from `_prompt.md` (rendered empty) stays diagnosable after the fact. Because it is the raw config, `_config.yaml` and `_run.json` can contain `reviewer.binary_path`, `model`, or `extra_args`; the `.mercurius/` tree is local and gitignored, so treat it accordingly. Other files in the round directory are the snapshotted artifacts under their declared names.
+`_config.yaml` is the exact `mercurius.yaml` bytes this round ran with, captured beside the rendered prompt so the round's input and output sit together: a guard present in `_config.yaml` but absent from `_prompt.md` (rendered empty) stays diagnosable after the fact. Because they record the raw config and the resolved reviewer, `_config.yaml` and `_run.json` can contain a `binary_path`, `model`, or `extra_args`; the `.mercurius/` tree is local and gitignored, so treat it accordingly. Other files in the round directory are the snapshotted artifacts under their declared names.
 
 All JSON files are written through a temporary file renamed over the target, so a reader never sees a partial file. Session ids from tool calls and from `monitor --session` are checked against `^s_[A-Za-z0-9]{12}$` before they are joined into a path; anything else is `not_found`. A matching directory with no `session.json` is `not_found` with a detail saying it is not a session in this layout; sessions written by older Mercurius versions are not read. A `session.json`, `_run.json`, or `_state.json` that exists and cannot be parsed is an `internal_error` naming the file.
 

@@ -184,6 +184,9 @@ type ReviewerInfoOutput struct {
 	BinaryPath string   `json:"binary_path,omitempty"`
 	ExtraArgs  []string `json:"extra_args,omitempty"`
 	Timeout    string   `json:"timeout"`
+	// Source is where the reviewer came from: 'user config' or 'project
+	// override'.
+	Source string `json:"source"`
 }
 
 type ToolErrorOutput struct {
@@ -296,7 +299,7 @@ func recordRoundNotesInputSchema() *jsonschema.Schema {
 func RegisterTools(server *mcp.Server, b *broker.Broker) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "open_session",
-		Description: "open a new Mercurius review session, a lightweight container for rounds. sessions live on disk, so any later server process can serve this session by its id. if mercurius.yaml is missing or unreadable this errors with code 'user_error' naming the path; write or fix the file and call again. the max_findings, review_context_present, review_focus_present, and reviewer fields describe the configuration at this moment, as information; they are not frozen on the session. calibration, the reviewer, and max_findings are re-read at the start of every round. artifacts are not registered at session open; pass them to each start_review_round call.",
+		Description: "open a new Mercurius review session, a lightweight container for rounds. sessions live on disk, so any later server process can serve this session by its id. if mercurius.yaml is missing or unreadable this errors with code 'user_error' naming the path; write or fix the file and call again. the reviewer is not set in mercurius.yaml: it comes from the operator's user-level config, and a 'reviewer' block in mercurius.yaml is a 'user_error' telling you to remove it; remove it, do not rename it. the max_findings, review_context_present, review_focus_present, and reviewer fields describe the configuration at this moment, as information; they are not frozen on the session. calibration, the reviewer, and max_findings are re-read at the start of every round. artifacts are not registered at session open; pass them to each start_review_round call.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ OpenSessionInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.OpenSession(ctx, broker.OpenSessionRequest{})
 		if err != nil {
@@ -314,7 +317,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "start_review_round",
-		Description: "start one review round in the background and return immediately. artifacts are required and are scoped to this round only; nothing carries over between rounds in the same session. review_context, review_focus, settled_decisions, the reviewer, and max_findings are resolved from mercurius.yaml at the start of this round and recorded on it. if the YAML is missing, mid-edit, or names no reviewer this errors with code 'user_error' and nothing is started; fix the file and start the round again. one round runs at a time per project: if another round is running, in this session or any other, this errors with code 'conflict' naming that round; do not open a new session to get around it, tell the user and collect that round when it finishes. a failed round keeps its number, so a retry is the next round. use the returned monitor_command to tell the user how to watch progress; the round may outlive the MCP client timeout.",
+		Description: "start one review round in the background and return immediately. artifacts are required and are scoped to this round only; nothing carries over between rounds in the same session. review_context, review_focus, settled_decisions, and max_findings are resolved from mercurius.yaml, and the reviewer from the operator's user-level config, at the start of this round and recorded on it. if either file is missing, mid-edit, or broken, or no reviewer is configured, this errors with code 'user_error' naming the file and nothing is started; fix it and start the round again. the response's reviewer.source says where the reviewer came from ('user config' or 'project override'); on a project override, tell the user the round runs on the project's own reviewer. one round runs at a time per project: if another round is running, in this session or any other, this errors with code 'conflict' naming that round; do not open a new session to get around it, tell the user and collect that round when it finishes. a failed round keeps its number, so a retry is the next round. use the returned monitor_command to tell the user how to watch progress; the round may outlive the MCP client timeout.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input StartRoundInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.StartReviewRound(ctx, broker.StartRoundRequest{
 			SessionID: input.SessionID,
@@ -683,6 +686,7 @@ func reviewerInfoOutput(r broker.ReviewerInfo) ReviewerInfoOutput {
 		BinaryPath: r.BinaryPath,
 		ExtraArgs:  append([]string(nil), r.ExtraArgs...),
 		Timeout:    r.Timeout.String(),
+		Source:     r.Source,
 	}
 }
 

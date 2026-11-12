@@ -65,7 +65,16 @@ Logs go to stderr because stdout is reserved for MCP transport messages.
 
 ## Configuration
 
-Minimal config:
+The reviewer is set once per installation, in the user-level config `~/.config/mercurius/config.yaml` (`mercurius bootstrap --user` writes a starter):
+
+```yaml
+reviewer:
+  name: codex
+  impl: codex
+  model: gpt-6.1-sol
+```
+
+Each project's `mercurius.yaml` holds the calibration for that project and names no reviewer (`mercurius bootstrap` writes a starter):
 
 ```yaml
 max_findings: 6
@@ -78,13 +87,9 @@ settled_decisions:
 review_focus: |
   Add project-specific things to look for that the base review philosophy
   does not already cover.
-reviewer:
-  name: codex
-  impl: codex
-  model: gpt-6.1-sol
 ```
 
-`review_context` (calibration), `settled_decisions` (guards — decisions already made that the reviewer should stop re-raising), and `review_focus` are read from this file; they are not MCP tool inputs. Mercurius re-reads the YAML at the start of every round, so edits between rounds take effect on the next round with no session reopen. Relative `log_destination` and `binary_path` values resolve relative to the config file, not the process working directory.
+`review_context` (calibration), `settled_decisions` (guards — decisions already made that the reviewer should stop re-raising), and `review_focus` are read from this file; they are not MCP tool inputs. Mercurius re-reads both files at the start of every round, so edits between rounds take effect on the next round with no session reopen. A `reviewer` block in `mercurius.yaml` is an error; a project that needs its own reviewer uses `reviewer_override`. See [Configuration](docs/current/configuration.md).
 
 ## MCP Usage
 

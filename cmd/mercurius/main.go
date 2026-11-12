@@ -22,13 +22,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	root := newRootCommand()
+	root := newRootCommand(config.UserConfigPath())
 	if err := root.ExecuteContext(ctx); err != nil {
 		dl.Fatalf("mercurius failed: %v", err)
 	}
 }
 
-func newRootCommand() *cobra.Command {
+// newRootCommand builds the CLI. userConfigPath is the user-level config,
+// resolved once by main and passed down, so a test passes a temporary path and
+// never reads the developer's own file.
+func newRootCommand(userConfigPath string) *cobra.Command {
 	var configPath string
 	var verbose bool
 
@@ -45,7 +48,7 @@ func newRootCommand() *cobra.Command {
 			// with a tool error naming the path instead of dying at launch.
 			server, _, err := mcpserver.New(mcpserver.Options{
 				ConfigPath:     configPath,
-				UserConfigPath: config.UserConfigPath(),
+				UserConfigPath: userConfigPath,
 			})
 			if err != nil {
 				return err
@@ -60,8 +63,8 @@ func newRootCommand() *cobra.Command {
 	}
 	root.PersistentFlags().StringVar(&configPath, "config", config.DefaultProjectPath, "path to mercurius.yaml")
 	root.Flags().BoolVar(&verbose, "verbose", false, "enable verbose stderr logging")
-	root.AddCommand(newMonitorCommand(&configPath))
-	root.AddCommand(newBootstrapCommand())
+	root.AddCommand(newMonitorCommand(&configPath, userConfigPath))
+	root.AddCommand(newBootstrapCommand(userConfigPath))
 	root.AddCommand(newRunRoundCommand())
 	root.AddCommand(build.NewVersionCmd("mercurius"))
 	return root

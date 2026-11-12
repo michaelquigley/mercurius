@@ -6,8 +6,7 @@
 .claude
 .codex
 .mercurius
-mercurius.yaml
+/mercurius.yaml
 *.db
-CODEX-*.md
 node_modules
 ui/flo/dist

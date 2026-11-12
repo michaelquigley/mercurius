@@ -32,7 +32,7 @@ The monitor only reads. It reads `session.json` and the round states directly, n
 
 ## Iterating on `review_context` / `review_focus`
 
-`mercurius.yaml` is the only source for these fields. To preview how the assembled prompt looks before running a real round against the configured reviewer, configure a `dummy` reviewer in `mercurius.yaml`, open a session, and run a round. The dummy reviewer returns instantly, and the assembled prompt is written to `<session>/round-01/_prompt.md` for inspection.
+`mercurius.yaml` is the only source for these fields. To preview how the assembled prompt looks before running a real round against the configured reviewer, give the project a `dummy` reviewer through `reviewer_override` (and remove it afterward), open a session, and run a round. The dummy reviewer returns instantly, and the assembled prompt is written to `<session>/round-01/_prompt.md` for inspection.
 
 ## Long Reviews and MCP Timeouts
 
@@ -80,7 +80,7 @@ When `close_session` succeeds, the broker writes `<session>/_synopsis.md`: one d
 
 Five stable codes cover the operational surface:
 
-- `user_error`: caller-fixable. A missing, unparseable, or reviewer-less `mercurius.yaml`; artifact validation; decision validation; a bad log destination.
+- `user_error`: caller-fixable. A missing or unparseable `mercurius.yaml`, or a `reviewer` block in it; an invalid user-level config; no reviewer configured in either file; artifact validation; decision validation; a bad log destination.
 - `not_found`: the addressed entity does not exist (unknown or malformed session id, a directory that is not a session in this layout, unknown round).
 - `conflict`: the operation can't run in the current state (session closed, another round running in the project, round still running, notes on a failed round, session already closed).
 - `reviewer_failed`: a round's reviewer subprocess failed, its output failed validation, it timed out (`details.reason: timeout`), or its runner was lost (`details.reason: runner_lost`). Retryable; the retry is the next round.

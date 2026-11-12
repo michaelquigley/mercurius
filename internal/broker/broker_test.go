@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/michaelquigley/mercurius/internal/config"
 	"github.com/michaelquigley/mercurius/internal/reviewer"
 	"github.com/michaelquigley/mercurius/internal/runlock"
 	"github.com/michaelquigley/mercurius/internal/runner"
@@ -20,8 +21,11 @@ import (
 	"github.com/michaelquigley/mercurius/internal/store"
 )
 
-const baseConfig = `log_destination: reviews
-reviewer:
+// baseConfig is a project mercurius.yaml; the reviewer lives in the harness's
+// user-level file, which defaults to baseUser.
+const baseConfig = "log_destination: reviews\n"
+
+const baseUser = `reviewer:
   name: dummy
   impl: dummy
 `
@@ -195,7 +199,9 @@ func TestSessionLifecycleAcrossBrokers(t *testing.T) {
 }
 
 // calibration, the reviewer, and max_findings are resolved per round and
-// recorded on it; _config.yaml is the exact bytes the round ran with.
+// recorded on it; _config.yaml is the exact bytes the round ran with. The
+// user-level file is edited between the two rounds of one session, and the
+// second round's _run.json holds the new reviewer.
 func TestConfigurationIsResolvedPerRound(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, newScriptedReviewer(), baseConfig+"review_context: calibration-alpha\n")
@@ -214,13 +220,9 @@ review_context: calibration-bravo
 settled_decisions:
   - id: recall-deferred
     do_not_flag: the absence of a 'recall' concept
-reviewer:
-  name: second
-  impl: dummy
-  model: m-2
-  timeout: 90s
 `
 	h.writeConfig(edited)
+	h.writeUserConfig("reviewer:\n  name: second\n  impl: dummy\n  model: m-2\n  timeout: 90s\n")
 	if _, err := h.startAndCollect(open.SessionID, artifact); err != nil {
 		t.Fatalf("round 2: %v", err)
 	}
@@ -255,6 +257,9 @@ reviewer:
 	if run2.Reviewer.Name != "second" || run2.Reviewer.Model != "m-2" || run2.MaxFindings != 3 || time.Duration(run2.Reviewer.Timeout) != 90*time.Second {
 		t.Fatalf("round 2 inputs = %+v", run2)
 	}
+	if run1.ReviewerSource != config.SourceUserConfig || run2.ReviewerSource != config.SourceUserConfig {
+		t.Fatalf("reviewer sources = %q, %q, want the user config", run1.ReviewerSource, run2.ReviewerSource)
+	}
 	if !run2.ReviewContextPresent || run2.ReviewFocusPresent {
 		t.Fatalf("round 2 presence = %+v", run2)
 	}
@@ -268,32 +273,131 @@ func TestOpenSessionReportsCurrentConfig(t *testing.T) {
 	h := newHarness(t, newScriptedReviewer(), "log_destination: reviews\nreview_context: present\n")
 	open, err := h.broker().OpenSession(ctx, OpenSessionRequest{})
 	if err != nil {
-		t.Fatalf("open without a reviewer must succeed: %v", err)
+		t.Fatalf("open: %v", err)
 	}
-	if open.Reviewer != nil {
-		t.Fatalf("reviewer = %+v, want none", open.Reviewer)
+	if open.Reviewer == nil || open.Reviewer.Name != "dummy" || open.Reviewer.Source != config.SourceUserConfig {
+		t.Fatalf("reviewer = %+v, want the user config's", open.Reviewer)
 	}
 	if !open.ReviewContextPresent || open.ReviewFocusPresent || open.MaxFindings != 6 {
 		t.Fatalf("open = %+v", open)
 	}
 }
 
-func TestStartWithoutReviewerIsUserErrorNamingProjectFile(t *testing.T) {
+// neither file names a reviewer: open_session succeeds and reports none, and
+// start_review_round refuses with user_error naming the user-level path.
+func TestNoReviewerAnywhere(t *testing.T) {
 	ctx := context.Background()
-	h := newHarness(t, newScriptedReviewer(), "log_destination: reviews\n")
+	h := newHarness(t, newScriptedReviewer(), baseConfig)
+	removeFile(t, h.userPath)
 	open, err := h.broker().OpenSession(ctx, OpenSessionRequest{})
 	if err != nil {
-		t.Fatalf("open: %v", err)
+		t.Fatalf("open without a reviewer must succeed: %v", err)
+	}
+	if open.Reviewer != nil {
+		t.Fatalf("reviewer = %+v, want none", open.Reviewer)
 	}
 	_, err = h.broker().StartReviewRound(ctx, StartRoundRequest{
 		SessionID: open.SessionID,
 		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "x")}},
 	})
 	assertBrokerCode(t, err, CodeUserError)
-	if !strings.Contains(err.Error(), h.configPath) {
-		t.Fatalf("expected the error to name '%s', got %v", h.configPath, err)
+	if !strings.Contains(err.Error(), h.userPath) {
+		t.Fatalf("expected the error to name the user-level path '%s', got %v", h.userPath, err)
 	}
 	assertNoRounds(t, open.SessionDir)
+}
+
+// a plain reviewer block in the project file is refused by every tool with a
+// user_error naming the user-level path, and does not mention the override key.
+func TestProjectReviewerBlockIsRefused(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, newScriptedReviewer(), baseConfig+baseUser)
+	_, err := h.broker().OpenSession(ctx, OpenSessionRequest{})
+	assertBrokerCode(t, err, CodeUserError)
+	if !strings.Contains(err.Error(), h.userPath) || !strings.Contains(err.Error(), "remove the 'reviewer' block") {
+		t.Fatalf("expected the error to name '%s' and say to remove the block, got %v", h.userPath, err)
+	}
+	if strings.Contains(err.Error(), "override") {
+		t.Fatalf("the refusal must not mention the override key: %v", err)
+	}
+	var be *Error
+	errors.As(err, &be)
+	if be.Details["config_path"] != h.configPath {
+		t.Fatalf("the project file is the one to fix: %+v", be.Details)
+	}
+}
+
+// a broken user-level file is a user_error that names it, not the project file.
+func TestBrokenUserConfigNamesTheUserFile(t *testing.T) {
+	h := newHarness(t, newScriptedReviewer(), baseConfig)
+	h.writeUserConfig("this: is: not: valid: yaml\n\t::broken")
+	_, err := h.broker().OpenSession(context.Background(), OpenSessionRequest{})
+	assertBrokerCode(t, err, CodeUserError)
+	var be *Error
+	errors.As(err, &be)
+	if be.Message != "read the user-level config" || be.Details["user_config_path"] != h.userPath {
+		t.Fatalf("error = %+v", be)
+	}
+}
+
+// a project override is said everywhere the reviewer is named: open_session,
+// the launch response and its next_action, _run.json, session_status, and the
+// synopsis. When the block comes out, the next round is back on the
+// installation's reviewer.
+func TestProjectOverrideIsReportedEverywhere(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, newScriptedReviewer(), baseConfig+"reviewer_override:\n  name: second-opinion\n  impl: dummy\n")
+	open, err := h.broker().OpenSession(ctx, OpenSessionRequest{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if open.Reviewer == nil || open.Reviewer.Name != "second-opinion" || open.Reviewer.Source != config.SourceProjectOverride {
+		t.Fatalf("open reviewer = %+v", open.Reviewer)
+	}
+	artifact := []Artifact{{Name: "design", Path: writeArtifactFile(t, "x")}}
+	started, err := h.broker().StartReviewRound(ctx, StartRoundRequest{SessionID: open.SessionID, Artifacts: artifact})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if started.Reviewer.Source != config.SourceProjectOverride || !strings.Contains(started.NextAction, "tell the user") || !strings.Contains(started.NextAction, "reviewer_override") {
+		t.Fatalf("start must report the override and tell the agent to say so: %+v", started)
+	}
+	h.waitDone(filepath.Dir(started.StatusPath))
+
+	h.writeConfig(baseConfig)
+	round2, err := h.startAndCollect(open.SessionID, artifact)
+	if err != nil {
+		t.Fatalf("round 2: %v", err)
+	}
+	if round2.RoundNumber != 2 {
+		t.Fatalf("round 2 = %+v", round2)
+	}
+	run1, _ := store.ReadRun(store.RoundDir(open.SessionDir, 1))
+	run2, _ := store.ReadRun(store.RoundDir(open.SessionDir, 2))
+	if run1.ReviewerSource != config.SourceProjectOverride || run1.Reviewer.Name != "second-opinion" {
+		t.Fatalf("round 1 _run.json = %+v", run1)
+	}
+	if run2.ReviewerSource != config.SourceUserConfig || run2.Reviewer.Name != "dummy" {
+		t.Fatalf("round 2 must be back on the installation's reviewer: %+v", run2)
+	}
+
+	status, err := h.broker().SessionStatus(ctx, open.SessionID)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.Rounds[0].Reviewer.Source != config.SourceProjectOverride || status.Rounds[1].Reviewer.Source != config.SourceUserConfig {
+		t.Fatalf("status sources = %+v", status.Rounds)
+	}
+	closed, err := h.broker().CloseSession(ctx, CloseSessionRequest{SessionID: open.SessionID})
+	if err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	synopsis := readFile(t, closed.SynopsisPath)
+	for _, want := range []string{"| 01 | ", "second-opinion (override)", "from the project override", "| 02 | ", "from the user config"} {
+		if !strings.Contains(synopsis, want) {
+			t.Errorf("synopsis missing %q\n%s", want, synopsis)
+		}
+	}
 }
 
 func TestMissingConfigIsUserErrorNamingPath(t *testing.T) {
@@ -914,10 +1018,11 @@ func TestCorruptMachineFilesAreInternalErrors(t *testing.T) {
 // away for its process's failure to exit.
 func TestRoundTimeout(t *testing.T) {
 	ctx := context.Background()
-	config := baseConfig + "  timeout: 50ms\n"
+	timeoutUser := baseUser + "  timeout: 50ms\n"
 
 	t.Run("error after the deadline fails with reason timeout", func(t *testing.T) {
-		h := newHarness(t, deadlineReviewer{}, config)
+		h := newHarness(t, deadlineReviewer{}, baseConfig)
+		h.writeUserConfig(timeoutUser)
 		open, err := h.broker().OpenSession(ctx, OpenSessionRequest{})
 		if err != nil {
 			t.Fatalf("open: %v", err)
@@ -933,7 +1038,8 @@ func TestRoundTimeout(t *testing.T) {
 	})
 
 	t.Run("valid review after the deadline completes", func(t *testing.T) {
-		h := newHarness(t, deadlineReviewer{raw: validReviewOutput("ready_to_build")}, config)
+		h := newHarness(t, deadlineReviewer{raw: validReviewOutput("ready_to_build")}, baseConfig)
+		h.writeUserConfig(timeoutUser)
 		open, err := h.broker().OpenSession(ctx, OpenSessionRequest{})
 		if err != nil {
 			t.Fatalf("open: %v", err)
@@ -1085,7 +1191,7 @@ func TestStartRoundArtifactValidation(t *testing.T) {
 }
 
 func TestOpenSessionRejectsBadLogDestination(t *testing.T) {
-	h := newHarness(t, newScriptedReviewer(), "log_destination: missing-parent/reviews\nreviewer:\n  name: dummy\n  impl: dummy\n")
+	h := newHarness(t, newScriptedReviewer(), "log_destination: missing-parent/reviews\n")
 	_, err := h.broker().OpenSession(context.Background(), OpenSessionRequest{})
 	assertBrokerCode(t, err, CodeUserError)
 }
@@ -1118,6 +1224,7 @@ type harness struct {
 	t          *testing.T
 	dir        string
 	configPath string
+	userPath   string
 	logDest    string
 	launcher   *runner.InProcess
 }
@@ -1129,12 +1236,14 @@ func newHarness(t *testing.T, r reviewer.Reviewer, config string) *harness {
 		t:          t,
 		dir:        dir,
 		configPath: filepath.Join(dir, "mercurius.yaml"),
+		userPath:   filepath.Join(dir, "user", "mercurius", "config.yaml"),
 		logDest:    filepath.Join(dir, "reviews"),
 		launcher: runner.NewInProcess(func(store.RunReviewer) (reviewer.Reviewer, error) {
 			return r, nil
 		}),
 	}
 	h.writeConfig(config)
+	h.writeUserConfig(baseUser)
 	t.Cleanup(h.launcher.Wait)
 	return h
 }
@@ -1146,10 +1255,22 @@ func (h *harness) writeConfig(body string) {
 	}
 }
 
+// writeUserConfig writes the harness's user-level file. No test reads the
+// developer's real user-level config.
+func (h *harness) writeUserConfig(body string) {
+	h.t.Helper()
+	if err := os.MkdirAll(filepath.Dir(h.userPath), 0o700); err != nil {
+		h.t.Fatalf("mkdir user config: %v", err)
+	}
+	if err := os.WriteFile(h.userPath, []byte(body), 0o600); err != nil {
+		h.t.Fatalf("write user config: %v", err)
+	}
+}
+
 func (h *harness) broker() *Broker {
 	return New(Options{
 		ConfigPath:     h.configPath,
-		UserConfigPath: filepath.Join(h.dir, "user", "config.yaml"),
+		UserConfigPath: h.userPath,
 		Launcher:       h.launcher,
 	})
 }

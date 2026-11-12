@@ -96,6 +96,7 @@ type Run struct {
 	OpenedAt             time.Time       `json:"opened_at"`
 	ServerPID            int             `json:"server_pid"`
 	Reviewer             RunReviewer     `json:"reviewer"`
+	ReviewerSource       string          `json:"reviewer_source"`
 	MaxFindings          int             `json:"max_findings"`
 	ReviewContextPresent bool            `json:"review_context_present"`
 	ReviewFocusPresent   bool            `json:"review_focus_present"`

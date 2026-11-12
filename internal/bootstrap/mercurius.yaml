@@ -9,7 +9,8 @@
 #
 
 # example mercurius.yaml. copy this into a project directory as
-# `mercurius.yaml` and edit the fields below. fields omitted here fall back to
+# `mercurius.yaml` and edit the fields below. it holds what describes the
+# project and the review arc; the reviewer lives in the user-level config. fields omitted here fall back to
 # sane defaults (log_destination: .mercurius, max_findings: 6). the project
 # name is derived from the directory holding the config file.
 
@@ -46,28 +47,8 @@ review_focus: |
   pay particular attention to invariants specific to this project that the
   universal what-to-flag criteria do not already cover.
 
-# reviewer selects the harness that runs each round. impl is one of codex,
-# claude, pi, or dummy. binary_path (optional) overrides the binary on PATH;
-# extra_args (optional) are appended after the mercurius-managed flags.
-reviewer:
-  name: codex
-  impl: codex
-  model: gpt-6.1-sol
-
-# alternative reviewers - uncomment one and comment out the codex block above.
-#
-# claude code, run headless with native json-schema output. omit model to use
-# the binary default; uses your logged-in claude credentials (pass --bare via
-# extra_args with ANTHROPIC_API_KEY set for api-key-only auth).
-# reviewer:
-#   name: claude
-#   impl: claude
-#   model: sonnet
-#
-# pi (https://pi.dev), run headless in json-event mode. model uses the
-# provider/id form. pi has no native schema enforcement; the schema is carried
-# by the prompt and validated by mercurius after the round.
-# reviewer:
-#   name: pi
-#   impl: pi
-#   model: openai-codex/gpt-6.1-sol
+# the reviewer is not set here. which reviewer runs is a fact about the
+# installation - which harnesses are installed, which model you want - so it is
+# set once, in the user-level config (~/.config/mercurius/config.yaml on linux).
+# `mercurius bootstrap --user` writes a starter there. a 'reviewer' block in this
+# file is an error.

@@ -24,7 +24,7 @@ func TestPrintMonitorView(t *testing.T) {
 		State:     "active",
 		Rounds: []monitorRound{
 			{Number: 1, State: "failed", Reviewer: "codex", StartedAt: now, Error: &store.StoredError{Code: "reviewer_failed", Message: "reviewer failed"}},
-			{Number: 2, State: "completed", Reviewer: "codex", StartedAt: now},
+			{Number: 2, State: "completed", Reviewer: "claude", Source: "project override", StartedAt: now},
 			{Number: 3, State: "running", Reviewer: "codex", StartedAt: now, StatePath: "/tmp/round-03/_state.json"},
 		},
 	})
@@ -35,7 +35,7 @@ func TestPrintMonitorView(t *testing.T) {
 		"rounds: 3",
 		"round 1 failed reviewer='codex' started=2026-05-05T19:38:10Z",
 		"  error: reviewer_failed - reviewer failed",
-		"round 2 completed reviewer='codex'",
+		"round 2 completed reviewer='claude' from='project override'",
 		"round 3 running reviewer='codex'",
 		"  monitor file: state='/tmp/round-03/_state.json'",
 	} {
@@ -176,7 +176,7 @@ func monitorFixture(t *testing.T, withLockFile bool) (string, string, string) {
 
 func runMonitor(t *testing.T, project string, args ...string) (string, error) {
 	t.Helper()
-	root := newRootCommand()
+	root := newRootCommand(testUserConfigPath(t))
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
@@ -250,7 +250,7 @@ log_destination: ./reviews
 `), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	root := newRootCommand()
+	root := newRootCommand(testUserConfigPath(t))
 	_, out := testCommand()
 	root.SetOut(out)
 	root.SetErr(out)
@@ -278,7 +278,7 @@ func TestBootstrapCommandWritesConfig(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(cwd) })
 
-	root := newRootCommand()
+	root := newRootCommand(testUserConfigPath(t))
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
@@ -302,7 +302,7 @@ func TestBootstrapCommandWritesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read first write: %v", err)
 	}
-	root2 := newRootCommand()
+	root2 := newRootCommand(testUserConfigPath(t))
 	var out2 bytes.Buffer
 	root2.SetOut(&out2)
 	root2.SetErr(&out2)
@@ -325,7 +325,7 @@ func TestBootstrapCommandWritesConfig(t *testing.T) {
 	if err := os.WriteFile(written, []byte("stale"), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	root3 := newRootCommand()
+	root3 := newRootCommand(testUserConfigPath(t))
 	var out3 bytes.Buffer
 	root3.SetOut(&out3)
 	root3.SetErr(&out3)
@@ -340,6 +340,57 @@ func TestBootstrapCommandWritesConfig(t *testing.T) {
 	if string(got) == "stale" {
 		t.Fatal("force did not overwrite stale content")
 	}
+}
+
+// bootstrap --user writes the user-level config at the path main resolved,
+// creating its directory, and refuses to overwrite it without --force.
+func TestBootstrapUserWritesUserConfig(t *testing.T) {
+	userPath := testUserConfigPath(t)
+	run := func(args ...string) (string, error) {
+		root := newRootCommand(userPath)
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs(args)
+		err := root.ExecuteContext(context.Background())
+		return out.String(), err
+	}
+
+	out, err := run("bootstrap", "--user")
+	if err != nil {
+		t.Fatalf("bootstrap --user: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "wrote '"+userPath+"'") {
+		t.Fatalf("expected the written path in the output, got %q", out)
+	}
+	written, err := os.ReadFile(userPath)
+	if err != nil || !strings.Contains(string(written), "reviewer:") {
+		t.Fatalf("user config not written with a reviewer block: err=%v\n%s", err, written)
+	}
+
+	if err := os.WriteFile(userPath, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err = run("bootstrap", "--user")
+	if err == nil || !strings.Contains(out, "already exists") {
+		t.Fatalf("expected a refusal without --force, got err=%v\n%s", err, out)
+	}
+	if got, _ := os.ReadFile(userPath); string(got) != "mine" {
+		t.Fatal("a refused overwrite changed the user config")
+	}
+	if out, err := run("bootstrap", "--user", "--force"); err != nil {
+		t.Fatalf("bootstrap --user --force: %v\n%s", err, out)
+	}
+	if got, _ := os.ReadFile(userPath); string(got) == "mine" {
+		t.Fatal("--force did not overwrite the user config")
+	}
+}
+
+// testUserConfigPath is a user-level config path under the test's temporary
+// directory. No test reads the developer's own user-level config.
+func testUserConfigPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "config", "mercurius", "config.yaml")
 }
 
 func testCommand() (*cobra.Command, *bytes.Buffer) {

@@ -38,6 +38,12 @@ Two configuration fields shape what the reviewer sees, and they pull in opposite
 
 Earn a guard; do not add it pre-emptively. The right way a guard is born: the reviewer raises something, the operator decides it is out of scope, and - to stop a fresh reviewer noticing it again next round - that rejection is promoted into a guard. Guards added speculatively bloat the ledger and dull the reviewer for nothing. The config is re-read every round, so adding or removing a guard takes effect on the very next round; un-deciding is as cheap as deciding.
 
+## Do not choose the reviewer
+
+The reviewer is the operator's choice, set once for the installation in the user-level config. When you scaffold a project's `mercurius.yaml`, write calibration, guards, and `max_findings` into it, and no reviewer block. If a tool answers that the project file has a reviewer block and says to remove it, remove it; do not rename it or move it somewhere else in the file. Giving one project its own reviewer is a deliberate decision the operator makes, not a way around that error.
+
+When `start_review_round` reports the reviewer's `source` as `project override`, its `next_action` asks you to say so: tell the operator the round runs on the project's own reviewer, not the installation's.
+
 ## Two disciplines that catch what the reviewer misses
 
 - **Self-audit the artifacts before treating them as done.** The reviewer compares the artifacts against the code and the world, not against the artifact's own earlier sections - so cross-section drift slips past it: a conclusion that understates scope a later section expanded, a thread reframed in one place but stale in another, a table that has fallen behind the prose. Read the artifacts end-to-end for internal consistency yourself.

@@ -1,7 +1,7 @@
-// Package bootstrap embeds the starter mercurius.yaml template and writes it
-// to a destination directory. The mercurius CLI exposes this through the
-// `mercurius bootstrap` subcommand so a new project can be initialized without
-// hunting for an example file.
+// Package bootstrap embeds the starter configuration templates and writes them:
+// the project's mercurius.yaml, which holds no reviewer, and the user-level
+// config, which holds the reviewer for the installation. The mercurius CLI
+// exposes this through `mercurius bootstrap` and `mercurius bootstrap --user`.
 package bootstrap
 
 import (
@@ -17,6 +17,11 @@ import (
 //
 //go:embed mercurius.yaml
 var Template []byte
+
+// UserTemplate is the embedded starter user-level config content.
+//
+//go:embed user.yaml
+var UserTemplate []byte
 
 // ConfigFileName is the canonical filename Mercurius looks for in a project.
 const ConfigFileName = "mercurius.yaml"
@@ -45,7 +50,27 @@ func Write(dir string, force bool) (string, error) {
 		return "", fmt.Errorf("bootstrap dir '%s' is not a directory", abs)
 	}
 
-	target := filepath.Join(abs, ConfigFileName)
+	return writeFile(filepath.Join(abs, ConfigFileName), Template, force)
+}
+
+// WriteUser writes the embedded user-level template to path, creating its
+// directory if needed. It refuses to clobber an existing file unless force is
+// true. The returned path is the absolute path of the file written.
+func WriteUser(path string, force bool) (string, error) {
+	if path == "" {
+		return "", errors.New("no user-level config path could be determined on this system")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve user config path: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+		return "", fmt.Errorf("create '%s': %w", filepath.Dir(abs), err)
+	}
+	return writeFile(abs, UserTemplate, force)
+}
+
+func writeFile(target string, content []byte, force bool) (string, error) {
 	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	if !force {
 		flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL
@@ -57,7 +82,7 @@ func Write(dir string, force bool) (string, error) {
 		}
 		return "", fmt.Errorf("create '%s': %w", target, err)
 	}
-	if _, err := file.Write(Template); err != nil {
+	if _, err := file.Write(content); err != nil {
 		_ = file.Close()
 		return "", fmt.Errorf("write '%s': %w", target, err)
 	}

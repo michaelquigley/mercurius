@@ -49,8 +49,9 @@ func TestMain(m *testing.M) {
 // directory, and exits at once, without waiting for the runner to come up.
 func standInServer() int {
 	b := broker.New(broker.Options{
-		ConfigPath: os.Getenv("MERCURIUS_TEST_CONFIG"),
-		Launcher:   testLauncher(),
+		ConfigPath:     os.Getenv("MERCURIUS_TEST_CONFIG"),
+		UserConfigPath: os.Getenv("MERCURIUS_TEST_USER_CONFIG"),
+		Launcher:       testLauncher(),
 	})
 	started, err := b.StartReviewRound(context.Background(), broker.StartRoundRequest{
 		SessionID: os.Getenv("MERCURIUS_TEST_SESSION"),
@@ -97,6 +98,7 @@ func TestRoundOutlivesItsServer(t *testing.T) {
 	helper := exec.Command(selfPath(t))
 	helper.Env = append(withRole("server"),
 		"MERCURIUS_TEST_CONFIG="+p.configPath,
+		"MERCURIUS_TEST_USER_CONFIG="+p.userPath,
 		"MERCURIUS_TEST_SESSION="+sessionID,
 		"MERCURIUS_TEST_ARTIFACT="+p.artifact,
 	)
@@ -329,6 +331,7 @@ type project struct {
 	t          *testing.T
 	dir        string
 	configPath string
+	userPath   string
 	logDest    string
 	artifact   string
 }
@@ -340,6 +343,7 @@ func newProject(t *testing.T, body string, timeout string) *project {
 		t:          t,
 		dir:        dir,
 		configPath: filepath.Join(dir, "mercurius.yaml"),
+		userPath:   filepath.Join(dir, "user-config.yaml"),
 		logDest:    filepath.Join(dir, "reviews"),
 		artifact:   filepath.Join(dir, "design.md"),
 	}
@@ -352,18 +356,21 @@ func newProject(t *testing.T, body string, timeout string) *project {
 	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
 		t.Fatalf("write fake reviewer: %v", err)
 	}
-	config := "log_destination: reviews\nreviewer:\n  name: fake\n  impl: claude\n  binary_path: " + script + "\n"
+	user := "reviewer:\n  name: fake\n  impl: claude\n  binary_path: " + script + "\n"
 	if timeout != "" {
-		config += "  timeout: " + timeout + "\n"
+		user += "  timeout: " + timeout + "\n"
 	}
-	if err := os.WriteFile(p.configPath, []byte(config), 0o600); err != nil {
+	if err := os.WriteFile(p.userPath, []byte(user), 0o600); err != nil {
+		t.Fatalf("write user config: %v", err)
+	}
+	if err := os.WriteFile(p.configPath, []byte("log_destination: reviews\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	return p
 }
 
 func (p *project) broker() *broker.Broker {
-	return broker.New(broker.Options{ConfigPath: p.configPath, Launcher: testLauncher()})
+	return broker.New(broker.Options{ConfigPath: p.configPath, UserConfigPath: p.userPath, Launcher: testLauncher()})
 }
 
 func (p *project) openSession() string {

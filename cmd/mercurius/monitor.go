@@ -17,7 +17,7 @@ import (
 // monitorPollInterval is how often --wait re-reads a round's state.
 var monitorPollInterval = time.Second
 
-func newMonitorCommand(configPath *string) *cobra.Command {
+func newMonitorCommand(configPath *string, userConfigPath string) *cobra.Command {
 	var sessionID string
 	var all bool
 	var wait bool
@@ -34,7 +34,7 @@ func newMonitorCommand(configPath *string) *cobra.Command {
 			if !all && sessionID == "" {
 				return errors.New("either --session or --all is required")
 			}
-			resolved, err := config.Resolve(*configPath, config.UserConfigPath())
+			resolved, err := config.Resolve(*configPath, userConfigPath)
 			if err != nil {
 				return err
 			}
@@ -63,6 +63,7 @@ type monitorRound struct {
 	State     string
 	Lost      bool
 	Reviewer  string
+	Source    string
 	StartedAt time.Time
 	StatePath string
 	LogPath   string
@@ -166,6 +167,7 @@ func readMonitorRound(logDestination string, roundDir string, number int, latest
 	}
 	if run, err := store.ReadRun(roundDir); err == nil {
 		round.Reviewer = run.Reviewer.Name
+		round.Source = run.ReviewerSource
 	}
 	if state.State == store.RoundCompleted {
 		round.LogPath = filepath.Join(roundDir, store.RoundLogFileName)
@@ -214,7 +216,11 @@ func printMonitorView(out io.Writer, view monitorView) {
 		if round.Lost {
 			state = "lost"
 		}
-		fmt.Fprintf(out, "round %d %s reviewer='%s' started=%s\n", round.Number, state, round.Reviewer, formatMonitorTime(round.StartedAt))
+		fmt.Fprintf(out, "round %d %s reviewer='%s'", round.Number, state, round.Reviewer)
+		if round.Source != "" {
+			fmt.Fprintf(out, " from='%s'", round.Source)
+		}
+		fmt.Fprintf(out, " started=%s\n", formatMonitorTime(round.StartedAt))
 		switch {
 		case round.Lost:
 			fmt.Fprintln(out, "  marked running, but its runner is gone; the next server call on this session records it failed")

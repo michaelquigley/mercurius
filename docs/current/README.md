@@ -18,7 +18,8 @@ Mercurius is a local MCP server that lets a design agent ask a reviewer, usually
 
 - Single-project server process configured by one `mercurius.yaml`, read on every tool call rather than at startup; the server starts without the file and a missing or broken file is a tool error.
 - Sessions on disk: `session.json` per session and a self-contained directory per round, with machine records (`_state.json`, `_run.json`, `_review.json`, `_notes.json`) beside the human ones. No in-memory registry and no `status.json`.
-- One reviewer per round, configured singularly in the YAML and resolved per round with `max_findings` and the calibration.
+- Two config files: the reviewer is set once per installation in the user-level config (`~/.config/mercurius/config.yaml`), and the project's `mercurius.yaml` holds calibration, guards, `max_findings`, and `log_destination`. A project picks its own reviewer only through `reviewer_override`; a plain `reviewer` block in the project file is an error.
+- One reviewer per round, resolved per round with `max_findings` and the calibration, and reported with its source (`user config` or `project override`) wherever it is named.
 - Rounds bounded by `reviewer.timeout` (default `20m`); one round at a time per log destination, enforced by a kernel lock on `runner.lock`, with a `conflict` on a second launch that names the running round.
 - Failed rounds stay on disk under their number with their stored error and raw output (`_raw.txt`); a round whose runner died is recorded as `runner_lost` by the next reader.
 - Codex, Claude, and pi reviewer implementations plus a dummy reviewer for tests and scaffolding.

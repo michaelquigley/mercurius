@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestResolveResolvesDefaultsAndPaths(t *testing.T) {
+func TestResolveProjectDefaultsAndPaths(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfig(t, cfgPath, `
@@ -18,13 +18,6 @@ review_focus: |
   flag unclear logging.
 review_context: |
   deployment: personal one-shot
-reviewer:
-  name: codex
-  impl: codex
-  binary_path: ./bin/codex
-  model: gpt-test
-  extra_args:
-    - --ignore-user-config
 `)
 
 	resolved, err := Resolve(cfgPath, "")
@@ -50,84 +43,151 @@ reviewer:
 	if _, err := os.Stat(cfg.LogDestination); err != nil {
 		t.Fatalf("expected log destination to be created by EnsureLogDestination: %v", err)
 	}
-	reviewer := resolved.Reviewer
-	if reviewer == nil {
-		t.Fatal("expected reviewer to be populated")
-	}
-	if reviewer.BinaryPath != filepath.Join(dir, "bin", "codex") {
-		t.Fatalf("binary path = %s", reviewer.BinaryPath)
-	}
-	if reviewer.Timeout != DefaultReviewerTimeout {
-		t.Fatalf("timeout = %s, want the default %s", reviewer.Timeout, DefaultReviewerTimeout)
-	}
 	if !strings.Contains(cfg.ReviewContext, "deployment: personal one-shot") {
 		t.Fatalf("review context = %q", cfg.ReviewContext)
 	}
 	if !strings.Contains(cfg.ReviewFocus, "flag unclear logging.") {
 		t.Fatalf("review focus = %q", cfg.ReviewFocus)
 	}
-	if reviewer.ExtraArgs[0] != "--ignore-user-config" {
-		t.Fatalf("extra args not loaded: %+v", reviewer.ExtraArgs)
-	}
 }
 
-func TestResolveRejectsRenamedPromptOverrides(t *testing.T) {
+// the reviewer comes from the user-level file when the project has no
+// override.
+func TestResolveUserFileOnly(t *testing.T) {
 	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "mercurius.yaml")
-	writeConfig(t, cfgPath, `
-log_destination: ./reviews
-prompt_overrides: |
-  stale value
+	cfgPath := writeProject(t, dir, "log_destination: ./reviews\n")
+	userPath := writeUser(t, dir, `
 reviewer:
-  name: dummy
-  impl: dummy
+  name: codex
+  impl: codex
+  model: gpt-test
+  extra_args:
+    - --ignore-user-config
 `)
-
-	_, err := Resolve(cfgPath, "")
-	if err == nil {
-		t.Fatal("expected rename-guidance error")
+	resolved, err := Resolve(cfgPath, userPath)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
 	}
-	if !strings.Contains(err.Error(), "prompt_overrides") || !strings.Contains(err.Error(), "review_focus") {
-		t.Fatalf("expected error to name both old and new field, got %v", err)
+	r := resolved.Reviewer
+	if r == nil || r.Name != "codex" || r.Impl != "codex" || r.Model != "gpt-test" || r.ExtraArgs[0] != "--ignore-user-config" {
+		t.Fatalf("reviewer = %+v", r)
+	}
+	if r.Timeout != DefaultReviewerTimeout {
+		t.Fatalf("timeout = %s, want the default %s", r.Timeout, DefaultReviewerTimeout)
+	}
+	if resolved.ReviewerSource != SourceUserConfig {
+		t.Fatalf("source = %q, want %q", resolved.ReviewerSource, SourceUserConfig)
 	}
 }
 
-func TestResolveRejectsRenamedReviewers(t *testing.T) {
+// a project override with no user-level file supplies the reviewer by itself.
+func TestResolveProjectOverrideOnly(t *testing.T) {
 	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "mercurius.yaml")
-	writeConfig(t, cfgPath, `
-log_destination: ./reviews
-reviewers:
-  - name: dummy
-    impl: dummy
-`)
-
-	_, err := Resolve(cfgPath, "")
-	if err == nil {
-		t.Fatal("expected rename-guidance error")
+	cfgPath := writeProject(t, dir, "reviewer_override:\n  name: second-opinion\n  impl: claude\n  model: sonnet\n")
+	resolved, err := Resolve(cfgPath, filepath.Join(dir, "missing", "config.yaml"))
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
 	}
-	if !strings.Contains(err.Error(), "reviewers") || !strings.Contains(err.Error(), "reviewer") {
-		t.Fatalf("expected error to name both old and new field, got %v", err)
+	if r := resolved.Reviewer; r == nil || r.Name != "second-opinion" || r.Impl != "claude" || r.Model != "sonnet" {
+		t.Fatalf("reviewer = %+v", r)
+	}
+	if resolved.ReviewerSource != SourceProjectOverride {
+		t.Fatalf("source = %q, want %q", resolved.ReviewerSource, SourceProjectOverride)
+	}
+}
+
+// an override replaces the user-level block whole. Merging field by field would
+// let the installation's model land on the override's different impl.
+func TestResolveOverrideReplacesUserBlockWhole(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := writeProject(t, dir, "reviewer_override:\n  name: second-opinion\n  impl: claude\n")
+	userPath := writeUser(t, dir, `
+reviewer:
+  name: codex
+  impl: codex
+  model: gpt-test
+  binary_path: /usr/local/bin/codex
+  extra_args: [--flag]
+  timeout: 45m
+`)
+	resolved, err := Resolve(cfgPath, userPath)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	r := resolved.Reviewer
+	if r.Name != "second-opinion" || r.Impl != "claude" {
+		t.Fatalf("reviewer = %+v", r)
+	}
+	if r.Model != "" || r.BinaryPath != "" || len(r.ExtraArgs) != 0 {
+		t.Fatalf("the override must not inherit fields from the user block: %+v", r)
+	}
+	if r.Timeout != DefaultReviewerTimeout {
+		t.Fatalf("timeout = %s; the override's own default applies, not the user block's 45m", r.Timeout)
+	}
+	if resolved.ReviewerSource != SourceProjectOverride {
+		t.Fatalf("source = %q", resolved.ReviewerSource)
+	}
+}
+
+// a plain reviewer block in the project file is refused. The message names the
+// user-level path and says to remove the block, and does not mention the
+// override key: an agent that wrote the block out of habit should remove it,
+// not rename it.
+func TestResolveRejectsProjectReviewerBlock(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := writeProject(t, dir, "reviewer:\n  name: codex\n  impl: codex\n")
+	userPath := writeUser(t, dir, "reviewer:\n  name: dummy\n  impl: dummy\n")
+	_, err := Resolve(cfgPath, userPath)
+	if err == nil {
+		t.Fatal("expected a project reviewer block to be refused")
+	}
+	for _, want := range []string{userPath, "remove the 'reviewer' block"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected the message to contain %q, got %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "override") {
+		t.Fatalf("the message must not mention the override key: %v", err)
+	}
+	var fileErr *FileError
+	if !errors.As(err, &fileErr) || fileErr.Path != cfgPath {
+		t.Fatalf("the error must name the project file as the one to fix: %#v", err)
+	}
+}
+
+func TestResolveRejectsRenamedFields(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{name: "prompt_overrides", body: "prompt_overrides: |\n  stale\n", want: []string{"prompt_overrides", "review_focus"}},
+		{name: "default_budget", body: "default_budget: 4\n", want: []string{"default_budget"}},
+		{name: "reviewers", body: "reviewers:\n  - name: dummy\n    impl: dummy\n", want: []string{"'reviewers'", "remove"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			_, err := Resolve(writeProject(t, dir, test.body), "")
+			if err == nil {
+				t.Fatal("expected a renamed-field error")
+			}
+			for _, want := range test.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("expected %q in error, got %v", want, err)
+				}
+			}
+		})
 	}
 }
 
 func TestResolveConfiguresMaxFindings(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "mercurius.yaml")
-	writeConfig(t, cfgPath, `
-log_destination: ./reviews
-max_findings: 6
-reviewer:
-  name: dummy
-  impl: dummy
-`)
-
-	resolved, err := Resolve(cfgPath, "")
+	resolved, err := Resolve(writeProject(t, t.TempDir(), "max_findings: 9\n"), "")
 	if err != nil {
 		t.Fatalf("resolve config: %v", err)
 	}
-	if resolved.Project.MaxFindings != 6 {
-		t.Fatalf("max findings = %d, want 6", resolved.Project.MaxFindings)
+	if resolved.Project.MaxFindings != 9 {
+		t.Fatalf("max findings = %d, want 9", resolved.Project.MaxFindings)
 	}
 }
 
@@ -143,21 +203,17 @@ func TestResolveAcceptsKnownImpls(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.impl, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "mercurius.yaml")
-			body := "\nlog_destination: ./reviews\nreviewer:\n  name: " + test.impl + "\n  impl: " + test.impl + "\n"
+			dir := t.TempDir()
+			body := "reviewer:\n  name: " + test.impl + "\n  impl: " + test.impl + "\n"
 			if test.model != "" {
 				body += "  model: " + test.model + "\n"
 			}
-			writeConfig(t, path, body)
-			resolved, err := Resolve(path, "")
+			resolved, err := Resolve(writeProject(t, dir, ""), writeUser(t, dir, body))
 			if err != nil {
 				t.Fatalf("resolve config: %v", err)
 			}
-			if resolved.Reviewer.Impl != test.impl {
-				t.Fatalf("impl = %q, want %q", resolved.Reviewer.Impl, test.impl)
-			}
-			if resolved.Reviewer.Model != test.model {
-				t.Fatalf("model = %q, want %q", resolved.Reviewer.Model, test.model)
+			if resolved.Reviewer.Impl != test.impl || resolved.Reviewer.Model != test.model {
+				t.Fatalf("reviewer = %+v", resolved.Reviewer)
 			}
 		})
 	}
@@ -165,225 +221,93 @@ func TestResolveAcceptsKnownImpls(t *testing.T) {
 
 func TestResolveValidatesConfig(t *testing.T) {
 	tests := []struct {
-		name string
-		body string
-		want string
+		name     string
+		project  string
+		user     string
+		want     string
+		wantFile string
 	}{
-		{
-			name: "removed default_budget rejected",
-			body: `
-log_destination: ./reviews
-default_budget: 4
-reviewer:
-  name: dummy
-  impl: dummy
-`,
-			want: "default_budget",
-		},
-		{
-			name: "invalid max findings",
-			body: `
-log_destination: ./reviews
-max_findings: 0
-reviewer:
-  name: dummy
-  impl: dummy
-`,
-			want: "max_findings",
-		},
-		{
-			name: "unknown impl",
-			body: `
-log_destination: ./reviews
-reviewer:
-  name: nope
-  impl: nope
-`,
-			want: "unknown impl",
-		},
-		{
-			name: "negative timeout",
-			body: `
-log_destination: ./reviews
-reviewer:
-  name: dummy
-  impl: dummy
-  timeout: -1m
-`,
-			want: "timeout",
-		},
+		{name: "invalid max findings", project: "max_findings: 0\n", want: "max_findings", wantFile: "project"},
+		{name: "unknown impl in the user file", user: "reviewer:\n  name: nope\n  impl: nope\n", want: "unknown impl", wantFile: "user"},
+		{name: "negative timeout in the user file", user: "reviewer:\n  name: dummy\n  impl: dummy\n  timeout: -1m\n", want: "timeout", wantFile: "user"},
+		{name: "unknown impl in the override", project: "reviewer_override:\n  name: nope\n  impl: nope\n", want: "reviewer_override", wantFile: "project"},
+		{name: "unparseable user file", user: "this: is: not: valid: yaml\n\t::broken", want: "user config", wantFile: "user"},
 	}
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "mercurius.yaml")
-			writeConfig(t, path, test.body)
-			_, err := Resolve(path, "")
+			dir := t.TempDir()
+			cfgPath := writeProject(t, dir, test.project)
+			userPath := writeUser(t, dir, test.user)
+			_, err := Resolve(cfgPath, userPath)
 			if err == nil {
 				t.Fatal("expected error")
 			}
 			if !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("expected %q in error, got %v", test.want, err)
 			}
+			want := cfgPath
+			if test.wantFile == "user" {
+				want = userPath
+			}
+			var fileErr *FileError
+			if !errors.As(err, &fileErr) || fileErr.Path != want {
+				t.Fatalf("the error must name '%s': %#v", want, err)
+			}
 		})
 	}
 }
 
-func TestEnsureLogDestinationCreatesDirectory(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "mercurius.yaml")
-	writeConfig(t, cfgPath, `
-log_destination: ./reviews
-reviewer:
-  name: dummy
-  impl: dummy
-`)
-	resolved, err := Resolve(cfgPath, "")
+// a relative binary_path resolves against the directory of the file that
+// declared it, in each file.
+func TestResolveRelativeBinaryPathPerFile(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project")
+	userDir := filepath.Join(root, "home", ".config", "mercurius")
+	for _, dir := range []string{projectDir, userDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	userPath := filepath.Join(userDir, "config.yaml")
+	writeConfig(t, userPath, "reviewer:\n  name: codex\n  impl: codex\n  binary_path: ./bin/codex\n")
+
+	cfgPath := writeProject(t, projectDir, "")
+	resolved, err := Resolve(cfgPath, userPath)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if err := EnsureLogDestination(resolved.Project.LogDestination); err != nil {
-		t.Fatalf("ensure: %v", err)
+	if got, want := resolved.Reviewer.BinaryPath, filepath.Join(userDir, "bin", "codex"); got != want {
+		t.Fatalf("user binary path = %q, want %q", got, want)
 	}
-	if _, err := os.Stat(resolved.Project.LogDestination); err != nil {
-		t.Fatalf("expected directory to exist: %v", err)
-	}
-}
 
-func TestEnsureLogDestinationRejectsMissingParent(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "mercurius.yaml")
-	writeConfig(t, cfgPath, `
-log_destination: ./missing/reviews
-reviewer:
-  name: dummy
-  impl: dummy
-`)
-	resolved, err := Resolve(cfgPath, "")
+	writeConfig(t, cfgPath, "reviewer_override:\n  name: claude\n  impl: claude\n  binary_path: tools/claude\n")
+	resolved, err = Resolve(cfgPath, userPath)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	err = EnsureLogDestination(resolved.Project.LogDestination)
-	if err == nil {
-		t.Fatal("expected missing-parent error")
-	}
-	if !strings.Contains(err.Error(), "parent") {
-		t.Fatalf("expected parent in error, got %v", err)
+	if got, want := resolved.Reviewer.BinaryPath, filepath.Join(projectDir, "tools", "claude"); got != want {
+		t.Fatalf("override binary path = %q, want %q", got, want)
 	}
 }
 
-func TestResolveHomePath(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	got := resolvePath(t.TempDir(), "~/reviews")
-	if got != filepath.Join(home, "reviews") {
-		t.Fatalf("home path = %s", got)
-	}
-}
-
-func TestResolveParsesSettledDecisions(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "mercurius.yaml")
-	writeConfig(t, cfgPath, `
-log_destination: ./reviews
-settled_decisions:
-  - id: recall-deferred
-    do_not_flag: >
-      the absence of a 'recall' concept, or suggestions to add it now
-  - id: observability-out-of-scope
-    do_not_flag: missing production-grade observability
-reviewer:
-  name: dummy
-  impl: dummy
-`)
-
-	resolved, err := Resolve(cfgPath, "")
-	if err != nil {
-		t.Fatalf("resolve config: %v", err)
-	}
-	cfg := resolved.Project
-	if len(cfg.SettledDecisions) != 2 {
-		t.Fatalf("settled decisions = %d, want 2", len(cfg.SettledDecisions))
-	}
-	if cfg.SettledDecisions[0].ID != "recall-deferred" {
-		t.Fatalf("first id = %q", cfg.SettledDecisions[0].ID)
-	}
-	if !strings.Contains(cfg.SettledDecisions[0].DoNotFlag, "absence of a 'recall' concept") {
-		t.Fatalf("first do_not_flag = %q", cfg.SettledDecisions[0].DoNotFlag)
-	}
-	if cfg.SettledDecisions[1].DoNotFlag != "missing production-grade observability" {
-		t.Fatalf("second do_not_flag = %q", cfg.SettledDecisions[1].DoNotFlag)
-	}
-}
-
-func TestResolveToleratesEmptyAndDuplicateGuards(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "mercurius.yaml")
-	writeConfig(t, cfgPath, `
-log_destination: ./reviews
-settled_decisions:
-  - id: dupe
-    do_not_flag: first
-  - id: dupe
-    do_not_flag: ""
-  - id: blank
-reviewer:
-  name: dummy
-  impl: dummy
-`)
-
-	// an empty do_not_flag and duplicate ids must not fail the load: a guard
-	// should cost almost nothing to write, and a too-strict validator would
-	// fail rounds on trivial guard typos.
-	resolved, err := Resolve(cfgPath, "")
-	if err != nil {
-		t.Fatalf("resolve config: %v", err)
-	}
-	if len(resolved.Project.SettledDecisions) != 3 {
-		t.Fatalf("settled decisions = %d, want 3 (all tolerated)", len(resolved.Project.SettledDecisions))
-	}
-}
-
-func TestResolveReturnsExactBytes(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "mercurius.yaml")
-	body := `log_destination: ./reviews
-settled_decisions:
-  - id: recall-deferred
-    do_not_flag: the absence of a 'recall' concept
-reviewer:
-  name: dummy
-  impl: dummy
-`
-	writeConfig(t, cfgPath, body)
-
-	resolved, err := Resolve(cfgPath, "")
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if string(resolved.Raw) != body {
-		t.Fatalf("raw bytes do not match file content:\n--- got ---\n%s\n--- want ---\n%s", resolved.Raw, body)
-	}
-}
-
-// a project with no reviewer resolves: open_session reports none, and only
+// with no reviewer in either file, Resolve succeeds and reports none; only
 // start_review_round turns the absence into an error.
 func TestResolveWithoutReviewer(t *testing.T) {
-	cfgPath := filepath.Join(t.TempDir(), "mercurius.yaml")
-	writeConfig(t, cfgPath, "log_destination: ./reviews\n")
-	resolved, err := Resolve(cfgPath, "")
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if resolved.Reviewer != nil {
-		t.Fatalf("reviewer = %+v, want none", resolved.Reviewer)
+	dir := t.TempDir()
+	for _, userPath := range []string{"", filepath.Join(dir, "missing.yaml"), writeUser(t, dir, "# no reviewer here\n")} {
+		resolved, err := Resolve(writeProject(t, dir, "log_destination: ./reviews\n"), userPath)
+		if err != nil {
+			t.Fatalf("resolve with user path %q: %v", userPath, err)
+		}
+		if resolved.Reviewer != nil || resolved.ReviewerSource != "" {
+			t.Fatalf("reviewer = %+v source = %q, want none", resolved.Reviewer, resolved.ReviewerSource)
+		}
 	}
 }
 
 func TestResolveParsesReviewerTimeout(t *testing.T) {
-	cfgPath := filepath.Join(t.TempDir(), "mercurius.yaml")
-	writeConfig(t, cfgPath, "reviewer:\n  name: dummy\n  impl: dummy\n  timeout: 7m30s\n")
-	resolved, err := Resolve(cfgPath, "")
+	dir := t.TempDir()
+	resolved, err := Resolve(writeProject(t, dir, ""), writeUser(t, dir, "reviewer:\n  name: dummy\n  impl: dummy\n  timeout: 7m30s\n"))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -403,17 +327,101 @@ func TestResolveMissingFileNamesPath(t *testing.T) {
 	}
 }
 
-// the user-level path is accepted and not read yet: a broken file there must
-// not affect resolution.
-func TestResolveDoesNotReadUserConfig(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "mercurius.yaml")
-	userPath := filepath.Join(dir, "user.yaml")
-	writeConfig(t, cfgPath, "reviewer:\n  name: dummy\n  impl: dummy\n")
-	writeConfig(t, userPath, "this: is: not: valid: yaml\n\t::broken")
-	if _, err := Resolve(cfgPath, userPath); err != nil {
+func TestEnsureLogDestinationRejectsMissingParent(t *testing.T) {
+	err := EnsureLogDestination(filepath.Join(t.TempDir(), "missing", "reviews"))
+	if err == nil {
+		t.Fatal("expected missing-parent error")
+	}
+	if !strings.Contains(err.Error(), "parent") {
+		t.Fatalf("expected parent in error, got %v", err)
+	}
+}
+
+func TestResolveHomePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	got := resolvePath(t.TempDir(), "~/reviews")
+	if got != filepath.Join(home, "reviews") {
+		t.Fatalf("home path = %s", got)
+	}
+}
+
+func TestResolveParsesSettledDecisions(t *testing.T) {
+	resolved, err := Resolve(writeProject(t, t.TempDir(), `
+settled_decisions:
+  - id: recall-deferred
+    do_not_flag: >
+      the absence of a 'recall' concept, or suggestions to add it now
+  - id: observability-out-of-scope
+    do_not_flag: missing production-grade observability
+`), "")
+	if err != nil {
+		t.Fatalf("resolve config: %v", err)
+	}
+	cfg := resolved.Project
+	if len(cfg.SettledDecisions) != 2 {
+		t.Fatalf("settled decisions = %d, want 2", len(cfg.SettledDecisions))
+	}
+	if cfg.SettledDecisions[0].ID != "recall-deferred" {
+		t.Fatalf("first id = %q", cfg.SettledDecisions[0].ID)
+	}
+	if !strings.Contains(cfg.SettledDecisions[0].DoNotFlag, "absence of a 'recall' concept") {
+		t.Fatalf("first do_not_flag = %q", cfg.SettledDecisions[0].DoNotFlag)
+	}
+	if cfg.SettledDecisions[1].DoNotFlag != "missing production-grade observability" {
+		t.Fatalf("second do_not_flag = %q", cfg.SettledDecisions[1].DoNotFlag)
+	}
+}
+
+func TestResolveToleratesEmptyAndDuplicateGuards(t *testing.T) {
+	// an empty do_not_flag and duplicate ids must not fail the load: a guard
+	// should cost almost nothing to write, and a too-strict validator would
+	// fail rounds on trivial guard typos.
+	resolved, err := Resolve(writeProject(t, t.TempDir(), `
+settled_decisions:
+  - id: dupe
+    do_not_flag: first
+  - id: dupe
+    do_not_flag: ""
+  - id: blank
+`), "")
+	if err != nil {
+		t.Fatalf("resolve config: %v", err)
+	}
+	if len(resolved.Project.SettledDecisions) != 3 {
+		t.Fatalf("settled decisions = %d, want 3 (all tolerated)", len(resolved.Project.SettledDecisions))
+	}
+}
+
+func TestResolveReturnsExactBytes(t *testing.T) {
+	body := `log_destination: ./reviews
+settled_decisions:
+  - id: recall-deferred
+    do_not_flag: the absence of a 'recall' concept
+`
+	resolved, err := Resolve(writeProject(t, t.TempDir(), body), "")
+	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
+	if string(resolved.Raw) != body {
+		t.Fatalf("raw bytes do not match file content:\n--- got ---\n%s\n--- want ---\n%s", resolved.Raw, body)
+	}
+}
+
+func writeProject(t *testing.T, dir string, body string) string {
+	t.Helper()
+	path := filepath.Join(dir, "mercurius.yaml")
+	writeConfig(t, path, body)
+	return path
+}
+
+// writeUser writes a user-level config in the test's own directory. No test
+// reads the developer's real user-level file.
+func writeUser(t *testing.T, dir string, body string) string {
+	t.Helper()
+	path := filepath.Join(dir, "user-config.yaml")
+	writeConfig(t, path, body)
+	return path
 }
 
 func writeConfig(t *testing.T, path string, body string) {

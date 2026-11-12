@@ -65,23 +65,54 @@ type ReviewerConfig struct {
 	Timeout    time.Duration
 }
 
+// where a resolved reviewer came from.
+const (
+	SourceUserConfig      = "user config"
+	SourceProjectOverride = "project override"
+)
+
 // Resolved is the result of Resolve: the project settings, the reviewer the next
-// round would run with (nil when none is configured), and the project file's
-// exact bytes, which a round snapshots as _config.yaml.
+// round would run with (nil when none is configured) and where it came from,
+// and the project file's exact bytes, which a round snapshots as _config.yaml.
 type Resolved struct {
-	Project  Config
-	Reviewer *ReviewerConfig
-	Raw      []byte
+	Project        Config
+	Reviewer       *ReviewerConfig
+	ReviewerSource string
+	Raw            []byte
 }
 
-// projectFile is the YAML shape of mercurius.yaml.
+// FileError is a configuration file that could not be read, parsed, or
+// validated. Path names the file, so the caller can say which of the two
+// files to fix.
+type FileError struct {
+	Path string
+	Err  error
+}
+
+func (e *FileError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *FileError) Unwrap() error {
+	return e.Err
+}
+
+// projectFile is the YAML shape of the project's mercurius.yaml. The reviewer
+// is not part of it: a project chooses its own reviewer only through
+// reviewer_override, and a plain reviewer block is rejected.
 type projectFile struct {
 	LogDestination   string
 	MaxFindings      int
 	ReviewContext    string
 	ReviewFocus      string
 	SettledDecisions []SettledDecision
-	Reviewer         *ReviewerConfig
+	ReviewerOverride *ReviewerConfig
+}
+
+// userFile is the YAML shape of the user-level config. The reviewer is a fact
+// about the installation, set once here.
+type userFile struct {
+	Reviewer *ReviewerConfig
 }
 
 // ProjectPath returns the absolute project config path for a --config value,
@@ -111,16 +142,17 @@ func UserConfigPath() string {
 }
 
 // Resolve reads and validates the configuration a broker operation runs with.
-// It is called by every operation, so edits take effect on the next call. The
-// project file is read exactly once; the returned bytes are the ones parsed. A
-// missing or unparseable project file is an error; a missing reviewer is not,
-// and is reported as a nil Reviewer for the caller to judge.
+// It is called by every operation, so edits to either file take effect on the
+// next call. The project file is read exactly once; the returned bytes are the
+// ones parsed.
 //
-// userPath is accepted for the user-level reviewer config and is not read yet;
-// the reviewer still comes from the project file's 'reviewer' block.
+// The reviewer comes from the user-level file's reviewer block, unless the
+// project file has a reviewer_override block, which replaces it whole, timeout
+// included; the two are never merged field by field. A missing user-level file
+// is no reviewer, not an error. A missing reviewer is not an error either, and
+// is reported as a nil Reviewer for the caller to judge. Errors are FileErrors
+// naming the file at fault.
 func Resolve(projectPath string, userPath string) (*Resolved, error) {
-	_ = userPath
-
 	absPath, err := ProjectPath(projectPath)
 	if err != nil {
 		return nil, err
@@ -128,9 +160,9 @@ func Resolve(projectPath string, userPath string) (*Resolved, error) {
 	raw, err := os.ReadFile(absPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("config '%s' not found: %w", absPath, err)
+			return nil, &FileError{Path: absPath, Err: fmt.Errorf("config '%s' not found: %w", absPath, err)}
 		}
-		return nil, fmt.Errorf("read config '%s': %w", absPath, err)
+		return nil, &FileError{Path: absPath, Err: fmt.Errorf("read config '%s': %w", absPath, err)}
 	}
 
 	file := &projectFile{
@@ -138,10 +170,10 @@ func Resolve(projectPath string, userPath string) (*Resolved, error) {
 		LogDestination: DefaultLogDestination,
 	}
 	if err := dd.MergeYAML(file, raw); err != nil {
-		return nil, fmt.Errorf("config '%s': %w", absPath, err)
+		return nil, &FileError{Path: absPath, Err: fmt.Errorf("config '%s': %w", absPath, err)}
 	}
-	if err := checkRenamedFields(absPath, raw); err != nil {
-		return nil, err
+	if err := checkRenamedFields(absPath, userPath, raw); err != nil {
+		return nil, &FileError{Path: absPath, Err: err}
 	}
 
 	baseDir := filepath.Dir(absPath)
@@ -157,27 +189,75 @@ func Resolve(projectPath string, userPath string) (*Resolved, error) {
 		},
 		Raw: raw,
 	}
-	if file.Reviewer != nil {
-		reviewerCfg := *file.Reviewer
-		reviewerCfg.ExtraArgs = append([]string(nil), file.Reviewer.ExtraArgs...)
-		if reviewerCfg.BinaryPath != "" {
-			reviewerCfg.BinaryPath = resolvePath(baseDir, reviewerCfg.BinaryPath)
-		}
-		if reviewerCfg.Timeout == 0 {
-			reviewerCfg.Timeout = DefaultReviewerTimeout
-		}
-		resolved.Reviewer = &reviewerCfg
+	if err := resolved.Project.Validate(); err != nil {
+		return nil, &FileError{Path: absPath, Err: fmt.Errorf("config '%s': %w", absPath, err)}
 	}
 
-	if err := resolved.Project.Validate(); err != nil {
-		return nil, fmt.Errorf("config '%s': %w", absPath, err)
+	userReviewer, err := readUserReviewer(userPath)
+	if err != nil {
+		return nil, err
 	}
-	if resolved.Reviewer != nil {
-		if err := resolved.Reviewer.Validate(); err != nil {
-			return nil, fmt.Errorf("config '%s': %w", absPath, err)
+	switch {
+	case file.ReviewerOverride != nil:
+		reviewerCfg, err := resolveReviewer(*file.ReviewerOverride, baseDir)
+		if err != nil {
+			return nil, &FileError{Path: absPath, Err: fmt.Errorf("config '%s': reviewer_override: %w", absPath, err)}
 		}
+		resolved.Reviewer = reviewerCfg
+		resolved.ReviewerSource = SourceProjectOverride
+	case userReviewer != nil:
+		resolved.Reviewer = userReviewer
+		resolved.ReviewerSource = SourceUserConfig
 	}
 	return resolved, nil
+}
+
+// readUserReviewer reads the reviewer block from the user-level file. An empty
+// path, a missing file, or a file with no reviewer block is no reviewer.
+func readUserReviewer(userPath string) (*ReviewerConfig, error) {
+	if userPath == "" {
+		return nil, nil
+	}
+	absPath, err := filepath.Abs(expandHome(userPath))
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(absPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, &FileError{Path: absPath, Err: fmt.Errorf("read user config '%s': %w", absPath, err)}
+	}
+	file := &userFile{}
+	if err := dd.MergeYAML(file, raw); err != nil {
+		return nil, &FileError{Path: absPath, Err: fmt.Errorf("user config '%s': %w", absPath, err)}
+	}
+	if file.Reviewer == nil {
+		return nil, nil
+	}
+	reviewerCfg, err := resolveReviewer(*file.Reviewer, filepath.Dir(absPath))
+	if err != nil {
+		return nil, &FileError{Path: absPath, Err: fmt.Errorf("user config '%s': %w", absPath, err)}
+	}
+	return reviewerCfg, nil
+}
+
+// resolveReviewer resolves a reviewer block against the directory of the file
+// that declared it, applies the default timeout, and validates it.
+func resolveReviewer(block ReviewerConfig, baseDir string) (*ReviewerConfig, error) {
+	reviewerCfg := block
+	reviewerCfg.ExtraArgs = append([]string(nil), block.ExtraArgs...)
+	if reviewerCfg.BinaryPath != "" {
+		reviewerCfg.BinaryPath = resolvePath(baseDir, reviewerCfg.BinaryPath)
+	}
+	if reviewerCfg.Timeout == 0 {
+		reviewerCfg.Timeout = DefaultReviewerTimeout
+	}
+	if err := reviewerCfg.Validate(); err != nil {
+		return nil, err
+	}
+	return &reviewerCfg, nil
 }
 
 // Validate checks the project settings. It performs pure field validation and
@@ -219,12 +299,17 @@ func EnsureLogDestination(path string) error {
 	return nil
 }
 
-// checkRenamedFields rejects configs that still use renamed YAML keys. dd
-// silently drops unknown fields, so a stale key would otherwise produce
+// checkRenamedFields rejects configs that still use renamed or moved YAML keys.
+// dd silently drops unknown fields, so a stale key would otherwise produce
 // confusing review behavior with no error. It works from the already-read
-// bytes so the config file is not read a second time. absPath is used only for
-// error messages.
-func checkRenamedFields(absPath string, raw []byte) error {
+// bytes so the config file is not read a second time. absPath and userPath are
+// used only for error messages.
+//
+// A plain reviewer block is rejected with a message that names the user-level
+// file and says to remove the block. It deliberately does not mention
+// reviewer_override: an agent that wrote the block out of habit should remove
+// it, not rename it into an override nobody decided on.
+func checkRenamedFields(absPath string, userPath string, raw []byte) error {
 	var generic map[string]any
 	if err := yaml.Unmarshal(raw, &generic); err != nil {
 		// dd already validated the YAML; ignore parse errors here so this
@@ -237,10 +322,22 @@ func checkRenamedFields(absPath string, raw []byte) error {
 	if _, ok := generic["default_budget"]; ok {
 		return fmt.Errorf("config '%s': field 'default_budget' has been removed; rounds are single-shot and no longer share a budget across a session", absPath)
 	}
+	if _, ok := generic["reviewer"]; ok {
+		return fmt.Errorf("config '%s': the reviewer is set per installation in the user-level config %s, not in the project file; remove the 'reviewer' block from this file", absPath, describeUserPath(userPath))
+	}
 	if _, ok := generic["reviewers"]; ok {
-		return fmt.Errorf("config '%s': field 'reviewers' has been renamed to 'reviewer' (singular); update the YAML key", absPath)
+		return fmt.Errorf("config '%s': the reviewer is set per installation in the user-level config %s, not in the project file; remove the 'reviewers' block from this file", absPath, describeUserPath(userPath))
 	}
 	return nil
+}
+
+// describeUserPath quotes the user-level config path for a message, or says
+// that it could not be determined.
+func describeUserPath(userPath string) string {
+	if userPath == "" {
+		return "(no user config directory could be determined on this system)"
+	}
+	return fmt.Sprintf("'%s'", userPath)
 }
 
 // KnownImpls returns the reviewer implementations registered in this binary.

@@ -79,7 +79,7 @@ func (b *Broker) OpenSession(ctx context.Context, _ OpenSessionRequest) (OpenSes
 		ReviewFocusPresent:   strings.TrimSpace(resolved.Project.ReviewFocus) != "",
 	}
 	if resolved.Reviewer != nil {
-		info := reviewerInfoFromConfig(*resolved.Reviewer)
+		info := reviewerInfoFromConfig(*resolved.Reviewer, resolved.ReviewerSource)
 		response.Reviewer = &info
 	}
 	return response, nil
@@ -97,9 +97,7 @@ func (b *Broker) StartReviewRound(ctx context.Context, req StartRoundRequest) (S
 		return StartReviewRoundResponse{}, err
 	}
 	if resolved.Reviewer == nil {
-		return StartReviewRoundResponse{}, brokerError(CodeUserError,
-			fmt.Sprintf("no reviewer is configured; add a 'reviewer' block to '%s'", resolved.Project.ConfigPath),
-			nil, map[string]any{"config_path": resolved.Project.ConfigPath})
+		return StartReviewRoundResponse{}, b.noReviewerError()
 	}
 	logDestination := resolved.Project.LogDestination
 	session, sessionDir, err := loadSession(logDestination, req.SessionID)
@@ -176,11 +174,11 @@ func (b *Broker) StartReviewRound(ctx context.Context, req StartRoundRequest) (S
 		SessionID:      session.SessionID,
 		RoundNumber:    roundNumber,
 		State:          store.RoundRunning,
-		Reviewer:       reviewerInfoFromConfig(reviewerCfg),
+		Reviewer:       reviewerInfoFromConfig(reviewerCfg, resolved.ReviewerSource),
 		StartedAt:      startedAt,
 		StatusPath:     filepath.Join(roundDir, store.StateFileName),
 		MonitorCommand: b.monitorCommand(session.SessionID),
-		NextAction:     "tell the user this review is running; they can monitor it with the monitor_command and re-engage you when the round completes",
+		NextAction:     startNextAction(reviewerCfg, resolved.ReviewerSource),
 	}, nil
 }
 
@@ -223,6 +221,7 @@ func (b *Broker) prepareRound(roundDir string, sessionID string, roundNumber int
 		OpenedAt:             startedAt,
 		ServerPID:            b.pid,
 		Reviewer:             runReviewer(reviewerCfg),
+		ReviewerSource:       resolved.ReviewerSource,
 		MaxFindings:          project.MaxFindings,
 		ReviewContextPresent: strings.TrimSpace(project.ReviewContext) != "",
 		ReviewFocusPresent:   strings.TrimSpace(project.ReviewFocus) != "",
@@ -506,7 +505,7 @@ func (b *Broker) SessionStatus(ctx context.Context, sessionID string) (SessionSt
 			RoundNumber:    n,
 			OpenedAt:       run.OpenedAt,
 			State:          state.State,
-			Reviewer:       reviewerInfoFromRun(run.Reviewer),
+			Reviewer:       reviewerInfoFromRun(run.Reviewer, run.ReviewerSource),
 			MaxFindings:    run.MaxFindings,
 			StatePath:      filepath.Join(roundDir, store.StateFileName),
 			CompletedAt:    cloneTimePtr(state.CompletedAt),
@@ -598,16 +597,47 @@ func markLostLocked(roundDir string) (store.State, error) {
 	return state, nil
 }
 
+// resolve reads both configuration files. The error names the file at fault:
+// the project's mercurius.yaml or the user-level config.
 func (b *Broker) resolve() (*config.Resolved, error) {
 	resolved, err := config.Resolve(b.options.ConfigPath, b.options.UserConfigPath)
 	if err != nil {
 		details := map[string]any{}
-		if path, pathErr := config.ProjectPath(b.options.ConfigPath); pathErr == nil {
-			details["config_path"] = path
+		message := "read mercurius.yaml"
+		projectPath, _ := config.ProjectPath(b.options.ConfigPath)
+		var fileErr *config.FileError
+		if errors.As(err, &fileErr) && fileErr.Path != projectPath {
+			message = "read the user-level config"
+			details["user_config_path"] = fileErr.Path
+		} else if projectPath != "" {
+			details["config_path"] = projectPath
 		}
-		return nil, brokerError(CodeUserError, "read mercurius.yaml", err, details)
+		return nil, brokerError(CodeUserError, message, err, details)
 	}
 	return resolved, nil
+}
+
+// noReviewerError is the refusal for a round with no reviewer configured
+// anywhere. It points at the user-level config, where the reviewer belongs.
+func (b *Broker) noReviewerError() error {
+	userPath := b.options.UserConfigPath
+	if userPath == "" {
+		return brokerError(CodeUserError, "no reviewer is configured, and no user-level config directory could be determined on this system", nil, nil)
+	}
+	return brokerError(CodeUserError,
+		fmt.Sprintf("no reviewer is configured; set a 'reviewer' block in the user-level config '%s' (mercurius bootstrap --user writes a starter)", userPath),
+		nil, map[string]any{"user_config_path": userPath})
+}
+
+// startNextAction tells the agent what to do while a round runs. A round on a
+// project override is said out loud: the operator chose the installation's
+// reviewer once, and a project that departs from it should not do so quietly.
+func startNextAction(reviewerCfg config.ReviewerConfig, source string) string {
+	const base = "tell the user this review is running; they can monitor it with the monitor_command and re-engage you when the round completes"
+	if source != config.SourceProjectOverride {
+		return base
+	}
+	return fmt.Sprintf("tell the user this round runs on the project's reviewer_override ('%s', impl '%s'), not the installation's reviewer; then %s", reviewerCfg.Name, reviewerCfg.Impl, base)
 }
 
 func (b *Broker) monitorCommand(sessionID string) string {
@@ -717,9 +747,10 @@ func synopsisRound(roundDir string, n int) (roundlog.SynopsisRound, error) {
 		OpenedAt: run.OpenedAt,
 		State:    state.State,
 		Reviewer: roundlog.SynopsisReviewer{
-			Name:  run.Reviewer.Name,
-			Impl:  run.Reviewer.Impl,
-			Model: run.Reviewer.Model,
+			Name:   run.Reviewer.Name,
+			Impl:   run.Reviewer.Impl,
+			Model:  run.Reviewer.Model,
+			Source: run.ReviewerSource,
 		},
 		ReviewContextPresent: run.ReviewContextPresent,
 		ReviewFocusPresent:   run.ReviewFocusPresent,
@@ -975,7 +1006,7 @@ func runReviewer(cfg config.ReviewerConfig) store.RunReviewer {
 	}
 }
 
-func reviewerInfoFromConfig(cfg config.ReviewerConfig) ReviewerInfo {
+func reviewerInfoFromConfig(cfg config.ReviewerConfig, source string) ReviewerInfo {
 	return ReviewerInfo{
 		Name:       cfg.Name,
 		Impl:       cfg.Impl,
@@ -983,10 +1014,11 @@ func reviewerInfoFromConfig(cfg config.ReviewerConfig) ReviewerInfo {
 		BinaryPath: cfg.BinaryPath,
 		ExtraArgs:  append([]string(nil), cfg.ExtraArgs...),
 		Timeout:    cfg.Timeout,
+		Source:     source,
 	}
 }
 
-func reviewerInfoFromRun(r store.RunReviewer) ReviewerInfo {
+func reviewerInfoFromRun(r store.RunReviewer, source string) ReviewerInfo {
 	return ReviewerInfo{
 		Name:       r.Name,
 		Impl:       r.Impl,
@@ -994,6 +1026,7 @@ func reviewerInfoFromRun(r store.RunReviewer) ReviewerInfo {
 		BinaryPath: r.BinaryPath,
 		ExtraArgs:  append([]string(nil), r.ExtraArgs...),
 		Timeout:    time.Duration(r.Timeout),
+		Source:     source,
 	}
 }
 
