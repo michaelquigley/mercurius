@@ -43,7 +43,7 @@ func newRootCommand() *cobra.Command {
 			// the configuration is not read here. every tool call resolves it, so
 			// the server starts in a project with no mercurius.yaml and answers
 			// with a tool error naming the path instead of dying at launch.
-			server, _, err := mcpserver.New(mcpserver.Paths{
+			server, _, err := mcpserver.New(mcpserver.Options{
 				ConfigPath:     configPath,
 				UserConfigPath: config.UserConfigPath(),
 			})
@@ -62,6 +62,7 @@ func newRootCommand() *cobra.Command {
 	root.Flags().BoolVar(&verbose, "verbose", false, "enable verbose stderr logging")
 	root.AddCommand(newMonitorCommand(&configPath))
 	root.AddCommand(newBootstrapCommand())
+	root.AddCommand(newRunRoundCommand())
 	root.AddCommand(build.NewVersionCmd("mercurius"))
 	return root
 }

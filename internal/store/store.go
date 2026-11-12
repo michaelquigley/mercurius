@@ -123,15 +123,19 @@ type ManifestEntry struct {
 
 // State is _state.json: where a round is in its life. It is written last in any
 // step, so a round that says completed has its outcome on disk. Only a holder of
-// the runner lock writes it.
+// the runner lock writes it. RunnerPID and ReviewerPID are for the operator to
+// read; Mercurius never signals a process by a pid it read from disk.
 type State struct {
-	State       string       `json:"state"`
-	StartedAt   time.Time    `json:"started_at"`
-	UpdatedAt   time.Time    `json:"updated_at"`
-	CompletedAt *time.Time   `json:"completed_at,omitempty"`
-	RunnerPID   int          `json:"runner_pid,omitempty"`
-	ReviewerPID int          `json:"reviewer_pid,omitempty"`
-	Error       *StoredError `json:"error,omitempty"`
+	State       string     `json:"state"`
+	StartedAt   time.Time  `json:"started_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	RunnerPID   int        `json:"runner_pid,omitempty"`
+	ReviewerPID int        `json:"reviewer_pid,omitempty"`
+	// OutlivedServer is set by the runner at finish: the runner was a separate
+	// process and the server that prepared the round was no longer its parent.
+	OutlivedServer bool         `json:"outlived_server,omitempty"`
+	Error          *StoredError `json:"error,omitempty"`
 }
 
 // StoredError is a round failure as recorded in _state.json.

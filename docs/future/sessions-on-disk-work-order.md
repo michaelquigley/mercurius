@@ -89,11 +89,12 @@ No new error codes. The five codes are defined in `internal/store` and re-export
 
 ### The runner lock
 
-`internal/runlock` wraps `flock(2)` on `<log_destination>/runner.lock`, through the standard library's `syscall.Flock`. The lock belongs to the open file description, so a child that inherits the descriptor shares the lock, and the lock is released when the last copy of the descriptor is closed. Three rules follow. Each has a named test that fails if the rule is broken: the first two in stage 2, where the handoff exists, and the third in stage 1.
+`internal/runlock` wraps `flock(2)` on `<log_destination>/runner.lock`, through the standard library's `syscall.Flock`. The lock belongs to the open file description, so a child that inherits the descriptor shares the lock, and the lock is released when the last copy of the descriptor is closed. Four rules follow. Each has a named test that fails if the rule is broken: the third in stage 1, and the others in stage 2, where the handoff exists.
 
 1. **The server closes its copy after the handoff.** If it kept it, the lock would stay held for as long as the server lived, and every later launch in the project would be refused.
 2. **The runner marks the inherited descriptor close-on-exec before it starts anything.** A descriptor passed through `exec.Cmd.ExtraFiles` arrives without that flag. If the runner left it clear, the reviewer would inherit the lock.
 3. **A process that takes the lock to check a round re-reads the round's state after taking it.** The runner writes its final state and then exits, so a state read before the lock was taken can be stale.
+4. **The runner holds the lock until its final state is written.** If it let go earlier, a second launch could start beside a round still under review, and nothing else would notice: the round would still complete and the lock would still be free afterward.
 
 Taking the lock is a non-blocking attempt, retried up to five times 50 ms apart before it is reported as held. The retry exists because a server marking a dead round, or a monitor checking one, holds the lock for a moment.
 
@@ -159,7 +160,7 @@ In stage 1 it sets `cmd.WaitDelay` to 10 seconds. Without it the timeout is not 
 
 In stage 2, on Linux, it also sets `Pdeathsig: SIGKILL` and `Setpgid`, and sets `cmd.Cancel` to kill the process group, so the timeout takes the reviewer's own children with it. On other platforms this second part does nothing. The parent-death signal follows the thread that forked the child, not the process, so both launchers lock the calling goroutine to its OS thread for the whole of `Run`, and `Run` runs the reviewer synchronously on that goroutine. Without that, the Go runtime can retire the thread and the kernel kills a healthy reviewer.
 
-The reviewers report their child's pid through a new optional `Started func(pid int)` on `reviewer.ReviewRequest`, called after the child starts. The runner uses it to record `reviewer_pid`. This means the three reviewers move from `cmd.Run` to `cmd.Start` and `cmd.Wait`.
+The reviewers report their child's pid through a new optional `Started func(pid int)` on `reviewer.ReviewRequest`, called after the child starts. The runner uses it to record `reviewer_pid`. The three reviewers start their process through one shared `reviewer.RunCommand`, which applies the subprocess settings, starts the child, calls `Started`, and waits.
 
 A reviewer's failure carries its output. `internal/reviewer` gains one error type, `OutputError`, holding the underlying error and the bytes the reviewer captured. The three subprocess reviewers return it from every failure where they hold output: a failed process (stdout and stderr), and a clean exit whose output cannot be parsed (stdout, and for codex the last-message bytes, read before its temporary directory is removed). They stop appending output to the error message, and `commandOutputSuffix` is removed from all three. `Run` writes the carried bytes to `_raw.txt`. When `Review` succeeds and validation fails, `Run` writes the returned raw object there instead.
 
@@ -233,13 +234,16 @@ Named cases:
 
 ## Stage 2 — the round outlives the server
 
+*Built on the `sessions-on-disk` branch, 2026-11-12. This section was corrected afterward to match the build: where the runner's start-up sequence lives, the launcher option on the server, the shared reviewer helper, and the fourth lock rule's test.*
+
 The round moves into its own process.
 
 **Changes**
 
-- **`cmd/mercurius`.** The hidden `run-round` subcommand, in its own file. It marks descriptor 3 close-on-exec, rebuilds the lock from it, locks its OS thread, and calls `runner.Run`. Its logging goes to stderr, which the launcher has pointed at `_runner.log`.
+- **`cmd/mercurius`.** The hidden `run-round` subcommand, in its own file. It calls `runner.RunInherited`, which marks descriptor 3 close-on-exec, rebuilds the lock from it, locks its OS thread, and calls `runner.Run`. The sequence lives in the runner package so the process tests, which re-execute the test binary as the runner, run the same code production does. The command's logging goes to stderr, which the launcher has pointed at `_runner.log`.
 - **`internal/runner`.** The process launcher. `Run` records `runner_pid`, `reviewer_pid`, and `outlived_server`. The in-process launcher locks its goroutine to its OS thread around `Run`, as the `run-round` command does. The server is wired to the process launcher; the in-process launcher stays for tests.
 - **`internal/reviewer`.** The helper's second part, in a Linux file with a no-op file for other platforms. The `Started` callback on `ReviewRequest`, which the codex, claude, and pi reviewers call.
+- **`internal/mcpserver`.** `New` takes an options struct with an optional `Launcher`; nil means the process launcher. The process launcher starts the running executable, which inside a test is the test binary, so a test that builds a server through `New` and starts a round passes the in-process launcher.
 - **`internal/roundlog`, `internal/mcpserver`, `internal/broker`.** The synopsis and `session_status` show `outlived_server` per round. The project-wide `conflict`, built in the broker, reports whether the running round was started by the answering server, by comparing the note's `server_pid` with its own.
 
 **Tests**
@@ -247,6 +251,7 @@ The round moves into its own process.
 These need real processes and are Linux-only. The test binary re-executes itself as the runner, and as a stand-in server where one is needed. The reviewer is a shell script named through `binary_path`.
 
 - **The round outlives its server.** A helper process prepares a round, starts the runner, and exits at once, without waiting for the runner to come up. The round completes, and `outlived_server` is true.
+- **The runner holds the lock.** In the same test, with the server gone and once `reviewer_pid` is recorded, an attempt to take the lock fails as held. The wait matters: checked any earlier, the lock is held by the inherited descriptor before the runner's own code has run, and the test would pass with a runner that releases it early.
 - **The lock is let go.** One process starts a round, waits for it to finish, and starts another. The second start succeeds. If the server kept its copy of the lock, it is refused.
 - **The reviewer does not hold the lock.** The reviewer script lists its own open descriptors into a file. None of them is `runner.lock`.
 - **The reviewer dies with the runner.** The runner is killed with `SIGKILL` while the reviewer script sleeps. The reviewer's pid is gone within two seconds, and the round is then marked `runner_lost`.

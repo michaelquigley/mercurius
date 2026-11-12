@@ -155,7 +155,10 @@ type RoundStatus struct {
 	CompletedAt   *time.Time
 	HasNotes      bool
 	DecisionCount int
-	Error         *ErrorInfo
+	// OutlivedServer marks a round whose runner finished after the server that
+	// started it was gone: a round the old in-memory design would have lost.
+	OutlivedServer bool
+	Error          *ErrorInfo
 }
 
 // ReviewerInfo describes a resolved reviewer block.

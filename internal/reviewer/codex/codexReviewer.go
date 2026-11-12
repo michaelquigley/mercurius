@@ -61,7 +61,7 @@ func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (revi
 		return reviewer.ReviewResponse{}, fmt.Errorf("write codex schema file: %w", err)
 	}
 
-	stdout, stderr, runErr := r.run(ctx, req.WorkingDir, req.Prompt, schemaPath, lastMessagePath)
+	stdout, stderr, runErr := r.run(ctx, req.WorkingDir, req.Prompt, schemaPath, lastMessagePath, req.Started)
 
 	// every failure below holds output, so it is carried on the error rather than
 	// folded into the message. the last-message bytes are read here, before the
@@ -87,7 +87,7 @@ func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (revi
 	}, nil
 }
 
-func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string, schemaPath string, lastMessagePath string) ([]byte, []byte, error) {
+func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string, schemaPath string, lastMessagePath string, started func(pid int)) ([]byte, []byte, error) {
 	args := r.args(workingDir, schemaPath, lastMessagePath)
 	cmd := exec.CommandContext(ctx, r.options.BinaryPath, args...)
 	cmd.Stdin = strings.NewReader(prompt)
@@ -103,9 +103,8 @@ func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string, sc
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	reviewer.PrepareCommand(cmd)
 
-	if err := cmd.Run(); err != nil {
+	if err := reviewer.RunCommand(cmd, started); err != nil {
 		return stdout.Bytes(), stderr.Bytes(), fmt.Errorf("codex reviewer failed: %w", err)
 	}
 	return stdout.Bytes(), stderr.Bytes(), nil

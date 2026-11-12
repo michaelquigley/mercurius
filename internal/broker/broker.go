@@ -252,9 +252,10 @@ func (b *Broker) runningConflict(logDestination string) error {
 		})
 	}
 	details := map[string]any{
-		"running_session_id":   note.SessionID,
-		"running_round_number": note.RoundNumber,
-		"monitor_command":      b.monitorCommand(note.SessionID),
+		"running_session_id":     note.SessionID,
+		"running_round_number":   note.RoundNumber,
+		"started_by_this_server": note.ServerPID == b.pid,
+		"monitor_command":        b.monitorCommand(note.SessionID),
 		"next_action": fmt.Sprintf("do not start another round or open a new session to get around this; tell the user round %d of session '%s' is still running, wait for it to finish, then call collect_round on session '%s'",
 			note.RoundNumber, note.SessionID, note.SessionID),
 	}
@@ -502,14 +503,15 @@ func (b *Broker) SessionStatus(ctx context.Context, sessionID string) (SessionSt
 			return SessionStatusResponse{}, roundFileError(err, filepath.Join(roundDir, store.RunFileName))
 		}
 		status := RoundStatus{
-			RoundNumber: n,
-			OpenedAt:    run.OpenedAt,
-			State:       state.State,
-			Reviewer:    reviewerInfoFromRun(run.Reviewer),
-			MaxFindings: run.MaxFindings,
-			StatePath:   filepath.Join(roundDir, store.StateFileName),
-			CompletedAt: cloneTimePtr(state.CompletedAt),
-			Error:       errorInfoFromStored(state.Error),
+			RoundNumber:    n,
+			OpenedAt:       run.OpenedAt,
+			State:          state.State,
+			Reviewer:       reviewerInfoFromRun(run.Reviewer),
+			MaxFindings:    run.MaxFindings,
+			StatePath:      filepath.Join(roundDir, store.StateFileName),
+			CompletedAt:    cloneTimePtr(state.CompletedAt),
+			OutlivedServer: state.OutlivedServer,
+			Error:          errorInfoFromStored(state.Error),
 		}
 		if state.State == store.RoundCompleted {
 			status.LogPath = filepath.Join(roundDir, store.RoundLogFileName)
@@ -721,6 +723,7 @@ func synopsisRound(roundDir string, n int) (roundlog.SynopsisRound, error) {
 		},
 		ReviewContextPresent: run.ReviewContextPresent,
 		ReviewFocusPresent:   run.ReviewFocusPresent,
+		OutlivedServer:       state.OutlivedServer,
 	}
 	if state.Error != nil {
 		sr.Failure = &roundlog.SynopsisError{Code: state.Error.Code, Message: state.Error.Message}

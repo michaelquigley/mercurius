@@ -54,7 +54,7 @@ func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (revi
 		return reviewer.ReviewResponse{}, errors.New("claude reviewer schema is required")
 	}
 
-	stdout, stderr, runErr := r.run(ctx, req.WorkingDir, req.Prompt, req.Schema)
+	stdout, stderr, runErr := r.run(ctx, req.WorkingDir, req.Prompt, req.Schema, req.Started)
 
 	raw, env, parseErr := parseEnvelope(stdout)
 	if parseErr == nil {
@@ -75,7 +75,7 @@ func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (revi
 	)
 }
 
-func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string, schema json.RawMessage) ([]byte, []byte, error) {
+func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string, schema json.RawMessage, started func(pid int)) ([]byte, []byte, error) {
 	cmd := exec.CommandContext(ctx, r.options.BinaryPath, r.args(schema)...)
 	cmd.Dir = workingDir
 	cmd.Stdin = strings.NewReader(prompt)
@@ -85,9 +85,8 @@ func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string, sc
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	reviewer.PrepareCommand(cmd)
 
-	err := cmd.Run()
+	err := reviewer.RunCommand(cmd, started)
 	return stdout.Bytes(), stderr.Bytes(), err
 }
 

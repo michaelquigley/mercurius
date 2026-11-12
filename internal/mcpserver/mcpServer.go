@@ -163,17 +163,18 @@ type SessionStatusOutput struct {
 }
 
 type RoundStatusOutput struct {
-	RoundNumber   int                `json:"round_number"`
-	OpenedAt      string             `json:"opened_at"`
-	State         string             `json:"state"`
-	Reviewer      ReviewerInfoOutput `json:"reviewer"`
-	MaxFindings   int                `json:"max_findings"`
-	StatePath     string             `json:"state_path"`
-	LogPath       string             `json:"log_path,omitempty"`
-	CompletedAt   *string            `json:"completed_at"`
-	HasNotes      bool               `json:"has_notes"`
-	DecisionCount int                `json:"decision_count"`
-	Error         *ErrorOutput       `json:"error"`
+	RoundNumber    int                `json:"round_number"`
+	OpenedAt       string             `json:"opened_at"`
+	State          string             `json:"state"`
+	Reviewer       ReviewerInfoOutput `json:"reviewer"`
+	MaxFindings    int                `json:"max_findings"`
+	StatePath      string             `json:"state_path"`
+	LogPath        string             `json:"log_path,omitempty"`
+	CompletedAt    *string            `json:"completed_at"`
+	HasNotes       bool               `json:"has_notes"`
+	DecisionCount  int                `json:"decision_count"`
+	OutlivedServer bool               `json:"outlived_server"`
+	Error          *ErrorOutput       `json:"error"`
 }
 
 type ReviewerInfoOutput struct {
@@ -196,28 +197,38 @@ type ErrorOutput struct {
 	At      string         `json:"at,omitempty"`
 }
 
-// Paths locates the configuration a server resolves on every tool call.
-type Paths struct {
-	// ConfigPath is the project mercurius.yaml.
+// Options configures a server.
+type Options struct {
+	// ConfigPath is the project mercurius.yaml, resolved on every tool call.
 	ConfigPath string
 	// UserConfigPath is the user-level config. It is accepted and not yet read.
 	UserConfigPath string
+	// Launcher starts rounds. nil means the production launcher: each round in
+	// its own detached mercurius process.
+	Launcher runner.Launcher
 }
 
 // New creates an MCP server and its backing broker. It reads no configuration:
 // every tool call resolves it, so a missing or broken mercurius.yaml is a tool
 // error with a reason rather than a server that cannot start. The server's name
-// is the base name of the directory holding the project config path. Rounds run
-// in this process through the in-process launcher.
-func New(paths Paths) (*mcp.Server, *broker.Broker, error) {
-	configPath, err := config.ProjectPath(paths.ConfigPath)
+// is the base name of the directory holding the project config path.
+func New(options Options) (*mcp.Server, *broker.Broker, error) {
+	configPath, err := config.ProjectPath(options.ConfigPath)
 	if err != nil {
 		return nil, nil, err
 	}
+	launcher := options.Launcher
+	if launcher == nil {
+		processLauncher, err := runner.NewProcessLauncher()
+		if err != nil {
+			return nil, nil, err
+		}
+		launcher = processLauncher
+	}
 	b := broker.New(broker.Options{
 		ConfigPath:     configPath,
-		UserConfigPath: paths.UserConfigPath,
-		Launcher:       runner.NewInProcess(runner.BuildReviewer),
+		UserConfigPath: options.UserConfigPath,
+		Launcher:       launcher,
 	})
 	server := mcp.NewServer(&mcp.Implementation{Name: config.ProjectName(configPath), Version: build.String()}, nil)
 	RegisterTools(server, b)
@@ -388,7 +399,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "session_status",
-		Description: "return the current status of a Mercurius review session: every round with its state (running, completed, or failed), reviewer, finding limit, and any failure.",
+		Description: "return the current status of a Mercurius review session: every round with its state (running, completed, or failed), reviewer, finding limit, whether it outlived the server that started it, and any failure.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input SessionStatusInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.SessionStatus(ctx, input.SessionID)
 		if err != nil {
@@ -647,17 +658,18 @@ func roundStatusOutput(rounds []broker.RoundStatus) []RoundStatusOutput {
 	out := make([]RoundStatusOutput, 0, len(rounds))
 	for _, round := range rounds {
 		out = append(out, RoundStatusOutput{
-			RoundNumber:   round.RoundNumber,
-			OpenedAt:      formatTime(round.OpenedAt),
-			State:         round.State,
-			Reviewer:      reviewerInfoOutput(round.Reviewer),
-			MaxFindings:   round.MaxFindings,
-			StatePath:     round.StatePath,
-			LogPath:       round.LogPath,
-			CompletedAt:   formatTimePtr(round.CompletedAt),
-			HasNotes:      round.HasNotes,
-			DecisionCount: round.DecisionCount,
-			Error:         errorOutputPtr(round.Error),
+			RoundNumber:    round.RoundNumber,
+			OpenedAt:       formatTime(round.OpenedAt),
+			State:          round.State,
+			Reviewer:       reviewerInfoOutput(round.Reviewer),
+			MaxFindings:    round.MaxFindings,
+			StatePath:      round.StatePath,
+			LogPath:        round.LogPath,
+			CompletedAt:    formatTimePtr(round.CompletedAt),
+			HasNotes:       round.HasNotes,
+			DecisionCount:  round.DecisionCount,
+			OutlivedServer: round.OutlivedServer,
+			Error:          errorOutputPtr(round.Error),
 		})
 	}
 	return out

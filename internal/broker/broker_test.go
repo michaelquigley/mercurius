@@ -548,6 +548,9 @@ func TestLaunchRefusedWhileRoundRuns(t *testing.T) {
 	if be.Details["running_session_id"] != sessionA.SessionID || be.Details["running_round_number"] != 1 {
 		t.Fatalf("conflict must name the running round, got %+v", be)
 	}
+	if be.Details["started_by_this_server"] != true {
+		t.Fatalf("a round started by this process must say so: %+v", be.Details)
+	}
 	for _, key := range []string{"started_at", "running_for", "monitor_command", "next_action"} {
 		if _, ok := be.Details[key]; !ok {
 			t.Fatalf("conflict details missing %q: %+v", key, be.Details)
@@ -581,6 +584,35 @@ func TestLaunchRefusedWhileRoundRuns(t *testing.T) {
 	assertLockFree(t, h.logDest)
 	if _, err := h.startAndCollect(sessionB.SessionID, []Artifact{{Name: "design", Path: writeArtifactFile(t, "b")}}); err != nil {
 		t.Fatalf("launch after the running round finished: %v", err)
+	}
+}
+
+// the launch conflict says whether the running round was started by the
+// answering server, by comparing the lock note's server pid with its own.
+func TestLaunchConflictNamesAnotherServer(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, newScriptedReviewer(), baseConfig)
+	open, err := h.broker().OpenSession(ctx, OpenSessionRequest{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	lock, err := runlock.Take(h.logDest)
+	if err != nil {
+		t.Fatalf("take lock: %v", err)
+	}
+	defer lock.Release()
+	if err := lock.WriteNote(runlock.Note{SessionID: open.SessionID, RoundNumber: 1, ServerPID: os.Getpid() + 1, StartedAt: time.Now()}); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	_, err = h.broker().StartReviewRound(ctx, StartRoundRequest{
+		SessionID: open.SessionID,
+		Artifacts: []Artifact{{Name: "design", Path: writeArtifactFile(t, "x")}},
+	})
+	assertBrokerCode(t, err, CodeConflict)
+	var be *Error
+	errors.As(err, &be)
+	if be.Details["started_by_this_server"] != false {
+		t.Fatalf("a round started by another server must say so: %+v", be.Details)
 	}
 }
 

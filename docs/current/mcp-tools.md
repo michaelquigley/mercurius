@@ -58,7 +58,7 @@ Everything is checked before the round is handed to its runner, and a failure le
 - a closed session is a `conflict`; artifact problems are a `user_error`;
 - another round running anywhere in the project, in this session or any other, is a `conflict`.
 
-The launch `conflict` names the running round in its `details`: `running_session_id`, `running_round_number`, `started_at`, `running_for`, the `monitor_command` for that session, and a `next_action` saying to wait and then call `collect_round` on that session. The round is not lost; collect it rather than relaunching, and do not open a new session to get around the refusal.
+The launch `conflict` names the running round in its `details`: `running_session_id`, `running_round_number`, `started_at`, `running_for`, `runner_pid`, `started_by_this_server` (whether the server answering started it), the `monitor_command` for that session, and a `next_action` saying to wait and then call `collect_round` on that session. The round is not lost; collect it rather than relaunching, and do not open a new session to get around the refusal.
 
 A round that fails keeps its number and its directory, so a retry after a failed round 2 is round 3.
 
@@ -145,6 +145,7 @@ Returns a read-only session view: `session_id`, `state`, `opened_at`, `closed_at
 - `reviewer` (the block the round ran with) and `max_findings`;
 - `state_path` (its `_state.json`) and, once completed, `log_path` (its `_round.md`);
 - `has_notes` and `decision_count`;
+- `outlived_server`, true when the round finished after the server that started it was gone;
 - `error`, the stored failure of a failed round.
 
 A latest round marked running whose runner is gone is recorded as failed with `details.reason: runner_lost` before it is reported.

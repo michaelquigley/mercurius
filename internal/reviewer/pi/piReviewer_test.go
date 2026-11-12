@@ -28,13 +28,18 @@ func TestReviewerRunsPiWithArgsAndPrompt(t *testing.T) {
 		Model:      "openai-codex/gpt-5.5",
 		ExtraArgs:  []string{"--verbose"},
 	})
+	startedPID := 0
 	resp, err := r.Review(context.Background(), reviewer.ReviewRequest{
 		Prompt:     "review this prompt",
 		Schema:     schema.ReviewOutputSchema(),
 		WorkingDir: workingDir,
+		Started:    func(pid int) { startedPID = pid },
 	})
 	if err != nil {
 		t.Fatalf("review failed: %v", err)
+	}
+	if startedPID <= 0 {
+		t.Fatalf("Started was not called with the reviewer's pid: %d", startedPID)
 	}
 	if string(resp.Raw) != validReviewOutput() {
 		t.Fatalf("raw output mismatch:\n got: %s\nwant: %s", resp.Raw, validReviewOutput())

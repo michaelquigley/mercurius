@@ -6,10 +6,12 @@
 flowchart LR
     Human([Human])
     DA[Design Agent]
-    M{{Mercurius MCP server}}
-    B[Broker]
-    RN[Round runner]
-    R[Reviewer]
+    subgraph S[Server process]
+        M{{Mercurius MCP server}}
+        B[Broker]
+    end
+    RN[Runner process]
+    R[Reviewer process]
     FS[(Session directory)]
     MON[Monitor]
 
@@ -17,15 +19,23 @@ flowchart LR
     DA -- MCP tools --> M
     M --> B
     B -- reads and writes --> FS
-    B -- starts --> RN
-    RN --> R
+    B -- starts, detached --> RN
+    RN -- runs --> R
     RN -- writes the round --> FS
     MON -- reads --> FS
 ```
 
 The session directory is the only session state Mercurius has. The server holds nothing between tool calls: every tool call resolves the configuration, finds the session directory, reads what it needs, acts, and writes. Any server process can serve any session, so a session survives the server that opened it, and a session opened under one harness can be triaged and closed under another.
 
-The broker owns configuration resolution, prompt assembly, artifact snapshots, and the round's inputs. The round runner owns reviewer dispatch, validation, and the round's outcome. Reviewer implementations only run an underlying reviewer and return raw structured output. Rounds currently run inside the server process, in a goroutine started through the in-process launcher; a round therefore ends if the server process dies, and the next reader records it as lost (see The Runner Lock).
+The broker owns configuration resolution, prompt assembly, artifact snapshots, and the round's inputs. The round runner owns reviewer dispatch, validation, and the round's outcome. Reviewer implementations only run an underlying reviewer and return raw structured output.
+
+There are three kinds of process, and each lives exactly as long as its job:
+
+- The **server** is the MCP surface. It lives as long as the harness allows and holds only where its configuration lives.
+- The **runner** is one round. `start_review_round` starts it as a separate, detached mercurius process, and it lives until the round reaches an outcome, whether or not the server that started it is still there.
+- The **reviewer** is the runner's child: `codex`, `claude`, or `pi`.
+
+There is no protocol between the server and the runner; the round directory is the whole interface. See The Runner Process.
 
 ## Session and Round Model
 
@@ -50,18 +60,18 @@ Configuration is per round. The reviewer, `max_findings`, `review_context`, `rev
 7. Write this round's note into the lock file.
 8. Create `round-NN/`: snapshot the artifacts, write `_prompt.md` (the assembled prompt), `_config.yaml` (the exact project config bytes), and `_run.json` (the round's inputs).
 9. Write `_state.json` as `running`. The round exists from this moment.
-10. Hand the round directory and the lock to the runner, and return.
+10. Start the runner process, passing it the lock, close the server's own copy of the lock, and return.
 
 The runner then reads `_run.json` and `_prompt.md`, builds the reviewer from the reviewer block recorded in `_run.json`, dispatches it under the round timeout, validates the raw output against the JSON schema, readiness consistency, and the finding limit, and writes the outcome:
 
 - on success, `_review.json` and `_round.md`, then `_state.json` as `completed`;
 - on failure, whatever the reviewer produced to `_raw.txt`, then `_state.json` as `failed` with the stored error.
 
-`_state.json` is always written last, so a round that says `completed` has its outcome on disk. The runner releases the lock when it finishes.
+`_state.json` is always written last, so a round that says `completed` has its outcome on disk. Along the way the runner records its own pid (`runner_pid`) and, once the reviewer has started, the reviewer's (`reviewer_pid`) in `_state.json`, for the operator to read. At finish it records `outlived_server`: true when the server that prepared the round, named by `server_pid` in `_run.json`, is no longer the runner's parent. A round that outlived its server is one the old in-memory design would have lost. The runner releases the lock when it exits.
 
 ### The round timeout
 
-Every round is bounded by `reviewer.timeout` (default `20m`). When the deadline passes, the reviewer's context is cancelled and its process is killed. If the reviewer had already produced a valid review, the round completes with it: a finished review is not thrown away because its process failed to exit. Otherwise the round fails with `reviewer_failed` and `details.reason: timeout`. The default errs long on purpose; a timeout that fires early throws away a good review, while one that fires late only holds the lock a while longer.
+Every round is bounded by `reviewer.timeout` (default `20m`). When the deadline passes, the runner kills the reviewer's whole process group, so the reviewer's own children die with it. If the reviewer had already produced a valid review, the round completes with it: a finished review is not thrown away because its process failed to exit. Otherwise the round fails with `reviewer_failed` and `details.reason: timeout`. The default errs long on purpose; a timeout that fires early throws away a good review, while one that fires late only holds the lock a while longer.
 
 ### Failed rounds stay
 
@@ -82,7 +92,26 @@ The lock is therefore also the permission to write a running round's state; noth
 
 The guard is project-wide rather than per session on purpose. The path duplicate launches actually take is a new session: an agent loses the session id, or gets an error, opens a fresh session, and launches there. A per-session guard never sees that. The cost is that two harnesses cannot run reviews at the same moment in one project; separate worktrees each resolve their own log destination and so get their own lock.
 
-The lock file's content is a note about the current holder (`session_id`, `round_number`, `server_pid`, `started_at`). The note is rewritten in place through the held descriptor; the file is never replaced, because the lock belongs to the file's inode.
+The lock file's content is a note about the current holder (`session_id`, `round_number`, `server_pid`, `started_at`). The note is rewritten in place through the held descriptor; the file is never replaced, because the lock belongs to the file's inode. The launch `conflict` reports `started_by_this_server` by comparing the note's `server_pid` with the answering server's own, and `runner_pid` from the running round's state.
+
+The server takes the lock and hands it to the runner. The lock belongs to the open file description, so a child that inherits the descriptor shares it, and it is released when the last copy closes. Two rules keep exactly one holder:
+
+- **The server closes its copy after the handoff.** If it kept it, the lock would stay held for as long as the server lived, and every later launch in the project would be refused.
+- **The runner marks the inherited descriptor close-on-exec before it starts anything.** A descriptor passed to a child arrives without that flag; left clear, the reviewer would inherit the lock and hold it past the runner's death.
+
+## The Runner Process
+
+The server starts each round's runner as `mercurius run-round --round-dir <dir>`, a hidden subcommand of the same executable. The runner gets:
+
+- its own session and process group, so a harness taking down the server, or the server's process group, or sending it a hangup, does not take the round with it;
+- the null device on stdin, and `_runner.log` in the round directory for stdout and stderr, since a detached process has no terminal anyone will read;
+- the runner lock as its one inherited descriptor.
+
+The server waits on the runner in the background, so a runner that finishes while its server is alive is reaped rather than left a zombie. A runner whose server is gone is adopted and reaped by the system.
+
+The reviewer's life is tied to the runner's by the kernel. Each subprocess reviewer is started with a parent-death signal (`SIGKILL`) and as the leader of its own process group. When a runner dies, however it dies, its reviewer dies with it. The parent-death signal follows the thread that started the child, not the process, so the runner locks its goroutine to its OS thread for the whole round and runs the reviewer synchronously on it; otherwise the Go runtime could retire that thread and the kernel would kill a healthy reviewer. These are Linux arrangements; elsewhere the reviewer is started without them.
+
+Mercurius never signals a process by a pid it read from disk. The pids in `_state.json` are for the operator: to see what is running, or to kill a round deliberately. Pids get reused, and a round found dead days later would be hunting a number that now belongs to something else. The timeout's kill names the process group of the reviewer the runner itself just started, never a recorded pid.
 
 ## Prompt Ownership
 
@@ -92,6 +121,7 @@ The broker is the only owner of the prompt. Reviewers receive an assembled `Revi
 - `Artifacts`
 - `Schema`
 - `SessionMeta` (session id + round number)
+- `Started` (called with the reviewer subprocess's pid once it starts, which the runner records as `reviewer_pid`)
 
 The current prompt always includes these sections in order:
 
@@ -119,7 +149,7 @@ The assembled prompt is written to `<session_dir>/round-NN/_prompt.md` when the 
     session.json         the session's own facts: opened, closed
     _synopsis.md         written by close_session
     round-01/
-      _state.json        running, completed, or failed; timings; the stored error
+      _state.json        running, completed, or failed; timings; pids; outlived_server; the stored error
       _run.json          the round's inputs: reviewer, max_findings, calibration presence, manifest
       _config.yaml       the project's mercurius.yaml, verbatim
       _prompt.md
@@ -128,6 +158,7 @@ The assembled prompt is written to `<session_dir>/round-NN/_prompt.md` when the 
       _review.json       the outcome, on success
       _round.md
       _raw.txt           the reviewer's raw output, on failure
+      _runner.log        the runner's own log
       _notes.json        triage, written by record_round_notes
       _notes.md
 ```
@@ -154,7 +185,7 @@ The log is immutable after creation. Recording commentary and decisions through 
 
 ## Session Synopsis
 
-`close_session` writes a session-level summary at `<session>/_synopsis.md`, rendered from the session directory's machine files, so it works from any server process. The file opens with YAML frontmatter (session id, opened/closed timestamps, round count, and the failed-round count when any failed), followed by a skimmable Summary section, a Round outcomes table with one row per round (its state, reviewer, verdict, finding counts, decisions, and notes), and a per-round detail block that restates the round's state, reviewer, calibration presence, verdict, findings, decisions, and commentary. A failed round gets a row and a short detail block with its stored error and the path to `_raw.txt`. There is no session-level reviewer; the reviewer is reported per round. If a completed round's reviewer output fails to parse, the synopsis emits a stable fallback pointing at that round's `_review.json`. The per-round files remain the authoritative record.
+`close_session` writes a session-level summary at `<session>/_synopsis.md`, rendered from the session directory's machine files, so it works from any server process. The file opens with YAML frontmatter (session id, opened/closed timestamps, round count, and the failed-round count when any failed), followed by a skimmable Summary section, a Round outcomes table with one row per round (its state, reviewer, verdict, finding counts, decisions, and notes), and a per-round detail block that restates the round's state, reviewer, calibration presence, verdict, findings, decisions, and commentary. A failed round gets a row and a short detail block with its stored error and the path to `_raw.txt`. A round that outlived its server is marked in its detail block, and the frontmatter counts them (`outlived_server_count`); across an arc, that count is the evidence for how often a server dies under a running round. There is no session-level reviewer; the reviewer is reported per round. If a completed round's reviewer output fails to parse, the synopsis emits a stable fallback pointing at that round's `_review.json`. The per-round files remain the authoritative record.
 
 ## Reviewer Implementations
 
@@ -171,6 +202,7 @@ The three subprocess reviewers share two behaviors:
 
 - **Failures carry their output.** A failed process, or a clean exit whose output cannot be parsed, returns an error carrying the bytes the reviewer captured (stdout and stderr, and for codex the last-message file), instead of folding them into the error message. The runner writes those bytes to `_raw.txt`, so the stored error stays short.
 - **The wait is bounded.** Each reviewer's subprocess has a ten-second wait delay: once the reviewer exits or its deadline passes, Mercurius waits at most that long for its output pipes to close before closing them itself. Without it, a process the reviewer started could hold the pipes open and keep the round running indefinitely. A reviewer that wrote a valid result and exited, leaving a child behind, still completes its round. The child is not killed.
+- **The reviewer's life is the runner's.** On Linux each reviewer is started with a parent-death signal and as the leader of its own process group; the round timeout kills that group. See The Runner Process.
 
 The Codex reviewer runs `codex exec` with:
 

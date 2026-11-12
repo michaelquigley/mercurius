@@ -47,6 +47,7 @@ type SynopsisRound struct {
 	ReviewContextPresent bool
 	ReviewFocusPresent   bool
 	Failure              *SynopsisError
+	OutlivedServer       bool
 	RawPath              string
 	LogPath              string
 	NotesPath            string
@@ -91,6 +92,9 @@ func writeSynopsisFrontmatter(b *strings.Builder, entry SynopsisEntry) {
 	b.WriteString(fmt.Sprintf("round_count: %d\n", len(entry.Rounds)))
 	if failed := countFailed(entry.Rounds); failed > 0 {
 		b.WriteString(fmt.Sprintf("failed_round_count: %d\n", failed))
+	}
+	if outlived := countOutlived(entry.Rounds); outlived > 0 {
+		b.WriteString(fmt.Sprintf("outlived_server_count: %d\n", outlived))
 	}
 	b.WriteString("---\n\n")
 }
@@ -199,6 +203,9 @@ func writeSynopsisRound(b *strings.Builder, round SynopsisRound) {
 	}
 	if round.Failure != nil {
 		b.WriteString(fmt.Sprintf("- Failure: %s - %s\n", round.Failure.Code, round.Failure.Message))
+	}
+	if round.OutlivedServer {
+		b.WriteString("- Outlived its server: yes; the server that started this round was gone when it finished\n")
 	}
 	if round.RawPath != "" {
 		b.WriteString(fmt.Sprintf("- Raw output: %s\n", round.RawPath))
@@ -392,6 +399,16 @@ func pluralAdvisory(n int) string {
 		return "1 advisory note"
 	}
 	return fmt.Sprintf("%d advisory notes", n)
+}
+
+func countOutlived(rounds []SynopsisRound) int {
+	n := 0
+	for _, round := range rounds {
+		if round.OutlivedServer {
+			n++
+		}
+	}
+	return n
 }
 
 func countFailed(rounds []SynopsisRound) int {

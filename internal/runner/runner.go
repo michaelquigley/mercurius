@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -54,11 +55,14 @@ func NewInProcess(build ReviewerFactory) *InProcess {
 	return &InProcess{build: build}
 }
 
-// Launch starts Run for the round in a goroutine.
+// Launch starts Run for the round in a goroutine, locked to its OS thread for
+// the whole of Run, as the run-round command is.
 func (l *InProcess) Launch(roundDir string, lock *runlock.Lock) error {
 	l.wg.Add(1)
 	go func() {
 		defer l.wg.Done()
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
 		if err := Run(roundDir, lock, l.build); err != nil {
 			dl.Errorf("round '%s' did not record its outcome: %v", roundDir, err)
 		}
@@ -74,6 +78,11 @@ func (l *InProcess) Wait() {
 // Run executes the round in roundDir and writes its outcome and final state.
 // It returns an error only when the final state itself could not be written.
 // The lock is released when Run returns.
+//
+// The caller must lock the calling goroutine to its OS thread for the whole of
+// Run. Run dispatches the reviewer synchronously on this goroutine, and the
+// reviewer's parent-death signal follows the thread that started it: if the Go
+// runtime retired that thread, the kernel would kill a healthy reviewer.
 func Run(roundDir string, lock *runlock.Lock, build ReviewerFactory) error {
 	defer lock.Release()
 	if build == nil {
@@ -106,6 +115,10 @@ func (r *round) execute(build ReviewerFactory) error {
 	}
 	r.run = run
 
+	r.state.RunnerPID = os.Getpid()
+	r.touch()
+	dl.Infof("round '%s' running; runner pid '%d', reviewer '%s'", r.dir, r.state.RunnerPID, run.Reviewer.Name)
+
 	promptText, err := os.ReadFile(filepath.Join(r.dir, store.PromptFileName))
 	if err != nil {
 		return r.fail(store.CodeInternalError, "read round prompt", err, nil)
@@ -129,6 +142,11 @@ func (r *round) execute(build ReviewerFactory) error {
 		SessionMeta: reviewer.SessionMetadata{
 			SessionID:   run.SessionID,
 			RoundNumber: run.RoundNumber,
+		},
+		Started: func(pid int) {
+			r.state.ReviewerPID = pid
+			r.touch()
+			dl.Infof("reviewer started; pid '%d'", pid)
 		},
 	})
 	// a reviewer that returned a valid review completes its round even when the
@@ -195,7 +213,32 @@ func (r *round) execute(build ReviewerFactory) error {
 	r.state.UpdatedAt = now
 	r.state.CompletedAt = &now
 	r.state.Error = nil
-	return store.WriteState(r.dir, r.state)
+	return r.finish()
+}
+
+// touch writes the running state with what the runner has learned so far. A
+// failed write is logged and not fatal: the final write is what matters.
+func (r *round) touch() {
+	r.state.UpdatedAt = time.Now().UTC()
+	if err := store.WriteState(r.dir, r.state); err != nil {
+		dl.Errorf("write running state for '%s': %v", r.dir, err)
+	}
+}
+
+// finish records whether the round outlived its server and writes the final
+// state. The comparison is against the server pid recorded in _run.json, not
+// against a parent pid read at startup: a server that died before the runner's
+// first line would make both readings name the adopting process. Under the
+// in-process launcher the runner is the server, and the mark is false.
+func (r *round) finish() error {
+	if r.run.ServerPID > 0 && os.Getpid() != r.run.ServerPID {
+		r.state.OutlivedServer = os.Getppid() != r.run.ServerPID
+	}
+	if err := store.WriteState(r.dir, r.state); err != nil {
+		return err
+	}
+	dl.Infof("round '%s' %s; outlived its server '%t'", r.dir, r.state.State, r.state.OutlivedServer)
+	return nil
 }
 
 // keepRaw writes reviewer output to _raw.txt and points the error details at
@@ -222,7 +265,7 @@ func (r *round) fail(code string, message string, err error, details map[string]
 	r.state.UpdatedAt = now
 	r.state.CompletedAt = &now
 	r.state.Error = store.NewStoredError(code, message, cause, details, now)
-	return store.WriteState(r.dir, r.state)
+	return r.finish()
 }
 
 func reviewerArtifacts(manifest []store.ManifestEntry) []reviewer.Artifact {

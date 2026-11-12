@@ -16,9 +16,27 @@ var WaitDelay = 10 * time.Second
 
 // PrepareCommand applies the subprocess settings every subprocess reviewer
 // shares. The codex, claude, and pi reviewers call it on their exec.Cmd before
-// starting it.
+// starting it. On Linux it also ties the reviewer's life to the thread that
+// starts it and makes the reviewer lead its own process group, so a context
+// cancel kills the group; see prepareLifetime.
 func PrepareCommand(cmd *exec.Cmd) {
 	cmd.WaitDelay = WaitDelay
+	prepareLifetime(cmd)
+}
+
+// RunCommand prepares cmd, starts it, reports its pid through started when set,
+// and waits for it. The caller must run it on the goroutine whose OS thread is
+// locked for the reviewer's whole life: the parent-death signal follows the
+// thread that forked the child, not the process.
+func RunCommand(cmd *exec.Cmd, started func(pid int)) error {
+	PrepareCommand(cmd)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if started != nil {
+		started(cmd.Process.Pid)
+	}
+	return cmd.Wait()
 }
 
 // OutputError is a reviewer failure that carries the output the reviewer

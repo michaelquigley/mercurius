@@ -30,13 +30,18 @@ func TestReviewerRunsClaudeWithPromptSchemaAndArgs(t *testing.T) {
 		Model:      "sonnet",
 		ExtraArgs:  []string{"--debug"},
 	})
+	startedPID := 0
 	resp, err := r.Review(context.Background(), reviewer.ReviewRequest{
 		Prompt:     "review this prompt",
 		Schema:     reqSchema,
 		WorkingDir: workingDir,
+		Started:    func(pid int) { startedPID = pid },
 	})
 	if err != nil {
 		t.Fatalf("review failed: %v", err)
+	}
+	if startedPID <= 0 {
+		t.Fatalf("Started was not called with the reviewer's pid: %d", startedPID)
 	}
 	if string(resp.Raw) != validReviewOutput() {
 		t.Fatalf("raw output mismatch:\n got: %s\nwant: %s", resp.Raw, validReviewOutput())

@@ -70,7 +70,7 @@ func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (revi
 		return reviewer.ReviewResponse{}, errors.New("pi reviewer working directory is required")
 	}
 
-	stdout, stderr, runErr := r.run(ctx, req.WorkingDir, req.Prompt)
+	stdout, stderr, runErr := r.run(ctx, req.WorkingDir, req.Prompt, req.Started)
 
 	raw, err := extractReviewObject(stdout)
 	if err == nil {
@@ -103,7 +103,7 @@ func extractReviewObject(stdout []byte) (json.RawMessage, error) {
 	return raw, nil
 }
 
-func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string) ([]byte, []byte, error) {
+func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string, started func(pid int)) ([]byte, []byte, error) {
 	tempDir, err := os.MkdirTemp("", "mercurius-pi-*")
 	if err != nil {
 		return nil, nil, fmt.Errorf("create pi temp directory: %w", err)
@@ -128,9 +128,8 @@ func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string) ([
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	reviewer.PrepareCommand(cmd)
 
-	err = cmd.Run()
+	err = reviewer.RunCommand(cmd, started)
 	return stdout.Bytes(), stderr.Bytes(), err
 }
 

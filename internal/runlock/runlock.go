@@ -96,6 +96,17 @@ func flockOrClose(file *os.File) (*Lock, error) {
 	return &Lock{file: file}, nil
 }
 
+// FromFile rebuilds a held lock from a descriptor inherited across exec. The
+// descriptor shares the open file description that holds the lock, so taking
+// it again succeeds at once; if the description does not hold the lock and
+// another one does, this answers ErrHeld instead of pretending.
+func FromFile(file *os.File) (*Lock, error) {
+	if file == nil {
+		return nil, errors.New("runner lock descriptor is missing")
+	}
+	return flockOrClose(file)
+}
+
 // Release lets go of the lock by closing this descriptor. Safe on a nil lock
 // and safe to call more than once.
 func (l *Lock) Release() {

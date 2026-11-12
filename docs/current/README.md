@@ -23,7 +23,7 @@ Mercurius is a local MCP server that lets a design agent ask a reviewer, usually
 - Failed rounds stay on disk under their number with their stored error and raw output (`_raw.txt`); a round whose runner died is recorded as `runner_lost` by the next reader.
 - Codex, Claude, and pi reviewer implementations plus a dummy reviewer for tests and scaffolding.
 - Single-shot rounds: artifacts and findings are scoped to one round. Sessions are light groupings; no shared state flows between rounds in the same session.
-- Background rounds with `start_review_round` and `collect_round`, run inside the server process. Use `mercurius monitor --wait` to poll for completion; the monitor only reads.
+- Background rounds with `start_review_round` and `collect_round`, each run in its own detached runner process that survives the server and takes the reviewer down with it if it dies; the round records its pids and whether it outlived its server. Use `mercurius monitor --wait` to poll for completion; the monitor only reads.
 - Per-round artifact snapshots and markdown logs in a self-contained round directory; commentary and decisions land in `_notes.json` and `_notes.md`.
 - Six-tool MCP surface (`open_session`, `start_review_round`, `collect_round`, `record_round_notes`, `close_session`, `session_status`) and five stable error codes (`user_error`, `not_found`, `conflict`, `reviewer_failed`, `internal_error`).
 - Structured reviewer output with blocking findings (`concerns`, `questions`) and separate `advisory_notes`.

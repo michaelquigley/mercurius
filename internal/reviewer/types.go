@@ -16,6 +16,10 @@ type ReviewRequest struct {
 	Schema      json.RawMessage
 	WorkingDir  string
 	SessionMeta SessionMetadata
+	// Started, when set, is called with the reviewer process's pid once it has
+	// started. The runner records it for the operator; Mercurius never signals a
+	// process by a recorded pid.
+	Started func(pid int)
 }
 
 // Artifact identifies one design artifact under review.

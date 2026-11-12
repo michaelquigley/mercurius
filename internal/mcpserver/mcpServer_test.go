@@ -235,7 +235,11 @@ func TestServerStartsWithoutConfig(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	configPath := filepath.Join(dir, "mercurius.yaml")
-	server, _, err := New(Paths{ConfigPath: configPath, UserConfigPath: filepath.Join(dir, "user.yaml")})
+	server, _, err := New(Options{
+		ConfigPath:     configPath,
+		UserConfigPath: filepath.Join(dir, "user.yaml"),
+		Launcher:       inProcessLauncher(t),
+	})
 	if err != nil {
 		t.Fatalf("new server without a config: %v", err)
 	}
@@ -1072,4 +1076,14 @@ func reviewOutputWithAdvisoryOnly(t *testing.T) json.RawMessage {
 		t.Fatalf("marshal advisory review output: %v", err)
 	}
 	return raw
+}
+
+// inProcessLauncher runs rounds in this test process with the production
+// reviewer factory. The production process launcher would start this test
+// binary as the runner.
+func inProcessLauncher(t *testing.T) *runner.InProcess {
+	t.Helper()
+	launcher := runner.NewInProcess(runner.BuildReviewer)
+	t.Cleanup(launcher.Wait)
+	return launcher
 }
