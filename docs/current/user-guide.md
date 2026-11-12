@@ -62,15 +62,19 @@ Configure your MCP client to launch it:
 
 Mercurius speaks MCP over stdio. Logs go to stderr so stdout stays reserved for MCP messages.
 
+The server does not read `mercurius.yaml` when it starts; every tool call does. So the server comes up in a project with no config file, and the first tool call answers with a `user_error` naming the path it looked for. Write the file (`mercurius bootstrap` writes a starter) and call again; the harness does not need to reconnect.
+
+Sessions live on disk, not in the server's memory. If the harness restarts the server, or shuts it down while idle during a long triage, nothing is lost: the next tool call reads the session from its directory. You can even run a round in one harness and record notes and close the session in another.
+
 ## Open a Session
 
-Ask the design agent to open a Mercurius session. The session itself takes no inputs - the reviewer is fixed in `mercurius.yaml`, and artifacts are passed at round-start time:
+Ask the design agent to open a Mercurius session. The session itself takes no inputs: the reviewer and calibration are read from `mercurius.yaml` at the start of each round, and artifacts are passed at round-start time:
 
 ```json
 {}
 ```
 
-The response reports the session id, the configured `max_findings`, the bound reviewer, and `review_context_present` / `review_focus_present` booleans. Those booleans are an at-open snapshot of what the config held when the session opened; because calibration is re-read per round, they are informational rather than a guarantee for every later round.
+The response reports the session id and, as information about `mercurius.yaml` at that moment, the configured `max_findings`, the reviewer (or none, if the file has no `reviewer` block yet), and `review_context_present` / `review_focus_present` booleans. None of these is bound to the session. The reviewer, `max_findings`, and calibration are resolved again at the start of every round and recorded on that round, so the session's status and synopsis report the reviewer round by round.
 
 ## Run a Round
 
@@ -86,7 +90,7 @@ Ask the design agent to start a round, passing the artifacts under review:
 }
 ```
 
-Artifact paths must be absolute and readable by the Mercurius server. Artifact names become snapshot filenames, so keep them short and safe. Names cannot begin with `_`; that prefix is reserved for broker-emitted meta files (`_round.md`, `_prompt.md`, `_config.yaml`, `_notes.md`) inside the round directory.
+Artifact paths must be absolute and readable by the Mercurius server. Artifact names become snapshot filenames, so keep them short and safe. Names cannot begin with `_`; that prefix is reserved for broker-emitted meta files (`_state.json`, `_run.json`, `_round.md`, `_prompt.md`, `_config.yaml`, `_notes.md`, and the rest) inside the round directory.
 
 Real review rounds can take longer than the MCP client's timeout, so Mercurius runs the round in the background and returns immediately with a monitor command. Run it in a terminal:
 
@@ -95,6 +99,10 @@ mercurius monitor --config /absolute/path/to/mercurius.yaml --session s_... --wa
 ```
 
 When the monitor reports completion, re-engage the design agent and ask it to collect the round.
+
+One round runs at a time per project. If the agent starts a round while another is running, in this session or another, Mercurius refuses with a `conflict` that names the running round. That round is not lost: wait for it, then collect it.
+
+Each round has a timeout (`reviewer.timeout`, default `20m`). A round whose reviewer fails, produces invalid output, or runs past its timeout is recorded as failed and stays on disk under its number; `collect_round` reports the failure, and the reviewer's raw output, if any, is kept in the round's `_raw.txt`. The retry is the next round.
 
 ## Walk the Findings
 
@@ -130,13 +138,13 @@ Dispositions are `fixed`, `rejected`, or `deferred`:
 - `rejected`: disagreed with the finding.
 - `deferred`: agreed but explicitly not addressing now.
 
-Decision refs match a concern, question, or advisory_note id from this round. Decisions are written to a sibling `_notes.md` file inside the round directory; the immutable round log itself is not touched. Decisions do not carry forward into other rounds in the same session - each round starts cold.
+Decision refs match a concern, question, or advisory_note id from this round. Decisions are written to `_notes.json` and `_notes.md` inside the round directory; the immutable round log itself is not touched. A failed round takes no notes. Decisions do not carry forward into other rounds in the same session - each round starts cold.
 
 ## Decide Whether to Continue
 
 After a round is finalized, you and the agent have three natural options:
 
-- **Run another round in the same session**: the normal next pass - re-snapshot the updated artifacts and get a fresh review. Any edits you made to `mercurius.yaml` between rounds (calibration or guards) are picked up automatically, since the config is re-read at the start of each round.
+- **Run another round in the same session**: the normal next pass - re-snapshot the updated artifacts and get a fresh review. Any edits you made to `mercurius.yaml` between rounds (calibration, guards, the reviewer, or `max_findings`) are picked up automatically, since the config is re-read at the start of each round.
 - **Close the session and open a new one**: still available, but no longer necessary just to pick up YAML edits - closing and reopening used to be the only moment the config was re-read, and that is no longer the case.
 - **Stop**: the latest round verdict is `ready_to_build`, or the remaining findings are advisory / deferred / rejected and below the noise floor for your stated `review_context`.
 
@@ -148,4 +156,4 @@ Close the session with:
 { "session_id": "s_..." }
 ```
 
-There is no verdict on `close_session` - outcomes live on individual rounds. Closing a session marks the arc done and writes `<session>/_synopsis.md`, a tidy human-readable summary of every round (verdicts, findings, decisions, commentary). The path is returned as `synopsis_path` in the close response; open it when you want one durable artifact that describes what happened in this session without walking each round directory.
+There is no verdict on `close_session` - outcomes live on individual rounds. Closing a session marks the arc done and writes `<session>/_synopsis.md`, a tidy human-readable summary of every round, failed ones included (state, reviewer, verdicts, findings, decisions, commentary). The path is returned as `synopsis_path` in the close response; open it when you want one durable artifact that describes what happened in this session without walking each round directory.

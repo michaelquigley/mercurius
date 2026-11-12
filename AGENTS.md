@@ -8,7 +8,7 @@ See `docs/current/` for documentation that describes the current implementation.
 
 See `docs/future/` for deferred designs, speculative changes, and notes about behavior that is not implemented yet. Do not document future behavior in `docs/current/` until the code exists and tests cover the behavior.
 
-M1-M4 established the Go scaffold, reviewer interface, structured review schema, Codex subprocess reviewer, broker/session orchestration, prompt assembly, snapshotting, log writing, dummy reviewer test support, configuration loading, MCP stdio tool surface, background review rounds, CLI monitoring, review context, and advisory notes. The model was later simplified to single-shot rounds grouped under a lightweight session container; decisions log carry-forward, the convergence signal, the per-session budget, and the close_session verdict were removed in that pass.
+M1-M4 established the Go scaffold, reviewer interface, structured review schema, Codex subprocess reviewer, broker/session orchestration, prompt assembly, snapshotting, log writing, dummy reviewer test support, configuration loading, MCP stdio tool surface, background review rounds, CLI monitoring, review context, and advisory notes. The model was later simplified to single-shot rounds grouped under a lightweight session container; decisions log carry-forward, the convergence signal, the per-session budget, and the close_session verdict were removed in that pass. Sessions then moved onto disk: the server holds no session state between tool calls, reads `mercurius.yaml` per call rather than at startup, and records each round's inputs, state, and outcome as machine files in the round directory; one round runs at a time per log destination under a kernel lock, and rounds still run inside the server process.
 
 ## tech stack
 
@@ -23,14 +23,17 @@ M1-M4 established the Go scaffold, reviewer interface, structured review schema,
 ## package structure
 
 - `cmd/mercurius/` - binary entrypoint
-- `internal/broker/` - in-memory session and round orchestration
+- `internal/broker/` - the six session operations as functions over the session directory; holds no state between calls
 - `internal/config/` - `mercurius.yaml` loading, path resolution, and validation
 - `internal/mcpserver/` - MCP server construction, tool registration, and error mapping
 - `internal/prompt/` - standard review prompt assembly
 - `internal/reviewer/` - Reviewer interface and shared request/response types
 - `internal/reviewer/codex/` - Codex subprocess reviewer implementation
 - `internal/reviewer/dummy/` - in-process reviewer for tests
-- `internal/roundlog/` - markdown round log writer and notes updater
+- `internal/roundlog/` - markdown round log, notes, and session synopsis writers
+- `internal/runlock/` - the project-wide runner lock (`flock(2)` on `runner.lock`) and its note
+- `internal/runner/` - round execution from a round directory, the `Launcher` seam, the in-process launcher, and reviewer construction
+- `internal/store/` - on-disk session and round file shapes, atomic writes, paths, and the session id check
 - `internal/schema/` - structured review output JSON Schema and validation
 - `docs/current/` - complete documentation for the behavior implemented today
 - `docs/future/` - future-facing specs, work orders, ideas, and deferred designs

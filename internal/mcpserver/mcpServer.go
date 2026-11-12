@@ -10,11 +10,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/michaelquigley/mercurius/internal/broker"
 	"github.com/michaelquigley/mercurius/internal/config"
-	"github.com/michaelquigley/mercurius/internal/reviewer"
-	"github.com/michaelquigley/mercurius/internal/reviewer/claude"
-	"github.com/michaelquigley/mercurius/internal/reviewer/codex"
-	"github.com/michaelquigley/mercurius/internal/reviewer/dummy"
-	"github.com/michaelquigley/mercurius/internal/reviewer/pi"
+	"github.com/michaelquigley/mercurius/internal/runner"
 	"github.com/michaelquigley/mercurius/internal/schema"
 	"github.com/michaelquigley/push/build"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -32,13 +28,17 @@ type ArtifactInput struct {
 
 type OpenSessionInput struct{}
 
+// OpenSessionOutput describes a new session. max_findings, the calibration
+// presence flags, and reviewer describe the configuration at the moment of the
+// call, as information; they are not stored on the session. reviewer is null
+// when no reviewer is configured.
 type OpenSessionOutput struct {
-	SessionID            string             `json:"session_id"`
-	OpenedAt             string             `json:"opened_at"`
-	MaxFindings          int                `json:"max_findings"`
-	ReviewContextPresent bool               `json:"review_context_present"`
-	ReviewFocusPresent   bool               `json:"review_focus_present"`
-	Reviewer             ReviewerInfoOutput `json:"reviewer"`
+	SessionID            string              `json:"session_id"`
+	OpenedAt             string              `json:"opened_at"`
+	MaxFindings          int                 `json:"max_findings"`
+	ReviewContextPresent bool                `json:"review_context_present"`
+	ReviewFocusPresent   bool                `json:"review_focus_present"`
+	Reviewer             *ReviewerInfoOutput `json:"reviewer"`
 }
 
 type StartRoundInput struct {
@@ -84,28 +84,17 @@ type TriageAdvisoryOutput struct {
 	Suggestion   *string `json:"suggestion,omitempty"`
 }
 
+// StartReviewRoundOutput describes a round handed to its runner. status_path
+// points at the round's _state.json.
 type StartReviewRoundOutput struct {
-	SessionID      string `json:"session_id"`
-	RoundNumber    int    `json:"round_number"`
-	State          string `json:"state"`
-	Reviewer       string `json:"reviewer"`
-	StartedAt      string `json:"started_at"`
-	StatusPath     string `json:"status_path"`
-	MonitorCommand string `json:"monitor_command"`
-	NextAction     string `json:"next_action"`
-}
-
-type RoundJobOutput struct {
-	SessionID   string       `json:"session_id"`
-	RoundNumber int          `json:"round_number"`
-	State       string       `json:"state"`
-	Reviewer    string       `json:"reviewer"`
-	StartedAt   string       `json:"started_at"`
-	UpdatedAt   string       `json:"updated_at"`
-	CompletedAt *string      `json:"completed_at"`
-	LogPath     string       `json:"log_path,omitempty"`
-	StatusPath  string       `json:"status_path"`
-	Error       *ErrorOutput `json:"error"`
+	SessionID      string             `json:"session_id"`
+	RoundNumber    int                `json:"round_number"`
+	State          string             `json:"state"`
+	Reviewer       ReviewerInfoOutput `json:"reviewer"`
+	StartedAt      string             `json:"started_at"`
+	StatusPath     string             `json:"status_path"`
+	MonitorCommand string             `json:"monitor_command"`
+	NextAction     string             `json:"next_action"`
 }
 
 type CollectRoundInput struct {
@@ -162,33 +151,38 @@ type SessionStatusInput struct {
 	SessionID string `json:"session_id,omitempty"`
 }
 
+// SessionStatusOutput is a read-only session view. The reviewer, finding limit,
+// and any failure are reported per round.
 type SessionStatusOutput struct {
-	SessionID            string              `json:"session_id"`
-	State                string              `json:"state"`
-	OpenedAt             string              `json:"opened_at"`
-	ClosedAt             *string             `json:"closed_at"`
-	MaxFindings          int                 `json:"max_findings"`
-	ReviewContextPresent bool                `json:"review_context_present"`
-	ReviewFocusPresent   bool                `json:"review_focus_present"`
-	RoundCount           int                 `json:"round_count"`
-	Reviewer             ReviewerInfoOutput  `json:"reviewer"`
-	LastError            *ErrorOutput        `json:"last_error"`
-	ActiveRound          *RoundJobOutput     `json:"active_round"`
-	Rounds               []RoundStatusOutput `json:"rounds"`
+	SessionID  string              `json:"session_id"`
+	State      string              `json:"state"`
+	OpenedAt   string              `json:"opened_at"`
+	ClosedAt   *string             `json:"closed_at"`
+	RoundCount int                 `json:"round_count"`
+	Rounds     []RoundStatusOutput `json:"rounds"`
 }
 
 type RoundStatusOutput struct {
-	RoundNumber   int    `json:"round_number"`
-	OpenedAt      string `json:"opened_at"`
-	LogPath       string `json:"log_path"`
-	HasNotes      bool   `json:"has_notes"`
-	DecisionCount int    `json:"decision_count"`
+	RoundNumber   int                `json:"round_number"`
+	OpenedAt      string             `json:"opened_at"`
+	State         string             `json:"state"`
+	Reviewer      ReviewerInfoOutput `json:"reviewer"`
+	MaxFindings   int                `json:"max_findings"`
+	StatePath     string             `json:"state_path"`
+	LogPath       string             `json:"log_path,omitempty"`
+	CompletedAt   *string            `json:"completed_at"`
+	HasNotes      bool               `json:"has_notes"`
+	DecisionCount int                `json:"decision_count"`
+	Error         *ErrorOutput       `json:"error"`
 }
 
 type ReviewerInfoOutput struct {
-	Name  string `json:"name"`
-	Impl  string `json:"impl"`
-	Model string `json:"model,omitempty"`
+	Name       string   `json:"name"`
+	Impl       string   `json:"impl"`
+	Model      string   `json:"model,omitempty"`
+	BinaryPath string   `json:"binary_path,omitempty"`
+	ExtraArgs  []string `json:"extra_args,omitempty"`
+	Timeout    string   `json:"timeout"`
 }
 
 type ToolErrorOutput struct {
@@ -202,92 +196,32 @@ type ErrorOutput struct {
 	At      string         `json:"at,omitempty"`
 }
 
-// CalibrationProvider returns the calibration to attach to a round: the
-// review_context and review_focus prose, the settled-decisions guards, and the
-// raw config bytes that produced them (snapshotted per round as _config.yaml).
-// Production wiring re-reads mercurius.yaml on each call so edits between rounds
-// take effect on the next round without a server restart. A nil provider means
-// no calibration is attached (the round prompt's calibration sections stay
-// empty and no _config.yaml is written); this is fine for tests that don't
-// exercise calibration.
-type CalibrationProvider func(ctx context.Context) (reviewContext, reviewFocus string, settled []broker.SettledDecision, raw []byte, err error)
+// Paths locates the configuration a server resolves on every tool call.
+type Paths struct {
+	// ConfigPath is the project mercurius.yaml.
+	ConfigPath string
+	// UserConfigPath is the user-level config. It is accepted and not yet read.
+	UserConfigPath string
+}
 
-// New creates a configured MCP server and its backing broker.
-func New(cfg *config.Config) (*mcp.Server, *broker.Broker, error) {
-	if cfg == nil {
-		return nil, nil, errors.New("config is nil")
-	}
-	if err := cfg.Validate(); err != nil {
-		return nil, nil, err
-	}
-
-	options, err := BrokerOptions(cfg)
+// New creates an MCP server and its backing broker. It reads no configuration:
+// every tool call resolves it, so a missing or broken mercurius.yaml is a tool
+// error with a reason rather than a server that cannot start. The server's name
+// is the base name of the directory holding the project config path. Rounds run
+// in this process through the in-process launcher.
+func New(paths Paths) (*mcp.Server, *broker.Broker, error) {
+	configPath, err := config.ProjectPath(paths.ConfigPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	b := broker.New(options)
-	server := mcp.NewServer(&mcp.Implementation{Name: cfg.Name, Version: build.String()}, nil)
-	RegisterTools(server, b, ConfigCalibrationProvider(cfg.ConfigPath))
+	b := broker.New(broker.Options{
+		ConfigPath:     configPath,
+		UserConfigPath: paths.UserConfigPath,
+		Launcher:       runner.NewInProcess(runner.BuildReviewer),
+	})
+	server := mcp.NewServer(&mcp.Implementation{Name: config.ProjectName(configPath), Version: build.String()}, nil)
+	RegisterTools(server, b)
 	return server, b, nil
-}
-
-// BrokerOptions builds broker options from a project config. Calibration
-// (review_context, review_focus, settled_decisions) is intentionally not
-// included here; the MCP layer re-reads it per round via a CalibrationProvider
-// so YAML edits between rounds are picked up.
-func BrokerOptions(cfg *config.Config) (broker.Options, error) {
-	if cfg == nil {
-		return broker.Options{}, errors.New("config is nil")
-	}
-	if cfg.Reviewer == nil {
-		return broker.Options{}, errors.New("reviewer is required")
-	}
-
-	r, info, err := buildReviewer(cfg.Reviewer)
-	if err != nil {
-		return broker.Options{}, err
-	}
-
-	return broker.Options{
-		LogDestination: cfg.LogDestination,
-		ConfigPath:     cfg.ConfigPath,
-		MaxFindings:    cfg.MaxFindings,
-		Reviewer:       r,
-		ReviewerInfo:   info,
-	}, nil
-}
-
-// ConfigCalibrationProvider returns a CalibrationProvider that re-reads
-// mercurius.yaml at the given path on every call and returns its
-// review_context / review_focus / settled_decisions fields plus the exact bytes
-// it read. It reads the file once via config.LoadWithRaw, so the returned bytes
-// are exactly what produced the parsed calibration.
-func ConfigCalibrationProvider(configPath string) CalibrationProvider {
-	if configPath == "" {
-		return nil
-	}
-	return func(ctx context.Context) (string, string, []broker.SettledDecision, []byte, error) {
-		if err := ctx.Err(); err != nil {
-			return "", "", nil, nil, err
-		}
-		cfg, raw, err := config.LoadWithRaw(configPath)
-		if err != nil {
-			return "", "", nil, nil, err
-		}
-		return cfg.ReviewContext, cfg.ReviewFocus, brokerSettledDecisions(cfg.SettledDecisions), raw, nil
-	}
-}
-
-// brokerSettledDecisions maps config guards into the broker's shape.
-func brokerSettledDecisions(in []config.SettledDecision) []broker.SettledDecision {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]broker.SettledDecision, 0, len(in))
-	for _, d := range in {
-		out = append(out, broker.SettledDecision{ID: d.ID, DoNotFlag: d.DoNotFlag})
-	}
-	return out
 }
 
 // recordRoundNotesDispositions are the valid disposition values, surfaced on the
@@ -345,32 +279,15 @@ func recordRoundNotesInputSchema() *jsonschema.Schema {
 	}
 }
 
-// RegisterTools installs the Mercurius MCP tool surface. The provider is
-// consulted at the start of each round (and once at open_session for the
-// at-open presence snapshot) so calibration tracks mercurius.yaml edits without
-// a server restart.
-func RegisterTools(server *mcp.Server, b *broker.Broker, calibration CalibrationProvider) {
+// RegisterTools installs the Mercurius MCP tool surface. The broker resolves
+// the configuration on every call, so edits to mercurius.yaml take effect on the
+// next call without a server restart.
+func RegisterTools(server *mcp.Server, b *broker.Broker) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "open_session",
-		Description: "open a new Mercurius review session, a lightweight container for rounds. calibration (review_context, review_focus, settled_decisions) is not frozen here: it is re-read from mercurius.yaml at the start of every round, so edits between rounds take effect on the next round without restarting the server. the review_context_present and review_focus_present booleans on the response are an at-open snapshot only and are not a guarantee for later rounds. artifacts are not registered at session open; pass them to each start_review_round call.",
+		Description: "open a new Mercurius review session, a lightweight container for rounds. sessions live on disk, so any later server process can serve this session by its id. if mercurius.yaml is missing or unreadable this errors with code 'user_error' naming the path; write or fix the file and call again. the max_findings, review_context_present, review_focus_present, and reviewer fields describe the configuration at this moment, as information; they are not frozen on the session. calibration, the reviewer, and max_findings are re-read at the start of every round. artifacts are not registered at session open; pass them to each start_review_round call.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ OpenSessionInput) (*mcp.CallToolResult, any, error) {
-		var reviewContext, reviewFocus string
-		if calibration != nil {
-			rc, rf, _, _, err := calibration(ctx)
-			if err != nil {
-				return toolErrorResult(&broker.Error{
-					Code:    broker.CodeUserError,
-					Message: "reread mercurius.yaml",
-					Err:     err,
-				})
-			}
-			reviewContext = rc
-			reviewFocus = rf
-		}
-		response, err := b.OpenSession(ctx, broker.OpenSessionRequest{
-			ReviewContext: reviewContext,
-			ReviewFocus:   reviewFocus,
-		})
+		response, err := b.OpenSession(ctx, broker.OpenSessionRequest{})
 		if err != nil {
 			return toolErrorResult(err)
 		}
@@ -380,38 +297,17 @@ func RegisterTools(server *mcp.Server, b *broker.Broker, calibration Calibration
 			MaxFindings:          response.MaxFindings,
 			ReviewContextPresent: response.ReviewContextPresent,
 			ReviewFocusPresent:   response.ReviewFocusPresent,
-			Reviewer:             reviewerInfoOutput(response.Reviewer),
+			Reviewer:             reviewerInfoOutputPtr(response.Reviewer),
 		}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "start_review_round",
-		Description: "start one review round in the background and return immediately. artifacts are required and are scoped to this round only; nothing carries over between rounds in the same session. review_context, review_focus, and settled_decisions are re-read from mercurius.yaml at the start of this round, so edits between rounds take effect immediately with no session reopen. if the YAML is mid-edit or unreadable this errors with code 'user_error' and the session stays active; fix the file and start the round again. use the returned monitor_command to tell the user how to watch progress; the round may outlive the MCP client timeout.",
+		Description: "start one review round in the background and return immediately. artifacts are required and are scoped to this round only; nothing carries over between rounds in the same session. review_context, review_focus, settled_decisions, the reviewer, and max_findings are resolved from mercurius.yaml at the start of this round and recorded on it. if the YAML is missing, mid-edit, or names no reviewer this errors with code 'user_error' and nothing is started; fix the file and start the round again. one round runs at a time per project: if another round is running, in this session or any other, this errors with code 'conflict' naming that round; do not open a new session to get around it, tell the user and collect that round when it finishes. a failed round keeps its number, so a retry is the next round. use the returned monitor_command to tell the user how to watch progress; the round may outlive the MCP client timeout.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input StartRoundInput) (*mcp.CallToolResult, any, error) {
-		var reviewContext, reviewFocus string
-		var settled []broker.SettledDecision
-		var rawConfig []byte
-		if calibration != nil {
-			rc, rf, sd, raw, err := calibration(ctx)
-			if err != nil {
-				return toolErrorResult(&broker.Error{
-					Code:    broker.CodeUserError,
-					Message: "reread mercurius.yaml",
-					Err:     err,
-				})
-			}
-			reviewContext = rc
-			reviewFocus = rf
-			settled = sd
-			rawConfig = raw
-		}
 		response, err := b.StartReviewRound(ctx, broker.StartRoundRequest{
-			SessionID:        input.SessionID,
-			Artifacts:        artifactsFromInput(input.Artifacts),
-			ReviewContext:    reviewContext,
-			ReviewFocus:      reviewFocus,
-			SettledDecisions: settled,
-			RawConfig:        rawConfig,
+			SessionID: input.SessionID,
+			Artifacts: artifactsFromInput(input.Artifacts),
 		})
 		if err != nil {
 			return toolErrorResult(err)
@@ -420,7 +316,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker, calibration Calibration
 			SessionID:      response.SessionID,
 			RoundNumber:    response.RoundNumber,
 			State:          response.State,
-			Reviewer:       response.Reviewer,
+			Reviewer:       reviewerInfoOutput(response.Reviewer),
 			StartedAt:      formatTime(response.StartedAt),
 			StatusPath:     response.StatusPath,
 			MonitorCommand: response.MonitorCommand,
@@ -430,7 +326,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker, calibration Calibration
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "collect_round",
-		Description: "return a completed review round result with triage guidance. if the round is still running, this errors with code 'conflict'; tell the user to keep monitoring instead of retrying immediately. when findings are present, walk them one at a time, explaining each finding and its proposed solution clearly and briefly.",
+		Description: "return a completed review round result with triage guidance. if the round is still running, this errors with code 'conflict'; tell the user to keep monitoring instead of retrying immediately. if the round failed, this returns the stored failure as a tool error, for as long as the round directory exists; the reviewer's raw output, when there was any, is at details.raw_path. when findings are present, walk them one at a time, explaining each finding and its proposed solution clearly and briefly.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input CollectRoundInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.CollectRound(ctx, broker.CollectRoundRequest{
 			SessionID:   input.SessionID,
@@ -452,7 +348,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker, calibration Calibration
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "record_round_notes",
-		Description: "record commentary and human decisions for a completed round. each decision is {ref, disposition, note}; disposition must be one of 'fixed', 'rejected', or 'deferred'. include the full decisions array on the FIRST call rather than recording commentary first and decisions on a later call. notes land in a sibling _notes.md file inside the round directory; there is no separate close_round step. after this returns, pause and ask the user whether to start another round, open a new session, or stop; do not immediately call another Mercurius tool unless the user explicitly asks you to continue.",
+		Description: "record commentary and human decisions for a completed round; a failed or running round answers 'conflict'. each decision is {ref, disposition, note}; disposition must be one of 'fixed', 'rejected', or 'deferred'. include the full decisions array on the FIRST call rather than recording commentary first and decisions on a later call. notes land in _notes.json and its human twin _notes.md inside the round directory; there is no separate close_round step. after this returns, pause and ask the user whether to start another round, open a new session, or stop; do not immediately call another Mercurius tool unless the user explicitly asks you to continue.",
 		InputSchema: recordRoundNotesInputSchema(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RecordRoundNotesInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.RecordRoundNotes(ctx, broker.RecordRoundNotesRequest{
@@ -475,7 +371,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker, calibration Calibration
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "close_session",
-		Description: "close a Mercurius review session. sessions are light groupings of rounds; closure marks the arc done and writes a human-readable _synopsis.md at the session root that summarizes every round, its findings, and any recorded decisions. the synopsis_path field on the response points at that file.",
+		Description: "close a Mercurius review session. sessions are light groupings of rounds; closure marks the arc done and writes a human-readable _synopsis.md at the session root, rendered from disk, that summarizes every round - failed ones included - with its reviewer, findings, and any recorded decisions. the synopsis_path field on the response points at that file.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input CloseSessionInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.CloseSession(ctx, broker.CloseSessionRequest{
 			SessionID: input.SessionID,
@@ -492,7 +388,7 @@ func RegisterTools(server *mcp.Server, b *broker.Broker, calibration Calibration
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "session_status",
-		Description: "return the current status of a Mercurius review session",
+		Description: "return the current status of a Mercurius review session: every round with its state (running, completed, or failed), reviewer, finding limit, and any failure.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input SessionStatusInput) (*mcp.CallToolResult, any, error) {
 		response, err := b.SessionStatus(ctx, input.SessionID)
 		if err != nil {
@@ -500,34 +396,6 @@ func RegisterTools(server *mcp.Server, b *broker.Broker, calibration Calibration
 		}
 		return nil, sessionStatusOutput(response), nil
 	})
-}
-
-func buildReviewer(cfg *config.ReviewerConfig) (reviewer.Reviewer, broker.ReviewerInfo, error) {
-	info := broker.ReviewerInfo{Name: cfg.Name, Impl: cfg.Impl, Model: cfg.Model}
-	switch cfg.Impl {
-	case "codex":
-		return codex.New(codex.Options{
-			BinaryPath: cfg.BinaryPath,
-			Model:      cfg.Model,
-			ExtraArgs:  append([]string(nil), cfg.ExtraArgs...),
-		}), info, nil
-	case "claude":
-		return claude.New(claude.Options{
-			BinaryPath: cfg.BinaryPath,
-			Model:      cfg.Model,
-			ExtraArgs:  append([]string(nil), cfg.ExtraArgs...),
-		}), info, nil
-	case "pi":
-		return pi.New(pi.Options{
-			BinaryPath: cfg.BinaryPath,
-			Model:      cfg.Model,
-			ExtraArgs:  append([]string(nil), cfg.ExtraArgs...),
-		}), info, nil
-	case "dummy":
-		return dummy.New(), info, nil
-	default:
-		return nil, broker.ReviewerInfo{}, fmt.Errorf("reviewer '%s': unknown impl '%s'", cfg.Name, cfg.Impl)
-	}
 }
 
 func rpcError(err error) error {
@@ -766,41 +634,12 @@ func collectedRoundNextAction(triage RoundTriageOutput) string {
 
 func sessionStatusOutput(status broker.SessionStatusResponse) SessionStatusOutput {
 	return SessionStatusOutput{
-		SessionID:            status.SessionID,
-		State:                status.State,
-		OpenedAt:             formatTime(status.OpenedAt),
-		ClosedAt:             formatTimePtr(status.ClosedAt),
-		MaxFindings:          status.MaxFindings,
-		ReviewContextPresent: status.ReviewContextPresent,
-		ReviewFocusPresent:   status.ReviewFocusPresent,
-		RoundCount:           status.RoundCount,
-		Reviewer:             reviewerInfoOutput(status.Reviewer),
-		LastError:            errorOutputPtr(status.LastError),
-		ActiveRound:          roundJobOutputPtr(status.ActiveRound),
-		Rounds:               roundStatusOutput(status.Rounds),
-	}
-}
-
-func roundJobOutputPtr(status *broker.RoundStatusResponse) *RoundJobOutput {
-	if status == nil {
-		return nil
-	}
-	out := roundJobOutput(*status)
-	return &out
-}
-
-func roundJobOutput(status broker.RoundStatusResponse) RoundJobOutput {
-	return RoundJobOutput{
-		SessionID:   status.SessionID,
-		RoundNumber: status.RoundNumber,
-		State:       status.State,
-		Reviewer:    status.Reviewer,
-		StartedAt:   formatTime(status.StartedAt),
-		UpdatedAt:   formatTime(status.UpdatedAt),
-		CompletedAt: formatTimePtr(status.CompletedAt),
-		LogPath:     status.LogPath,
-		StatusPath:  status.StatusPath,
-		Error:       errorOutputPtr(status.Error),
+		SessionID:  status.SessionID,
+		State:      status.State,
+		OpenedAt:   formatTime(status.OpenedAt),
+		ClosedAt:   formatTimePtr(status.ClosedAt),
+		RoundCount: status.RoundCount,
+		Rounds:     roundStatusOutput(status.Rounds),
 	}
 }
 
@@ -810,16 +649,37 @@ func roundStatusOutput(rounds []broker.RoundStatus) []RoundStatusOutput {
 		out = append(out, RoundStatusOutput{
 			RoundNumber:   round.RoundNumber,
 			OpenedAt:      formatTime(round.OpenedAt),
+			State:         round.State,
+			Reviewer:      reviewerInfoOutput(round.Reviewer),
+			MaxFindings:   round.MaxFindings,
+			StatePath:     round.StatePath,
 			LogPath:       round.LogPath,
+			CompletedAt:   formatTimePtr(round.CompletedAt),
 			HasNotes:      round.HasNotes,
 			DecisionCount: round.DecisionCount,
+			Error:         errorOutputPtr(round.Error),
 		})
 	}
 	return out
 }
 
 func reviewerInfoOutput(r broker.ReviewerInfo) ReviewerInfoOutput {
-	return ReviewerInfoOutput{Name: r.Name, Impl: r.Impl, Model: r.Model}
+	return ReviewerInfoOutput{
+		Name:       r.Name,
+		Impl:       r.Impl,
+		Model:      r.Model,
+		BinaryPath: r.BinaryPath,
+		ExtraArgs:  append([]string(nil), r.ExtraArgs...),
+		Timeout:    r.Timeout.String(),
+	}
+}
+
+func reviewerInfoOutputPtr(r *broker.ReviewerInfo) *ReviewerInfoOutput {
+	if r == nil {
+		return nil
+	}
+	out := reviewerInfoOutput(*r)
+	return &out
 }
 
 func errorOutputPtr(info *broker.ErrorInfo) *ErrorOutput {

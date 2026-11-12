@@ -7,9 +7,11 @@ milestone: v0.1.x
 log:
   - stamp: 2026-08-18
     note: spec drawn — docs/future/session-rehydration.md
+  - stamp: 2026-11-10
+    note: spec redrawn as docs/future/sessions-on-disk.md, replacing the rehydration spec — docs/journal/2026-11-10.md
 ---
 
-make the broker's session registry survive process restarts: rehydrate a session lazily on registry miss from its on-disk record, write machine twins (`_review.json`, `_notes.json`) beside the human round documents, gate attachment with an owner-pid sentinel (takeover on death only), and add a `--no-rehydration` per-harness opt-out. the spec is `docs/future/session-rehydration.md`; work from it.
+move the session onto disk so the mcp server holds nothing between tool calls: no in-memory registry, a detached runner process per round that outlives the server, a project-wide runner lock that refuses a second launch and says why, failed rounds kept on disk, the reviewer and `max_findings` read per round, and the reviewer chosen once per installation in `~/.config/mercurius/config.yaml`. the spec is `docs/future/sessions-on-disk.md`; work from it.
 
 ## why
 

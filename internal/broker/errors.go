@@ -3,16 +3,19 @@ package broker
 import (
 	"errors"
 	"fmt"
+
+	"github.com/michaelquigley/mercurius/internal/store"
 )
 
 // Stable error codes. Five classes cover the operational surface: caller
-// inputs, addressing, state conflicts, reviewer failures, and broker bugs.
+// inputs, addressing, state conflicts, reviewer failures, and broker bugs. They
+// are defined in internal/store, beside the stored error a failed round carries.
 const (
-	CodeUserError      = "user_error"
-	CodeNotFound       = "not_found"
-	CodeConflict       = "conflict"
-	CodeReviewerFailed = "reviewer_failed"
-	CodeInternalError  = "internal_error"
+	CodeUserError      = store.CodeUserError
+	CodeNotFound       = store.CodeNotFound
+	CodeConflict       = store.CodeConflict
+	CodeReviewerFailed = store.CodeReviewerFailed
+	CodeInternalError  = store.CodeInternalError
 )
 
 // Error is a structured broker error ready for MCP wrapping.

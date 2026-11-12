@@ -77,12 +77,16 @@ func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (revi
 		return reviewer.ReviewResponse{Raw: raw, UsageNotes: r.usageNotes(stdout, stderr)}, nil
 	}
 
-	// no usable object. if the process itself failed, the captured output is the
-	// most useful diagnostic; otherwise surface the extraction failure directly.
+	// no usable object. if the process itself failed, that is the message;
+	// otherwise surface the extraction failure directly. either way the captured
+	// output is carried on the error, not in its message.
 	if runErr != nil {
-		return reviewer.ReviewResponse{}, fmt.Errorf("pi reviewer failed: %w%s", runErr, commandOutputSuffix(stdout, stderr))
+		err = fmt.Errorf("pi reviewer failed: %w", runErr)
 	}
-	return reviewer.ReviewResponse{}, err
+	return reviewer.ReviewResponse{}, reviewer.NewOutputError(err,
+		reviewer.OutputSection{Name: "stdout", Bytes: stdout},
+		reviewer.OutputSection{Name: "stderr", Bytes: stderr},
+	)
 }
 
 // extractReviewObject pulls the final assistant message out of the pi event stream
@@ -124,6 +128,7 @@ func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string) ([
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	reviewer.PrepareCommand(cmd)
 
 	err = cmd.Run()
 	return stdout.Bytes(), stderr.Bytes(), err
@@ -162,18 +167,4 @@ func (r *Reviewer) usageNotes(stdout []byte, stderr []byte) string {
 	parts = append(parts, fmt.Sprintf("stdout_bytes='%d'", len(stdout)))
 	parts = append(parts, fmt.Sprintf("stderr_bytes='%d'", len(stderr)))
 	return strings.Join(parts, ", ")
-}
-
-func commandOutputSuffix(stdout []byte, stderr []byte) string {
-	var parts []string
-	if text := strings.TrimSpace(string(stderr)); text != "" {
-		parts = append(parts, fmt.Sprintf("stderr: %s", text))
-	}
-	if text := strings.TrimSpace(string(stdout)); text != "" {
-		parts = append(parts, fmt.Sprintf("stdout: %s", text))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return "; " + strings.Join(parts, "; ")
 }

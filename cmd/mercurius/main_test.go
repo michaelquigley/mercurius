@@ -10,48 +10,236 @@ import (
 	"testing"
 	"time"
 
-	monitorpkg "github.com/michaelquigley/mercurius/internal/monitor"
+	"github.com/michaelquigley/mercurius/internal/runlock"
+	"github.com/michaelquigley/mercurius/internal/store"
 	"github.com/spf13/cobra"
 )
 
-func TestPrintStatusOmitsRemovedFields(t *testing.T) {
+func TestPrintMonitorView(t *testing.T) {
 	cmd, out := testCommand()
 	now := time.Date(2026, 5, 5, 19, 38, 10, 0, time.UTC)
 
-	printStatus(cmd, monitorpkg.SessionStatus{
-		SessionID:            "s_test",
-		State:                "active",
-		RoundCount:           1,
-		ReviewContextPresent: true,
-		ReviewFocusPresent:   true,
-		ActiveRound: &monitorpkg.RoundJob{
-			SessionID:   "s_test",
-			RoundNumber: 1,
-			State:       "running",
-			Reviewer:    "codex",
-			StartedAt:   now,
-			StatusPath:  "/tmp/status.json",
+	printMonitorView(cmd.OutOrStdout(), monitorView{
+		SessionID: "s_test",
+		State:     "active",
+		Rounds: []monitorRound{
+			{Number: 1, State: "failed", Reviewer: "codex", StartedAt: now, Error: &store.StoredError{Code: "reviewer_failed", Message: "reviewer failed"}},
+			{Number: 2, State: "completed", Reviewer: "codex", StartedAt: now},
+			{Number: 3, State: "running", Reviewer: "codex", StartedAt: now, StatePath: "/tmp/round-03/_state.json"},
 		},
 	})
 
 	got := out.String()
 	for _, want := range []string{
 		"session 's_test' active",
-		"rounds: 1",
-		"review context: present",
-		"review focus: present",
-		"active round: 1 running reviewer='codex'",
-		"monitor file: status='/tmp/status.json'",
+		"rounds: 3",
+		"round 1 failed reviewer='codex' started=2026-05-05T19:38:10Z",
+		"  error: reviewer_failed - reviewer failed",
+		"round 2 completed reviewer='codex'",
+		"round 3 running reviewer='codex'",
+		"  monitor file: state='/tmp/round-03/_state.json'",
 	} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("expected monitor status to contain %q:\n%s", want, got)
+			t.Fatalf("expected monitor output to contain %q:\n%s", want, got)
 		}
 	}
-	for _, banned := range []string{"budget", "convergence", "verdict", "events"} {
+	for _, banned := range []string{"budget", "convergence", "verdict", "events", "status.json"} {
 		if strings.Contains(got, banned) {
-			t.Fatalf("status should not contain %q:\n%s", banned, got)
+			t.Fatalf("monitor output should not contain %q:\n%s", banned, got)
 		}
 	}
+}
+
+// the monitor only reads. Against read-only directories it still reports a lost
+// round, which would fail a monitor that needed to write.
+func TestMonitorReportsLostRoundOnReadOnlyDirectories(t *testing.T) {
+	project, logDest, sessionID := monitorFixture(t, true)
+	setTreeWritable(t, logDest, false)
+	t.Cleanup(func() { setTreeWritable(t, logDest, true) })
+
+	out, err := runMonitor(t, project, "--session", sessionID)
+	if err != nil {
+		t.Fatalf("monitor on read-only directories: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "round 1 lost") {
+		t.Fatalf("expected the lost round to be reported:\n%s", out)
+	}
+}
+
+// the read-only run alone would pass a monitor that tried to write and ignored
+// the error. Against a writable log destination, every entry and every file's
+// contents must be the same afterward, and no lock file may appear.
+func TestMonitorLeavesLogDestinationUnchanged(t *testing.T) {
+	project, logDest, sessionID := monitorFixture(t, false)
+	before := snapshotTree(t, logDest)
+
+	for _, args := range [][]string{{"--session", sessionID}, {"--all"}, {"--session", sessionID, "--wait"}} {
+		out, err := runMonitor(t, project, args...)
+		if err != nil {
+			t.Fatalf("monitor %v: %v\n%s", args, err, out)
+		}
+		if !strings.Contains(out, "lost") {
+			t.Fatalf("monitor %v did not report the lost round:\n%s", args, out)
+		}
+	}
+	after := snapshotTree(t, logDest)
+	if len(before) != len(after) {
+		t.Fatalf("entries changed:\nbefore %v\nafter  %v", keys(before), keys(after))
+	}
+	for path, content := range before {
+		if after[path] != content {
+			t.Fatalf("'%s' changed", path)
+		}
+	}
+}
+
+// --wait watches the latest round's state until it reaches an outcome.
+func TestMonitorWaitsForRoundOutcome(t *testing.T) {
+	previous := monitorPollInterval
+	monitorPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { monitorPollInterval = previous })
+
+	project, logDest, sessionID := monitorFixture(t, true)
+	lock, err := runlock.TakeOnce(logDest)
+	if err != nil {
+		t.Fatalf("hold the lock as a live runner would: %v", err)
+	}
+	roundDir := store.RoundDir(store.SessionDir(logDest, sessionID), 1)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		state, _ := store.ReadState(roundDir)
+		now := time.Now().UTC()
+		state.State = store.RoundCompleted
+		state.CompletedAt = &now
+		_ = store.WriteState(roundDir, state)
+		lock.Release()
+	}()
+
+	out, err := runMonitor(t, project, "--session", sessionID, "--wait")
+	if err != nil {
+		t.Fatalf("monitor --wait: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "round 1 running") || !strings.Contains(out, "round 1 completed") {
+		t.Fatalf("expected the running round and then its completion:\n%s", out)
+	}
+	if !strings.Contains(out, "collect_round for session '"+sessionID+"' round 1") {
+		t.Fatalf("expected the next step to name the round:\n%s", out)
+	}
+}
+
+func TestMonitorRejectsUnsafeSessionID(t *testing.T) {
+	project, _, _ := monitorFixture(t, false)
+	out, err := runMonitor(t, project, "--session", "../x")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not found for an unsafe id, got err=%v\n%s", err, out)
+	}
+}
+
+// monitorFixture writes a project whose log destination holds one session with
+// round 1 marked running and the lock free: a lost round. withLockFile leaves a
+// runner.lock behind, as a dead runner would.
+func monitorFixture(t *testing.T, withLockFile bool) (string, string, string) {
+	t.Helper()
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "mercurius.yaml"), []byte("log_destination: reviews\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	logDest := filepath.Join(project, "reviews")
+	sessionID := "s_monitorTest1"
+	sessionDir := store.SessionDir(logDest, sessionID)
+	roundDir := store.RoundDir(sessionDir, 1)
+	if err := os.MkdirAll(roundDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := store.WriteSession(sessionDir, store.Session{SessionID: sessionID, OpenedAt: now, State: store.SessionActive}); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+	if err := store.WriteJSON(filepath.Join(roundDir, store.RunFileName), store.Run{SessionID: sessionID, RoundNumber: 1, Reviewer: store.RunReviewer{Name: "codex", Impl: "codex"}}); err != nil {
+		t.Fatalf("write run: %v", err)
+	}
+	if err := store.WriteState(roundDir, store.State{State: store.RoundRunning, StartedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	if withLockFile {
+		lock, err := runlock.TakeOnce(logDest)
+		if err != nil {
+			t.Fatalf("take lock: %v", err)
+		}
+		if err := lock.WriteNote(runlock.Note{SessionID: sessionID, RoundNumber: 1, StartedAt: now}); err != nil {
+			t.Fatalf("write note: %v", err)
+		}
+		lock.Release()
+	}
+	return project, logDest, sessionID
+}
+
+func runMonitor(t *testing.T, project string, args ...string) (string, error) {
+	t.Helper()
+	root := newRootCommand()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs(append([]string{"monitor", "--config", filepath.Join(project, "mercurius.yaml")}, args...))
+	err := root.ExecuteContext(context.Background())
+	return out.String(), err
+}
+
+func setTreeWritable(t *testing.T, root string, writable bool) {
+	t.Helper()
+	var dirs []string
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			dirs = append(dirs, path)
+		}
+		return nil
+	})
+	mode := os.FileMode(0o500)
+	if writable {
+		mode = 0o700
+	}
+	for _, dir := range dirs {
+		if err := os.Chmod(dir, mode); err != nil {
+			t.Fatalf("chmod %s: %v", dir, err)
+		}
+	}
+}
+
+// snapshotTree maps every entry under root to its type, mode, and contents.
+func snapshotTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		entry := info.Mode().String()
+		if !d.IsDir() {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			entry += "\n" + string(raw)
+		}
+		out[path] = entry
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	return out
+}
+
+func keys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func TestMonitorRejectsMissingLogDestination(t *testing.T) {
@@ -59,9 +247,6 @@ func TestMonitorRejectsMissingLogDestination(t *testing.T) {
 	cfgPath := filepath.Join(tmp, "mercurius.yaml")
 	if err := os.WriteFile(cfgPath, []byte(`
 log_destination: ./reviews
-reviewer:
-  name: dummy
-  impl: dummy
 `), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

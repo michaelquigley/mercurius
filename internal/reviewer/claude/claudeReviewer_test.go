@@ -3,13 +3,16 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/michaelquigley/mercurius/internal/reviewer"
 	"github.com/michaelquigley/mercurius/internal/schema"
@@ -114,10 +117,79 @@ func TestReviewerReturnsCommandFailureWithOutput(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected review error")
 	}
-	for _, want := range []string{"claude reviewer failed", "failure details"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("expected error to contain %q, got: %v", want, err)
+	if !strings.Contains(err.Error(), "claude reviewer failed") {
+		t.Fatalf("expected error to name the claude failure, got: %v", err)
+	}
+	// the captured output travels on the error, not in its message.
+	output := string(reviewer.CapturedOutput(err))
+	for _, want := range []string{"failure details", "boom"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected carried output to contain %q, got: %q", want, output)
 		}
+	}
+	if strings.Contains(err.Error(), "failure details") {
+		t.Fatalf("error message must not carry stderr: %v", err)
+	}
+}
+
+// a clean exit with output that is not an envelope is a failure that holds
+// output; the output must be carried on the error so the runner can keep it.
+func TestReviewerCarriesMalformedOutput(t *testing.T) {
+	helper := newFakeClaude(t, fakeClaudeOptions{
+		stdout: "this is not an envelope",
+	})
+	r := New(Options{BinaryPath: helper.binaryPath})
+
+	_, err := r.Review(context.Background(), reviewer.ReviewRequest{
+		Prompt:     "review",
+		Schema:     json.RawMessage(`{"type":"object"}`),
+		WorkingDir: t.TempDir(),
+	})
+	var outputErr *reviewer.OutputError
+	if !errors.As(err, &outputErr) {
+		t.Fatalf("expected an OutputError, got %T: %v", err, err)
+	}
+	if !strings.Contains(string(outputErr.Output), "this is not an envelope") {
+		t.Fatalf("carried output missing the malformed stdout: %q", outputErr.Output)
+	}
+}
+
+// a reviewer that leaves a child holding its stdout and stderr open must not
+// hold Review past the wait delay. without WaitDelay, Wait blocks until the
+// child closes the pipes, and this test fails on its deadline.
+func TestReviewerReturnsWhileChildHoldsPipes(t *testing.T) {
+	previous := reviewer.WaitDelay
+	reviewer.WaitDelay = 200 * time.Millisecond
+	t.Cleanup(func() { reviewer.WaitDelay = previous })
+	helper := newFakeClaude(t, fakeClaudeOptions{
+		stdout:  successEnvelope(validReviewOutput()),
+		lingers: true,
+	})
+	r := New(Options{BinaryPath: helper.binaryPath})
+
+	type result struct {
+		resp reviewer.ReviewResponse
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		resp, err := r.Review(context.Background(), reviewer.ReviewRequest{
+			Prompt:     "review",
+			Schema:     json.RawMessage(`{"type":"object"}`),
+			WorkingDir: t.TempDir(),
+		})
+		done <- result{resp, err}
+	}()
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("expected the result despite the lingering child: %v", got.err)
+		}
+		if string(got.resp.Raw) != validReviewOutput() {
+			t.Fatalf("raw output mismatch: %s", got.resp.Raw)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("review did not return while a child held its output pipes open")
 	}
 }
 
@@ -165,6 +237,7 @@ type fakeClaudeOptions struct {
 	stdout   string
 	stderr   string
 	exitCode int
+	lingers  bool
 }
 
 type fakeClaude struct {
@@ -196,6 +269,10 @@ fi
 if [ -n "${FAKE_CLAUDE_STDOUT:-}" ]; then
 	printf '%s' "$FAKE_CLAUDE_STDOUT"
 fi
+if [ -n "${FAKE_CLAUDE_LINGER_PID:-}" ]; then
+	sleep 60 &
+	printf '%s' "$!" > "$FAKE_CLAUDE_LINGER_PID"
+fi
 exit "${FAKE_CLAUDE_EXIT_CODE:-0}"
 `
 	if err := os.WriteFile(helper.binaryPath, []byte(script), 0o755); err != nil {
@@ -208,6 +285,13 @@ exit "${FAKE_CLAUDE_EXIT_CODE:-0}"
 	t.Setenv("FAKE_CLAUDE_STDOUT", options.stdout)
 	t.Setenv("FAKE_CLAUDE_STDERR", options.stderr)
 	t.Setenv("FAKE_CLAUDE_EXIT_CODE", strconv.Itoa(options.exitCode))
+	if options.lingers {
+		pidPath := filepath.Join(dir, "linger.pid")
+		t.Setenv("FAKE_CLAUDE_LINGER_PID", pidPath)
+		t.Cleanup(func() { killPidFile(pidPath) })
+	} else {
+		t.Setenv("FAKE_CLAUDE_LINGER_PID", "")
+	}
 
 	return helper
 }
@@ -278,4 +362,16 @@ func readFile(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(raw)
+}
+
+// killPidFile kills the child a fake binary left running, by the pid it
+// recorded.
+func killPidFile(path string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && pid > 0 {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	}
 }

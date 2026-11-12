@@ -6,12 +6,12 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/michaelquigley/mercurius/internal/broker"
-	"github.com/michaelquigley/mercurius/internal/config"
-	"github.com/michaelquigley/mercurius/internal/reviewer/claude"
+	"github.com/michaelquigley/mercurius/internal/runner"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -29,19 +29,25 @@ func TestReviewerRoundIntegration(t *testing.T) {
 		t.Skipf("claude binary %q not found: %v", binaryPath, err)
 	}
 
-	logDir := t.TempDir()
+	// the broker resolves its config per call, so the round's reviewer comes from
+	// a real mercurius.yaml naming the claude binary.
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "mercurius.yaml")
+	body := "log_destination: reviews\nreviewer:\n  name: claude\n  impl: claude\n  binary_path: " + resolved + "\n"
+	if model := os.Getenv("MERCURIUS_CLAUDE_MODEL"); model != "" {
+		body += "  model: " + model + "\n"
+	}
+	writeConfigFile(t, configPath, body)
+	launcher := runner.NewInProcess(runner.BuildReviewer)
+	t.Cleanup(launcher.Wait)
 	b := broker.New(broker.Options{
-		LogDestination: logDir,
-		MaxFindings:    config.DefaultMaxFindings,
-		Reviewer: claude.New(claude.Options{
-			BinaryPath: resolved,
-			Model:      os.Getenv("MERCURIUS_CLAUDE_MODEL"),
-		}),
-		ReviewerInfo: broker.ReviewerInfo{Name: "claude", Impl: "claude"},
+		ConfigPath:     configPath,
+		UserConfigPath: filepath.Join(dir, "user.yaml"),
+		Launcher:       launcher,
 	})
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "integration", Version: Version}, nil)
-	RegisterTools(server, b, nil)
+	RegisterTools(server, b)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()

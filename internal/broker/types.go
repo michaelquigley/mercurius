@@ -4,20 +4,20 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/michaelquigley/mercurius/internal/reviewer"
+	"github.com/michaelquigley/mercurius/internal/runner"
 )
 
-// Options configures a broker instance. Calibration (review_context,
-// review_focus, settled_decisions) is not cached on the broker; the MCP layer
-// re-reads it from mercurius.yaml at the start of every round and passes it in
-// via StartRoundRequest, so edits between rounds take effect on the next round
-// without a server restart.
+// Options configures a broker. The broker holds no session state: every
+// operation resolves the configuration from these paths and reads and writes
+// the session directory, so any broker on the same log destination can serve
+// any session.
 type Options struct {
-	LogDestination string
-	ConfigPath     string
-	MaxFindings    int
-	Reviewer       reviewer.Reviewer
-	ReviewerInfo   ReviewerInfo
+	// ConfigPath is the project mercurius.yaml.
+	ConfigPath string
+	// UserConfigPath is the user-level config. It is accepted and not yet read.
+	UserConfigPath string
+	// Launcher starts a prepared round.
+	Launcher runner.Launcher
 }
 
 // Artifact identifies one source artifact at the broker boundary.
@@ -26,25 +26,14 @@ type Artifact struct {
 	Path string
 }
 
-// OpenSessionRequest starts a new review session. ReviewContext and ReviewFocus
-// are used only to record the at-open presence snapshot on the response; they do
-// not calibrate rounds, because calibration is re-read from mercurius.yaml at the
-// start of every round (see StartRoundRequest).
-type OpenSessionRequest struct {
-	ReviewContext string
-	ReviewFocus   string
-}
+// OpenSessionRequest opens a new review session. It carries nothing: what
+// open_session reports about the configuration is read at the moment of the call.
+type OpenSessionRequest struct{}
 
-// SettledDecision is one operator-side guard carried into a round: a decision
-// already made that the reviewer must not re-raise. ID is operator-side and is
-// not rendered into the prompt; DoNotFlag is the instruction the reviewer acts
-// on.
-type SettledDecision struct {
-	ID        string
-	DoNotFlag string
-}
-
-// OpenSessionResponse describes a newly opened session.
+// OpenSessionResponse describes a newly opened session. MaxFindings, the
+// calibration presence flags, and Reviewer describe the configuration at the
+// moment of the call, as information; none of them is a property of the
+// session. Reviewer is nil when no reviewer is configured.
 type OpenSessionResponse struct {
 	SessionID            string
 	SessionDir           string
@@ -52,36 +41,30 @@ type OpenSessionResponse struct {
 	MaxFindings          int
 	ReviewContextPresent bool
 	ReviewFocusPresent   bool
-	Reviewer             ReviewerInfo
+	Reviewer             *ReviewerInfo
 }
 
-// StartRoundRequest runs a new round in the named session. ReviewContext,
-// ReviewFocus, and SettledDecisions are the calibration the MCP layer re-read
-// from mercurius.yaml for this round; RawConfig is the exact bytes it read,
-// snapshotted to the round directory as _config.yaml.
+// StartRoundRequest starts a new round in the named session. Calibration, the
+// reviewer, and max_findings are resolved from configuration when the round
+// starts and recorded on the round.
 type StartRoundRequest struct {
-	SessionID        string
-	Artifacts        []Artifact
-	ReviewContext    string
-	ReviewFocus      string
-	SettledDecisions []SettledDecision
-	RawConfig        []byte
+	SessionID string
+	Artifacts []Artifact
 }
 
-// StartReviewRoundResponse describes a background review round.
+// StartReviewRoundResponse describes a round that has been handed to its runner.
 type StartReviewRoundResponse struct {
 	SessionID      string
 	RoundNumber    int
 	State          string
-	Reviewer       string
+	Reviewer       ReviewerInfo
 	StartedAt      time.Time
 	StatusPath     string
-	EventsPath     string
 	MonitorCommand string
 	NextAction     string
 }
 
-// CollectedRoundResponse returns one successful round.
+// CollectedRoundResponse returns one completed round.
 type CollectedRoundResponse struct {
 	RoundNumber int
 	LogPath     string
@@ -89,23 +72,8 @@ type CollectedRoundResponse struct {
 	Reviewers   []ReviewerResult
 }
 
-// RoundStatusResponse describes a running or terminal review job. Embedded in
-// SessionStatusResponse; not exposed as an MCP tool.
-type RoundStatusResponse struct {
-	SessionID   string
-	RoundNumber int
-	State       string
-	Reviewer    string
-	StartedAt   time.Time
-	UpdatedAt   time.Time
-	CompletedAt *time.Time
-	LogPath     string
-	StatusPath  string
-	EventsPath  string
-	Error       *ErrorInfo
-}
-
-// CollectRoundRequest fetches a completed round result.
+// CollectRoundRequest fetches a round's outcome. RoundNumber zero means the
+// session's latest round.
 type CollectRoundRequest struct {
 	SessionID   string
 	RoundNumber int
@@ -156,46 +124,51 @@ type CloseSessionRequest struct {
 }
 
 // CloseSessionResponse describes a closed session. SynopsisPath points at the
-// session-level _synopsis.md written by the broker at close time.
+// session-level _synopsis.md rendered from disk at close time.
 type CloseSessionResponse struct {
 	SessionID    string
 	ClosedAt     time.Time
 	SynopsisPath string
 }
 
-// SessionStatusResponse is a read-only session view.
+// SessionStatusResponse is a read-only session view. There is no session-level
+// reviewer, limit, or error: those belong to rounds.
 type SessionStatusResponse struct {
-	SessionID            string
-	State                string
-	OpenedAt             time.Time
-	ClosedAt             *time.Time
-	MaxFindings          int
-	ReviewContextPresent bool
-	ReviewFocusPresent   bool
-	RoundCount           int
-	Reviewer             ReviewerInfo
-	LastError            *ErrorInfo
-	ActiveRound          *RoundStatusResponse
-	Rounds               []RoundStatus
+	SessionID  string
+	State      string
+	OpenedAt   time.Time
+	ClosedAt   *time.Time
+	RoundCount int
+	Rounds     []RoundStatus
 }
 
-// RoundStatus is a read-only round summary.
+// RoundStatus is a read-only round summary. Every round that was started is
+// listed, failed ones included.
 type RoundStatus struct {
 	RoundNumber   int
 	OpenedAt      time.Time
+	State         string
+	Reviewer      ReviewerInfo
+	MaxFindings   int
+	StatePath     string
 	LogPath       string
+	CompletedAt   *time.Time
 	HasNotes      bool
 	DecisionCount int
+	Error         *ErrorInfo
 }
 
-// ReviewerInfo describes the configured reviewer.
+// ReviewerInfo describes a resolved reviewer block.
 type ReviewerInfo struct {
-	Name  string
-	Impl  string
-	Model string
+	Name       string
+	Impl       string
+	Model      string
+	BinaryPath string
+	ExtraArgs  []string
+	Timeout    time.Duration
 }
 
-// ErrorInfo is a durable session-visible broker error summary.
+// ErrorInfo is a tool-visible broker error summary.
 type ErrorInfo struct {
 	Code    string
 	Message string

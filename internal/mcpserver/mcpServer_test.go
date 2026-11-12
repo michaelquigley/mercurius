@@ -8,13 +8,16 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/michaelquigley/mercurius/internal/broker"
 	"github.com/michaelquigley/mercurius/internal/config"
 	"github.com/michaelquigley/mercurius/internal/reviewer"
+	"github.com/michaelquigley/mercurius/internal/runner"
 	"github.com/michaelquigley/mercurius/internal/schema"
+	"github.com/michaelquigley/mercurius/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -63,7 +66,7 @@ func TestDummyReviewFlow(t *testing.T) {
 	if openOutput.MaxFindings != config.DefaultMaxFindings {
 		t.Fatalf("max findings = %d, want %d", openOutput.MaxFindings, config.DefaultMaxFindings)
 	}
-	if openOutput.Reviewer.Name != "dummy" {
+	if openOutput.Reviewer == nil || openOutput.Reviewer.Name != "dummy" || openOutput.Reviewer.Timeout != "20m0s" {
 		t.Fatalf("open reviewer = %+v", openOutput.Reviewer)
 	}
 
@@ -113,8 +116,12 @@ func TestDummyReviewFlow(t *testing.T) {
 	if statusOutput.RoundCount != 1 || len(statusOutput.Rounds) != 1 || !statusOutput.Rounds[0].HasNotes {
 		t.Fatalf("status output = %+v", statusOutput)
 	}
-	if statusOutput.Reviewer.Name != "dummy" || statusOutput.LastError != nil {
-		t.Fatalf("status diagnostics = %+v", statusOutput)
+	round := statusOutput.Rounds[0]
+	if round.State != "completed" || round.Reviewer.Name != "dummy" || round.MaxFindings != config.DefaultMaxFindings || round.Error != nil || round.CompletedAt == nil {
+		t.Fatalf("round status = %+v", round)
+	}
+	if filepath.Base(round.StatePath) != "_state.json" || filepath.Base(round.LogPath) != "_round.md" {
+		t.Fatalf("round paths = %+v", round)
 	}
 
 	closeResult, err := client.CallTool(ctx, &mcp.CallToolParams{
@@ -189,54 +196,79 @@ func TestArtifactNameValidationOnStartRound(t *testing.T) {
 	}
 }
 
-func TestFailedRoundReturnsToolErrorAndStatusLastError(t *testing.T) {
-	logDestination := filepath.Join(t.TempDir(), "reviews")
-	b := broker.New(broker.Options{
-		LogDestination: logDestination,
-		Reviewer:       failingReviewer{},
-		ReviewerInfo:   broker.ReviewerInfo{Name: "failing", Impl: "dummy"},
-	})
-	ctx, client := newTestClientWithBroker(t, b)
-	artifactPath := writeArtifact(t, "design.md", "# design\n")
+func TestFailedRoundReturnsToolErrorAndStatusShowsIt(t *testing.T) {
+	ctx, client, _ := newTestClientWith(t, failingReviewer{}, baseTestConfig)
+	sessionID, artifactPath := openTestSession(t, ctx, client)
 
-	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name:      "open_session",
-		Arguments: map[string]any{},
-	})
-	if err != nil {
-		t.Fatalf("open session: %v", err)
+	payload := startAndCollectRoundToolError(t, ctx, client, sessionID, artifactPath, broker.CodeReviewerFailed)
+	if payload.Details["round_number"] != float64(1) || payload.Details["state_path"] == nil {
+		t.Fatalf("failure details = %+v", payload.Details)
 	}
-	sessionID := decodeStructured[OpenSessionOutput](t, openResult).SessionID
-
-	startAndCollectRoundToolError(t, ctx, client, sessionID, artifactPath, broker.CodeReviewerFailed)
 
 	statusResult, err := client.CallTool(ctx, &mcp.CallToolParams{
-		Name: "session_status",
-		Arguments: map[string]any{
-			"session_id": sessionID,
-		},
+		Name:      "session_status",
+		Arguments: map[string]any{"session_id": sessionID},
 	})
 	if err != nil {
 		t.Fatalf("session status: %v", err)
 	}
 	status := decodeStructured[SessionStatusOutput](t, statusResult)
-	if status.RoundCount != 0 {
-		t.Fatalf("round count after failure = %d, want 0", status.RoundCount)
+	if status.RoundCount != 1 || status.Rounds[0].State != "failed" {
+		t.Fatalf("a failed round stays listed: %+v", status)
 	}
-	if status.LastError == nil || status.LastError.Code != broker.CodeReviewerFailed {
-		t.Fatalf("last error = %+v", status.LastError)
+	if status.Rounds[0].Error == nil || status.Rounds[0].Error.Code != broker.CodeReviewerFailed {
+		t.Fatalf("round error = %+v", status.Rounds[0].Error)
+	}
+
+	// the retry is the next round.
+	if started := startRoundTool(t, ctx, client, sessionID, artifactPath); started.RoundNumber != 2 {
+		t.Fatalf("retry round number = %d, want 2", started.RoundNumber)
+	}
+}
+
+// the server reads no configuration at startup. With no mercurius.yaml, a tool
+// call answers user_error naming the path; once the file is written, the same
+// client's next call succeeds with no reconnect.
+func TestServerStartsWithoutConfig(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "some-project")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	configPath := filepath.Join(dir, "mercurius.yaml")
+	server, _, err := New(Paths{ConfigPath: configPath, UserConfigPath: filepath.Join(dir, "user.yaml")})
+	if err != nil {
+		t.Fatalf("new server without a config: %v", err)
+	}
+	ctx, client := newTestClientForServer(t, server)
+	if name := client.InitializeResult().ServerInfo.Name; name != "some-project" {
+		t.Fatalf("server name = %q, want the project directory's name", name)
+	}
+
+	first, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
+	payload := assertToolError(t, first, err, broker.CodeUserError)
+	if payload.Details["config_path"] != configPath {
+		t.Fatalf("expected the error to name '%s', got %+v", configPath, payload)
+	}
+	if text := first.Content[0].(*mcp.TextContent).Text; !strings.Contains(text, configPath) {
+		t.Fatalf("expected the error text to name '%s', got %q", configPath, text)
+	}
+
+	writeConfigFile(t, configPath, baseTestConfig)
+	second, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
+	if err != nil || second.IsError {
+		t.Fatalf("open after writing the config: result=%+v err=%v", second, err)
+	}
+	sessionID := decodeStructured[OpenSessionOutput](t, second).SessionID
+	collected := startAndCollectRoundTool(t, ctx, client, sessionID, writeArtifact(t, "design.md", "# design\n"))
+	if collected.RoundNumber != 1 || collected.Reviewers[0].ReviewerName != "dummy" {
+		t.Fatalf("collected = %+v", collected)
 	}
 }
 
 func TestAsyncReviewTools(t *testing.T) {
 	reviewerImpl := newBlockingReviewer(validReviewOutput())
-	b := broker.New(broker.Options{
-		LogDestination: filepath.Join(t.TempDir(), "reviews"),
-		MaxFindings:    config.DefaultMaxFindings,
-		Reviewer:       reviewerImpl,
-		ReviewerInfo:   broker.ReviewerInfo{Name: "blocking", Impl: "dummy"},
-	})
-	ctx, client := newTestClientWithBroker(t, b)
+	ctx, client, _ := newTestClientWith(t, reviewerImpl, baseTestConfig)
+	t.Cleanup(reviewerImpl.release)
 	artifactPath := writeArtifact(t, "design.md", "# design\n")
 
 	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{
@@ -262,8 +294,11 @@ func TestAsyncReviewTools(t *testing.T) {
 		t.Fatalf("start review round: %v", err)
 	}
 	start := decodeStructured[StartReviewRoundOutput](t, startResult)
-	if start.RoundNumber != 1 || start.State != "running" || start.MonitorCommand == "" {
+	if start.RoundNumber != 1 || start.State != "running" || start.MonitorCommand == "" || start.Reviewer.Name != "dummy" {
 		t.Fatalf("start output = %+v", start)
+	}
+	if filepath.Base(start.StatusPath) != "_state.json" {
+		t.Fatalf("status path = %q, want the round's _state.json", start.StatusPath)
 	}
 	waitBlockingStarted(t, reviewerImpl)
 
@@ -276,9 +311,23 @@ func TestAsyncReviewTools(t *testing.T) {
 	})
 	assertToolError(t, collectResult, err, broker.CodeConflict)
 
+	// a second launch, even from a new session, is refused and names the round.
+	otherSession, _ := openTestSession(t, ctx, client)
+	refused, err := client.CallTool(ctx, &mcp.CallToolParams{
+		Name: "start_review_round",
+		Arguments: map[string]any{
+			"session_id": otherSession,
+			"artifacts":  []map[string]any{{"name": "design.md", "path": artifactPath}},
+		},
+	})
+	conflict := assertToolError(t, refused, err, broker.CodeConflict)
+	if conflict.Details["running_session_id"] != sessionID {
+		t.Fatalf("conflict must name the running session: %+v", conflict)
+	}
+
 	reviewerImpl.release()
 	var collected CollectedRoundOutput
-	deadline := time.After(time.Second)
+	deadline := time.After(5 * time.Second)
 	for {
 		collectResult, err = client.CallTool(ctx, &mcp.CallToolParams{
 			Name: "collect_round",
@@ -344,68 +393,35 @@ func TestCollectRoundTriageConcernFirst(t *testing.T) {
 // after mercurius.yaml had been edited. ConfigCalibrationProvider must observe
 // the current YAML on every open_session call.
 func TestOpenSessionRereadsConfig(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "mercurius.yaml")
-	writeConfig := func(body string) {
-		t.Helper()
-		if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
-			t.Fatalf("write config: %v", err)
-		}
-	}
+	ctx, client, configPath := newTestClientWith(t, fixedReviewer{raw: validReviewOutput()}, baseTestConfig+"review_context: |\n  first calibration\n")
 
-	writeConfig(`log_destination: ` + filepath.Join(dir, "reviews") + `
-review_context: |
-  first calibration
-reviewer:
-  name: dummy
-  impl: dummy
-`)
-
-	b := broker.New(broker.Options{
-		LogDestination: filepath.Join(dir, "reviews"),
-		MaxFindings:    config.DefaultMaxFindings,
-		Reviewer:       fixedReviewer{raw: validReviewOutput()},
-		ReviewerInfo:   broker.ReviewerInfo{Name: "dummy", Impl: "dummy"},
-	})
-	server := mcp.NewServer(&mcp.Implementation{Name: "test-project", Version: Version}, nil)
-	RegisterTools(server, b, ConfigCalibrationProvider(configPath))
-	ctx, client := newTestClientForServer(t, server)
-
-	// first open: context present
 	first, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
 	if err != nil {
 		t.Fatalf("open session 1: %v", err)
 	}
-	out1 := decodeStructured[OpenSessionOutput](t, first)
-	if !out1.ReviewContextPresent {
-		t.Fatalf("first open: expected review_context_present, got %+v", out1)
+	if out := decodeStructured[OpenSessionOutput](t, first); !out.ReviewContextPresent {
+		t.Fatalf("first open: expected review_context_present, got %+v", out)
 	}
 
-	// edit the yaml to drop review_context entirely
-	writeConfig(`log_destination: ` + filepath.Join(dir, "reviews") + `
-reviewer:
-  name: dummy
-  impl: dummy
-`)
+	// drop review_context and the reviewer: open still succeeds and reports both
+	// as absent.
+	writeConfigFile(t, configPath, "log_destination: reviews\n")
 	second, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
 	if err != nil {
 		t.Fatalf("open session 2: %v", err)
 	}
 	out2 := decodeStructured[OpenSessionOutput](t, second)
-	if out2.ReviewContextPresent {
-		t.Fatalf("second open: expected review_context absent after yaml edit, got %+v", out2)
+	if out2.ReviewContextPresent || out2.Reviewer != nil {
+		t.Fatalf("second open: expected review_context and reviewer absent after yaml edit, got %+v", out2)
 	}
 
 	// invalid yaml: open_session must surface a user_error instead of falling
 	// back to a stale value.
-	writeConfig("this: is: not: valid: yaml\n\t::broken")
+	writeConfigFile(t, configPath, "this: is: not: valid: yaml\n\t::broken")
 	third, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
-	if err != nil {
-		t.Fatalf("open session 3: %v", err)
-	}
-	payload := assertToolError(t, third, nil, broker.CodeUserError)
-	if !strings.Contains(payload.Message, "reread mercurius.yaml") {
-		t.Fatalf("expected 'reread mercurius.yaml' message, got %+v", payload)
+	payload := assertToolError(t, third, err, broker.CodeUserError)
+	if !strings.Contains(payload.Message, "read mercurius.yaml") {
+		t.Fatalf("expected 'read mercurius.yaml' message, got %+v", payload)
 	}
 }
 
@@ -414,24 +430,8 @@ reviewer:
 // round's prompt with no session reopen, and the round's _config.yaml must hold
 // the guard as it was written.
 func TestStartReviewRoundRereadsConfigLive(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "mercurius.yaml")
-	base := `log_destination: ` + filepath.Join(dir, "reviews") + `
-reviewer:
-  name: dummy
-  impl: dummy
-`
-	writeConfigFile(t, configPath, base)
-
-	b := broker.New(broker.Options{
-		LogDestination: filepath.Join(dir, "reviews"),
-		MaxFindings:    config.DefaultMaxFindings,
-		Reviewer:       fixedReviewer{raw: validReviewOutput()},
-		ReviewerInfo:   broker.ReviewerInfo{Name: "dummy", Impl: "dummy"},
-	})
-	server := mcp.NewServer(&mcp.Implementation{Name: "test-project", Version: Version}, nil)
-	RegisterTools(server, b, ConfigCalibrationProvider(configPath))
-	ctx, client := newTestClientForServer(t, server)
+	base := baseTestConfig
+	ctx, client, configPath := newTestClientWith(t, fixedReviewer{raw: validReviewOutput()}, base)
 
 	artifactPath := writeArtifact(t, "design.md", "# design\n")
 	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
@@ -469,24 +469,8 @@ reviewer:
 // unreadable YAML returns user_error, does not start a round, leaves the session
 // active, and a retry after the file is fixed succeeds.
 func TestStartReviewRoundFailsCleanlyOnBrokenConfig(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "mercurius.yaml")
-	valid := `log_destination: ` + filepath.Join(dir, "reviews") + `
-reviewer:
-  name: dummy
-  impl: dummy
-`
-	writeConfigFile(t, configPath, valid)
-
-	b := broker.New(broker.Options{
-		LogDestination: filepath.Join(dir, "reviews"),
-		MaxFindings:    config.DefaultMaxFindings,
-		Reviewer:       fixedReviewer{raw: validReviewOutput()},
-		ReviewerInfo:   broker.ReviewerInfo{Name: "dummy", Impl: "dummy"},
-	})
-	server := mcp.NewServer(&mcp.Implementation{Name: "test-project", Version: Version}, nil)
-	RegisterTools(server, b, ConfigCalibrationProvider(configPath))
-	ctx, client := newTestClientForServer(t, server)
+	valid := baseTestConfig
+	ctx, client, configPath := newTestClientWith(t, fixedReviewer{raw: validReviewOutput()}, valid)
 
 	artifactPath := writeArtifact(t, "design.md", "# design\n")
 	openResult, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session", Arguments: map[string]any{}})
@@ -505,12 +489,18 @@ reviewer:
 		},
 	})
 	payload := assertToolError(t, broken, err, broker.CodeUserError)
-	if !strings.Contains(payload.Message, "reread mercurius.yaml") {
-		t.Fatalf("expected 'reread mercurius.yaml' message, got %+v", payload)
+	if !strings.Contains(payload.Message, "read mercurius.yaml") {
+		t.Fatalf("expected 'read mercurius.yaml' message, got %+v", payload)
 	}
 
-	// the session must still be active with no round recorded.
+	// every tool resolves the config, so status answers the same user_error
+	// until the file is fixed.
 	statusResult, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "session_status", Arguments: map[string]any{"session_id": sessionID}})
+	assertToolError(t, statusResult, err, broker.CodeUserError)
+
+	// fix the file: the session is still active with no round recorded.
+	writeConfigFile(t, configPath, valid)
+	statusResult, err = client.CallTool(ctx, &mcp.CallToolParams{Name: "session_status", Arguments: map[string]any{"session_id": sessionID}})
 	if err != nil {
 		t.Fatalf("session status: %v", err)
 	}
@@ -522,8 +512,7 @@ reviewer:
 		t.Fatalf("round count = %d, want 0 (round must not start)", status.RoundCount)
 	}
 
-	// fix the file and retry; the round now runs.
-	writeConfigFile(t, configPath, valid)
+	// retry; the round now runs.
 	round := startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
 	if round.RoundNumber != 1 {
 		t.Fatalf("retry round number = %d, want 1", round.RoundNumber)
@@ -709,36 +698,43 @@ func TestCollectRoundTriageAdvisoryNotes(t *testing.T) {
 	}
 }
 
+const baseTestConfig = `log_destination: reviews
+reviewer:
+  name: dummy
+  impl: dummy
+`
+
 func newTestClient(t *testing.T) (context.Context, *mcp.ClientSession) {
 	t.Helper()
-
-	b := broker.New(broker.Options{
-		LogDestination: filepath.Join(t.TempDir(), "reviews"),
-		MaxFindings:    config.DefaultMaxFindings,
-		Reviewer:       fixedReviewer{raw: validReviewOutput()},
-		ReviewerInfo:   broker.ReviewerInfo{Name: "dummy", Impl: "dummy"},
-	})
-	return newTestClientWithBroker(t, b)
+	ctx, client, _ := newTestClientWith(t, fixedReviewer{raw: validReviewOutput()}, baseTestConfig)
+	return ctx, client
 }
 
 func newTestClientWithFixedReviewer(t *testing.T, raw json.RawMessage) (context.Context, *mcp.ClientSession) {
 	t.Helper()
-
-	b := broker.New(broker.Options{
-		LogDestination: filepath.Join(t.TempDir(), "reviews"),
-		MaxFindings:    config.DefaultMaxFindings,
-		Reviewer:       fixedReviewer{raw: raw},
-		ReviewerInfo:   broker.ReviewerInfo{Name: "triage", Impl: "dummy"},
-	})
-	return newTestClientWithBroker(t, b)
+	ctx, client, _ := newTestClientWith(t, fixedReviewer{raw: raw}, strings.Replace(baseTestConfig, "name: dummy", "name: triage", 1))
+	return ctx, client
 }
 
-func newTestClientWithBroker(t *testing.T, b *broker.Broker) (context.Context, *mcp.ClientSession) {
+// newTestClientWith writes a project mercurius.yaml and serves it through a
+// broker whose rounds run in process with r as the reviewer. It returns the
+// config path so a test can edit the file between calls.
+func newTestClientWith(t *testing.T, r reviewer.Reviewer, configBody string) (context.Context, *mcp.ClientSession, string) {
 	t.Helper()
-
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "mercurius.yaml")
+	writeConfigFile(t, configPath, configBody)
+	launcher := runner.NewInProcess(func(store.RunReviewer) (reviewer.Reviewer, error) { return r, nil })
+	t.Cleanup(launcher.Wait)
+	b := broker.New(broker.Options{
+		ConfigPath:     configPath,
+		UserConfigPath: filepath.Join(dir, "user.yaml"),
+		Launcher:       launcher,
+	})
 	server := mcp.NewServer(&mcp.Implementation{Name: "test-project", Version: Version}, nil)
-	RegisterTools(server, b, nil)
-	return newTestClientForServer(t, server)
+	RegisterTools(server, b)
+	ctx, client := newTestClientForServer(t, server)
+	return ctx, client, configPath
 }
 
 func newTestClientForServer(t *testing.T, server *mcp.Server) (context.Context, *mcp.ClientSession) {
@@ -781,6 +777,12 @@ func openTestSession(t *testing.T, ctx context.Context, client *mcp.ClientSessio
 
 func startAndCollectRoundTool(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string, artifactPath string) CollectedRoundOutput {
 	t.Helper()
+	started := startRoundTool(t, ctx, client, sessionID, artifactPath)
+	return collectRound(t, ctx, client, sessionID, started.RoundNumber)
+}
+
+func startRoundTool(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string, artifactPath string) StartReviewRoundOutput {
+	t.Helper()
 
 	result, err := client.CallTool(ctx, &mcp.CallToolParams{
 		Name: "start_review_round",
@@ -798,14 +800,13 @@ func startAndCollectRoundTool(t *testing.T, ctx context.Context, client *mcp.Cli
 	if result.IsError {
 		t.Fatalf("start review round returned tool error: %+v", result.StructuredContent)
 	}
-	started := decodeStructured[StartReviewRoundOutput](t, result)
-	return collectRound(t, ctx, client, sessionID, started.RoundNumber)
+	return decodeStructured[StartReviewRoundOutput](t, result)
 }
 
 func collectRound(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string, roundNumber int) CollectedRoundOutput {
 	t.Helper()
 
-	deadline := time.After(time.Second)
+	deadline := time.After(5 * time.Second)
 	for {
 		result, err := client.CallTool(ctx, &mcp.CallToolParams{
 			Name: "collect_round",
@@ -853,7 +854,7 @@ func startAndCollectRoundToolError(t *testing.T, ctx context.Context, client *mc
 	}
 	started := decodeStructured[StartReviewRoundOutput](t, result)
 
-	deadline := time.After(time.Second)
+	deadline := time.After(5 * time.Second)
 	for {
 		result, err = client.CallTool(ctx, &mcp.CallToolParams{
 			Name: "collect_round",
@@ -970,9 +971,11 @@ func (r fixedReviewer) Review(ctx context.Context, _ reviewer.ReviewRequest) (re
 }
 
 type blockingReviewer struct {
-	started  chan struct{}
-	releaseC chan struct{}
-	raw      json.RawMessage
+	started     chan struct{}
+	releaseC    chan struct{}
+	startOnce   sync.Once
+	releaseOnce sync.Once
+	raw         json.RawMessage
 }
 
 func newBlockingReviewer(raw json.RawMessage) *blockingReviewer {
@@ -984,7 +987,7 @@ func newBlockingReviewer(raw json.RawMessage) *blockingReviewer {
 }
 
 func (r *blockingReviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (reviewer.ReviewResponse, error) {
-	close(r.started)
+	r.startOnce.Do(func() { close(r.started) })
 	select {
 	case <-r.releaseC:
 		return reviewer.ReviewResponse{Raw: append(json.RawMessage(nil), r.raw...), UsageNotes: "blocking"}, nil
@@ -994,7 +997,7 @@ func (r *blockingReviewer) Review(ctx context.Context, req reviewer.ReviewReques
 }
 
 func (r *blockingReviewer) release() {
-	close(r.releaseC)
+	r.releaseOnce.Do(func() { close(r.releaseC) })
 }
 
 func waitBlockingStarted(t *testing.T, r *blockingReviewer) {
@@ -1069,25 +1072,4 @@ func reviewOutputWithAdvisoryOnly(t *testing.T) json.RawMessage {
 		t.Fatalf("marshal advisory review output: %v", err)
 	}
 	return raw
-}
-
-func TestBuildReviewerKnownImpls(t *testing.T) {
-	for _, impl := range []string{"codex", "claude", "pi", "dummy"} {
-		t.Run(impl, func(t *testing.T) {
-			r, info, err := buildReviewer(&config.ReviewerConfig{Name: impl, Impl: impl, Model: "m"})
-			if err != nil {
-				t.Fatalf("buildReviewer(%q): %v", impl, err)
-			}
-			if r == nil {
-				t.Fatalf("buildReviewer(%q) returned a nil reviewer", impl)
-			}
-			if info.Name != impl || info.Impl != impl {
-				t.Fatalf("reviewer info = %+v, want name and impl %q", info, impl)
-			}
-		})
-	}
-
-	if _, _, err := buildReviewer(&config.ReviewerConfig{Name: "x", Impl: "nope"}); err == nil {
-		t.Fatal("expected error for unknown impl")
-	}
 }

@@ -6,6 +6,7 @@
 .claude
 .codex
 .mercurius
+mercurius.yaml
 *.db
 CODEX-*.md
 node_modules

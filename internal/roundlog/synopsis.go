@@ -3,63 +3,72 @@ package roundlog
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/michaelquigley/mercurius/internal/schema"
 )
 
-// SynopsisEntry is the in-memory shape that WriteSynopsis renders into a
-// session-level _synopsis.md. The broker assembles one of these from session
-// state at close_session time.
+// SynopsisEntry is the shape WriteSynopsis renders into a session-level
+// _synopsis.md. The broker assembles one from the session directory at
+// close_session time. There is no session-level reviewer: the reviewer and
+// calibration are per round.
 type SynopsisEntry struct {
-	SessionID            string
-	OpenedAt             time.Time
-	ClosedAt             time.Time
-	Reviewer             SynopsisReviewer
-	ReviewContextPresent bool
-	ReviewFocusPresent   bool
-	LastError            *SynopsisError
-	Rounds               []SynopsisRound
+	SessionID string
+	OpenedAt  time.Time
+	ClosedAt  time.Time
+	Rounds    []SynopsisRound
 }
 
-// SynopsisReviewer describes the configured reviewer for the session.
+// SynopsisReviewer describes the reviewer one round ran with.
 type SynopsisReviewer struct {
 	Name  string
 	Impl  string
 	Model string
 }
 
-// SynopsisError captures the session's last broker error, if any.
+// SynopsisError captures a failed round's stored error.
 type SynopsisError struct {
 	Code    string
 	Message string
 }
 
-// SynopsisRound is the per-round material rendered in the detail section. When
-// Unparseable is true the writer falls back to a stable placeholder pointing at
-// the round log; concerns/questions/advisory/decisions/commentary are ignored
-// in that case.
+// SynopsisRound is the per-round material rendered in the outcomes table and
+// the detail section. A failed round carries Failure and gets a short detail
+// block. When Unparseable is true on a completed round the writer falls back to
+// a stable placeholder pointing at the round's _review.json; concerns,
+// questions, advisory notes, decisions, and commentary are ignored in that case.
 type SynopsisRound struct {
-	Number          int
-	OpenedAt        time.Time
-	LogPath         string
-	NotesPath       string
-	HasNotes        bool
-	Verdict         string
-	ReviewerName    string
-	ReviewerSummary string
-	Unparseable     bool
-	Concerns        []schema.Concern
-	Questions       []schema.Question
-	AdvisoryNotes   []schema.AdvisoryNote
-	Decisions       []Decision
-	Commentary      string
+	Number               int
+	OpenedAt             time.Time
+	State                string
+	Reviewer             SynopsisReviewer
+	ReviewContextPresent bool
+	ReviewFocusPresent   bool
+	Failure              *SynopsisError
+	RawPath              string
+	LogPath              string
+	NotesPath            string
+	HasNotes             bool
+	Verdict              string
+	ReviewerSummary      string
+	Unparseable          bool
+	Concerns             []schema.Concern
+	Questions            []schema.Question
+	AdvisoryNotes        []schema.AdvisoryNote
+	Decisions            []Decision
+	Commentary           string
 }
+
+const (
+	synopsisStateCompleted = "completed"
+	synopsisStateFailed    = "failed"
+)
 
 // WriteSynopsis writes a session-level synopsis markdown file. It is meant to
 // be the single durable artifact a reader (human or future agent) opens to
-// understand the arc of a closed session.
+// understand the arc of a closed session, failed rounds included.
 func WriteSynopsis(path string, entry SynopsisEntry) error {
 	var b strings.Builder
 
@@ -80,20 +89,8 @@ func writeSynopsisFrontmatter(b *strings.Builder, entry SynopsisEntry) {
 		b.WriteString(fmt.Sprintf("closed_at: %s\n", entry.ClosedAt.UTC().Format(time.RFC3339)))
 	}
 	b.WriteString(fmt.Sprintf("round_count: %d\n", len(entry.Rounds)))
-	b.WriteString("reviewer:\n")
-	b.WriteString(fmt.Sprintf("  name: %s\n", entry.Reviewer.Name))
-	if entry.Reviewer.Impl != "" {
-		b.WriteString(fmt.Sprintf("  impl: %s\n", entry.Reviewer.Impl))
-	}
-	if entry.Reviewer.Model != "" {
-		b.WriteString(fmt.Sprintf("  model: %s\n", entry.Reviewer.Model))
-	}
-	b.WriteString(fmt.Sprintf("review_context_present: %t\n", entry.ReviewContextPresent))
-	b.WriteString(fmt.Sprintf("review_focus_present: %t\n", entry.ReviewFocusPresent))
-	if entry.LastError != nil {
-		b.WriteString("last_error:\n")
-		b.WriteString(fmt.Sprintf("  code: %s\n", entry.LastError.Code))
-		b.WriteString(fmt.Sprintf("  message: %s\n", entry.LastError.Message))
+	if failed := countFailed(entry.Rounds); failed > 0 {
+		b.WriteString(fmt.Sprintf("failed_round_count: %d\n", failed))
 	}
 	b.WriteString("---\n\n")
 }
@@ -105,9 +102,11 @@ func writeSynopsisSummary(b *strings.Builder, entry SynopsisEntry) {
 		return
 	}
 
-	latestVerdict := entry.Rounds[len(entry.Rounds)-1].Verdict
-	if latestVerdict == "" {
-		latestVerdict = "unknown"
+	latestVerdict := "unknown"
+	for _, round := range entry.Rounds {
+		if round.State == synopsisStateCompleted && round.Verdict != "" {
+			latestVerdict = round.Verdict
+		}
 	}
 
 	totals := aggregateDispositions(entry.Rounds)
@@ -118,11 +117,16 @@ func writeSynopsisSummary(b *strings.Builder, entry SynopsisEntry) {
 		}
 	}
 
-	b.WriteString(fmt.Sprintf("Closed %s with reviewer '%s'. Latest verdict: '%s'.",
-		pluralRounds(len(entry.Rounds)),
-		entry.Reviewer.Name,
-		latestVerdict,
-	))
+	b.WriteString(fmt.Sprintf("Closed %s", pluralRounds(len(entry.Rounds))))
+	if failed := countFailed(entry.Rounds); failed > 0 {
+		b.WriteString(fmt.Sprintf(" (%d failed)", failed))
+	}
+	if names := reviewerNames(entry.Rounds); len(names) == 1 {
+		b.WriteString(fmt.Sprintf(" with reviewer '%s'", names[0]))
+	} else if len(names) > 1 {
+		b.WriteString(fmt.Sprintf(" with reviewers '%s'", strings.Join(names, "', '")))
+	}
+	b.WriteString(fmt.Sprintf(". Latest verdict: '%s'.", latestVerdict))
 	if totals.total() > 0 {
 		b.WriteString(fmt.Sprintf(" Decisions across all rounds: %s.", summarizeDispositions(totals)))
 	}
@@ -137,11 +141,11 @@ func writeSynopsisRoundOutcomes(b *strings.Builder, entry SynopsisEntry) {
 		return
 	}
 	b.WriteString("## Round outcomes\n\n")
-	b.WriteString("| round | opened_at | verdict | concerns | questions | advisory | decisions | notes |\n")
-	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- |\n")
+	b.WriteString("| round | opened_at | state | reviewer | verdict | concerns | questions | advisory | decisions | notes |\n")
+	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	for _, round := range entry.Rounds {
 		concerns, questions, advisory := "-", "-", "-"
-		if !round.Unparseable {
+		if round.State == synopsisStateCompleted && !round.Unparseable {
 			concerns = fmt.Sprintf("%d", len(round.Concerns))
 			questions = fmt.Sprintf("%d", len(round.Questions))
 			advisory = fmt.Sprintf("%d", len(round.AdvisoryNotes))
@@ -158,9 +162,11 @@ func writeSynopsisRoundOutcomes(b *strings.Builder, entry SynopsisEntry) {
 		if verdict == "" {
 			verdict = "-"
 		}
-		b.WriteString(fmt.Sprintf("| %02d | %s | %s | %s | %s | %s | %s | %s |\n",
+		b.WriteString(fmt.Sprintf("| %02d | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			round.Number,
 			round.OpenedAt.UTC().Format(time.RFC3339),
+			escapeTableCell(emptyDash(round.State)),
+			escapeTableCell(emptyDash(round.Reviewer.Name)),
 			escapeTableCell(verdict),
 			concerns,
 			questions,
@@ -185,8 +191,17 @@ func writeSynopsisRoundDetail(b *strings.Builder, entry SynopsisEntry) {
 func writeSynopsisRound(b *strings.Builder, round SynopsisRound) {
 	b.WriteString(fmt.Sprintf("### Round %02d\n\n", round.Number))
 	b.WriteString(fmt.Sprintf("- Opened: %s\n", round.OpenedAt.UTC().Format(time.RFC3339)))
+	b.WriteString(fmt.Sprintf("- State: %s\n", emptyDash(round.State)))
+	b.WriteString(fmt.Sprintf("- Reviewer: %s\n", formatSynopsisReviewer(round.Reviewer)))
+	b.WriteString(fmt.Sprintf("- Calibration: review_context %s, review_focus %s\n", presence(round.ReviewContextPresent), presence(round.ReviewFocusPresent)))
 	if round.Verdict != "" {
 		b.WriteString(fmt.Sprintf("- Verdict: %s\n", round.Verdict))
+	}
+	if round.Failure != nil {
+		b.WriteString(fmt.Sprintf("- Failure: %s - %s\n", round.Failure.Code, round.Failure.Message))
+	}
+	if round.RawPath != "" {
+		b.WriteString(fmt.Sprintf("- Raw output: %s\n", round.RawPath))
 	}
 	if round.LogPath != "" {
 		b.WriteString(fmt.Sprintf("- Log: %s\n", round.LogPath))
@@ -196,8 +211,11 @@ func writeSynopsisRound(b *strings.Builder, round SynopsisRound) {
 	}
 	b.WriteString("\n")
 
+	if round.State != synopsisStateCompleted {
+		return
+	}
 	if round.Unparseable {
-		b.WriteString(fmt.Sprintf("_reviewer output unparseable; see round-%02d/_round.md for raw JSON_\n\n", round.Number))
+		b.WriteString(fmt.Sprintf("_reviewer output unparseable; see round-%02d/_review.json for raw JSON_\n\n", round.Number))
 		return
 	}
 
@@ -374,6 +392,53 @@ func pluralAdvisory(n int) string {
 		return "1 advisory note"
 	}
 	return fmt.Sprintf("%d advisory notes", n)
+}
+
+func countFailed(rounds []SynopsisRound) int {
+	n := 0
+	for _, round := range rounds {
+		if round.State == synopsisStateFailed {
+			n++
+		}
+	}
+	return n
+}
+
+// reviewerNames returns the distinct reviewer names across the rounds, in the
+// order they first ran.
+func reviewerNames(rounds []SynopsisRound) []string {
+	var names []string
+	for _, round := range rounds {
+		if round.Reviewer.Name == "" || slices.Contains(names, round.Reviewer.Name) {
+			continue
+		}
+		names = append(names, round.Reviewer.Name)
+	}
+	return names
+}
+
+func formatSynopsisReviewer(r SynopsisReviewer) string {
+	if r.Name == "" {
+		return "-"
+	}
+	parts := []string{}
+	if r.Impl != "" {
+		parts = append(parts, fmt.Sprintf("impl '%s'", r.Impl))
+	}
+	if r.Model != "" {
+		parts = append(parts, fmt.Sprintf("model '%s'", r.Model))
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("'%s'", r.Name)
+	}
+	return fmt.Sprintf("'%s' (%s)", r.Name, strings.Join(parts, ", "))
+}
+
+func presence(present bool) string {
+	if present {
+		return "present"
+	}
+	return "absent"
 }
 
 func emptyDash(s string) string {

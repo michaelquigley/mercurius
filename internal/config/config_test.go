@@ -1,13 +1,15 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestLoadResolvesDefaultsAndPaths(t *testing.T) {
+func TestResolveResolvesDefaultsAndPaths(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfig(t, cfgPath, `
@@ -25,30 +27,38 @@ reviewer:
     - --ignore-user-config
 `)
 
-	cfg, err := Load(cfgPath)
+	resolved, err := Resolve(cfgPath, "")
 	if err != nil {
-		t.Fatalf("load config: %v", err)
+		t.Fatalf("resolve config: %v", err)
 	}
+	cfg := resolved.Project
 	if cfg.MaxFindings != DefaultMaxFindings {
 		t.Fatalf("max findings = %d, want %d", cfg.MaxFindings, DefaultMaxFindings)
 	}
 	if cfg.LogDestination != filepath.Join(dir, "reviews") {
 		t.Fatalf("log destination = %s", cfg.LogDestination)
 	}
-	if _, err := os.Stat(cfg.LogDestination); !os.IsNotExist(err) {
-		t.Fatalf("Load() created log destination as a side effect: stat err=%v", err)
+	if cfg.ConfigPath != cfgPath || cfg.Name != filepath.Base(dir) {
+		t.Fatalf("config path = %q, name = %q", cfg.ConfigPath, cfg.Name)
 	}
-	if err := cfg.EnsureLogDestination(); err != nil {
+	if _, err := os.Stat(cfg.LogDestination); !os.IsNotExist(err) {
+		t.Fatalf("Resolve() created log destination as a side effect: stat err=%v", err)
+	}
+	if err := EnsureLogDestination(cfg.LogDestination); err != nil {
 		t.Fatalf("ensure log destination: %v", err)
 	}
 	if _, err := os.Stat(cfg.LogDestination); err != nil {
 		t.Fatalf("expected log destination to be created by EnsureLogDestination: %v", err)
 	}
-	if cfg.Reviewer == nil {
+	reviewer := resolved.Reviewer
+	if reviewer == nil {
 		t.Fatal("expected reviewer to be populated")
 	}
-	if cfg.Reviewer.BinaryPath != filepath.Join(dir, "bin", "codex") {
-		t.Fatalf("binary path = %s", cfg.Reviewer.BinaryPath)
+	if reviewer.BinaryPath != filepath.Join(dir, "bin", "codex") {
+		t.Fatalf("binary path = %s", reviewer.BinaryPath)
+	}
+	if reviewer.Timeout != DefaultReviewerTimeout {
+		t.Fatalf("timeout = %s, want the default %s", reviewer.Timeout, DefaultReviewerTimeout)
 	}
 	if !strings.Contains(cfg.ReviewContext, "deployment: personal one-shot") {
 		t.Fatalf("review context = %q", cfg.ReviewContext)
@@ -56,12 +66,12 @@ reviewer:
 	if !strings.Contains(cfg.ReviewFocus, "flag unclear logging.") {
 		t.Fatalf("review focus = %q", cfg.ReviewFocus)
 	}
-	if cfg.Reviewer.ExtraArgs[0] != "--ignore-user-config" {
-		t.Fatalf("extra args not loaded: %+v", cfg.Reviewer.ExtraArgs)
+	if reviewer.ExtraArgs[0] != "--ignore-user-config" {
+		t.Fatalf("extra args not loaded: %+v", reviewer.ExtraArgs)
 	}
 }
 
-func TestLoadRejectsRenamedPromptOverrides(t *testing.T) {
+func TestResolveRejectsRenamedPromptOverrides(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfig(t, cfgPath, `
@@ -73,7 +83,7 @@ reviewer:
   impl: dummy
 `)
 
-	_, err := Load(cfgPath)
+	_, err := Resolve(cfgPath, "")
 	if err == nil {
 		t.Fatal("expected rename-guidance error")
 	}
@@ -82,7 +92,7 @@ reviewer:
 	}
 }
 
-func TestLoadRejectsRenamedReviewers(t *testing.T) {
+func TestResolveRejectsRenamedReviewers(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfig(t, cfgPath, `
@@ -92,7 +102,7 @@ reviewers:
     impl: dummy
 `)
 
-	_, err := Load(cfgPath)
+	_, err := Resolve(cfgPath, "")
 	if err == nil {
 		t.Fatal("expected rename-guidance error")
 	}
@@ -101,7 +111,7 @@ reviewers:
 	}
 }
 
-func TestLoadConfiguresMaxFindings(t *testing.T) {
+func TestResolveConfiguresMaxFindings(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfig(t, cfgPath, `
@@ -112,16 +122,16 @@ reviewer:
   impl: dummy
 `)
 
-	cfg, err := Load(cfgPath)
+	resolved, err := Resolve(cfgPath, "")
 	if err != nil {
-		t.Fatalf("load config: %v", err)
+		t.Fatalf("resolve config: %v", err)
 	}
-	if cfg.MaxFindings != 6 {
-		t.Fatalf("max findings = %d, want 6", cfg.MaxFindings)
+	if resolved.Project.MaxFindings != 6 {
+		t.Fatalf("max findings = %d, want 6", resolved.Project.MaxFindings)
 	}
 }
 
-func TestLoadAcceptsKnownImpls(t *testing.T) {
+func TestResolveAcceptsKnownImpls(t *testing.T) {
 	cases := []struct {
 		impl  string
 		model string
@@ -139,21 +149,21 @@ func TestLoadAcceptsKnownImpls(t *testing.T) {
 				body += "  model: " + test.model + "\n"
 			}
 			writeConfig(t, path, body)
-			cfg, err := Load(path)
+			resolved, err := Resolve(path, "")
 			if err != nil {
-				t.Fatalf("load config: %v", err)
+				t.Fatalf("resolve config: %v", err)
 			}
-			if cfg.Reviewer.Impl != test.impl {
-				t.Fatalf("impl = %q, want %q", cfg.Reviewer.Impl, test.impl)
+			if resolved.Reviewer.Impl != test.impl {
+				t.Fatalf("impl = %q, want %q", resolved.Reviewer.Impl, test.impl)
 			}
-			if cfg.Reviewer.Model != test.model {
-				t.Fatalf("model = %q, want %q", cfg.Reviewer.Model, test.model)
+			if resolved.Reviewer.Model != test.model {
+				t.Fatalf("model = %q, want %q", resolved.Reviewer.Model, test.model)
 			}
 		})
 	}
 }
 
-func TestLoadValidatesConfig(t *testing.T) {
+func TestResolveValidatesConfig(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
@@ -192,11 +202,15 @@ reviewer:
 			want: "unknown impl",
 		},
 		{
-			name: "missing reviewer",
+			name: "negative timeout",
 			body: `
 log_destination: ./reviews
+reviewer:
+  name: dummy
+  impl: dummy
+  timeout: -1m
 `,
-			want: "reviewer is required",
+			want: "timeout",
 		},
 	}
 
@@ -204,7 +218,7 @@ log_destination: ./reviews
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "mercurius.yaml")
 			writeConfig(t, path, test.body)
-			_, err := Load(path)
+			_, err := Resolve(path, "")
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -224,14 +238,14 @@ reviewer:
   name: dummy
   impl: dummy
 `)
-	cfg, err := Load(cfgPath)
+	resolved, err := Resolve(cfgPath, "")
 	if err != nil {
-		t.Fatalf("load: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	if err := cfg.EnsureLogDestination(); err != nil {
+	if err := EnsureLogDestination(resolved.Project.LogDestination); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
-	if _, err := os.Stat(cfg.LogDestination); err != nil {
+	if _, err := os.Stat(resolved.Project.LogDestination); err != nil {
 		t.Fatalf("expected directory to exist: %v", err)
 	}
 }
@@ -245,11 +259,11 @@ reviewer:
   name: dummy
   impl: dummy
 `)
-	cfg, err := Load(cfgPath)
+	resolved, err := Resolve(cfgPath, "")
 	if err != nil {
-		t.Fatalf("load: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	err = cfg.EnsureLogDestination()
+	err = EnsureLogDestination(resolved.Project.LogDestination)
 	if err == nil {
 		t.Fatal("expected missing-parent error")
 	}
@@ -267,7 +281,7 @@ func TestResolveHomePath(t *testing.T) {
 	}
 }
 
-func TestLoadParsesSettledDecisions(t *testing.T) {
+func TestResolveParsesSettledDecisions(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfig(t, cfgPath, `
@@ -283,10 +297,11 @@ reviewer:
   impl: dummy
 `)
 
-	cfg, err := Load(cfgPath)
+	resolved, err := Resolve(cfgPath, "")
 	if err != nil {
-		t.Fatalf("load config: %v", err)
+		t.Fatalf("resolve config: %v", err)
 	}
+	cfg := resolved.Project
 	if len(cfg.SettledDecisions) != 2 {
 		t.Fatalf("settled decisions = %d, want 2", len(cfg.SettledDecisions))
 	}
@@ -301,7 +316,7 @@ reviewer:
 	}
 }
 
-func TestLoadToleratesEmptyAndDuplicateGuards(t *testing.T) {
+func TestResolveToleratesEmptyAndDuplicateGuards(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfig(t, cfgPath, `
@@ -320,16 +335,16 @@ reviewer:
 	// an empty do_not_flag and duplicate ids must not fail the load: a guard
 	// should cost almost nothing to write, and a too-strict validator would
 	// fail rounds on trivial guard typos.
-	cfg, err := Load(cfgPath)
+	resolved, err := Resolve(cfgPath, "")
 	if err != nil {
-		t.Fatalf("load config: %v", err)
+		t.Fatalf("resolve config: %v", err)
 	}
-	if len(cfg.SettledDecisions) != 3 {
-		t.Fatalf("settled decisions = %d, want 3 (all tolerated)", len(cfg.SettledDecisions))
+	if len(resolved.Project.SettledDecisions) != 3 {
+		t.Fatalf("settled decisions = %d, want 3 (all tolerated)", len(resolved.Project.SettledDecisions))
 	}
 }
 
-func TestLoadWithRawReturnsExactBytes(t *testing.T) {
+func TestResolveReturnsExactBytes(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mercurius.yaml")
 	body := `log_destination: ./reviews
@@ -342,15 +357,62 @@ reviewer:
 `
 	writeConfig(t, cfgPath, body)
 
-	cfg, raw, err := LoadWithRaw(cfgPath)
+	resolved, err := Resolve(cfgPath, "")
 	if err != nil {
-		t.Fatalf("load with raw: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	if cfg == nil {
-		t.Fatal("expected config")
+	if string(resolved.Raw) != body {
+		t.Fatalf("raw bytes do not match file content:\n--- got ---\n%s\n--- want ---\n%s", resolved.Raw, body)
 	}
-	if string(raw) != body {
-		t.Fatalf("raw bytes do not match file content:\n--- got ---\n%s\n--- want ---\n%s", raw, body)
+}
+
+// a project with no reviewer resolves: open_session reports none, and only
+// start_review_round turns the absence into an error.
+func TestResolveWithoutReviewer(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "mercurius.yaml")
+	writeConfig(t, cfgPath, "log_destination: ./reviews\n")
+	resolved, err := Resolve(cfgPath, "")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if resolved.Reviewer != nil {
+		t.Fatalf("reviewer = %+v, want none", resolved.Reviewer)
+	}
+}
+
+func TestResolveParsesReviewerTimeout(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "mercurius.yaml")
+	writeConfig(t, cfgPath, "reviewer:\n  name: dummy\n  impl: dummy\n  timeout: 7m30s\n")
+	resolved, err := Resolve(cfgPath, "")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if resolved.Reviewer.Timeout != 7*time.Minute+30*time.Second {
+		t.Fatalf("timeout = %s, want 7m30s", resolved.Reviewer.Timeout)
+	}
+}
+
+func TestResolveMissingFileNamesPath(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "mercurius.yaml")
+	_, err := Resolve(cfgPath, "")
+	if err == nil {
+		t.Fatal("expected an error for a missing config")
+	}
+	if !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), cfgPath) {
+		t.Fatalf("expected a not-exist error naming '%s', got %v", cfgPath, err)
+	}
+}
+
+// the user-level path is accepted and not read yet: a broken file there must
+// not affect resolution.
+func TestResolveDoesNotReadUserConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mercurius.yaml")
+	userPath := filepath.Join(dir, "user.yaml")
+	writeConfig(t, cfgPath, "reviewer:\n  name: dummy\n  impl: dummy\n")
+	writeConfig(t, userPath, "this: is: not: valid: yaml\n\t::broken")
+	if _, err := Resolve(cfgPath, userPath); err != nil {
+		t.Fatalf("resolve: %v", err)
 	}
 }
 

@@ -18,23 +18,19 @@ func TestWriteSynopsisRendersAllSections(t *testing.T) {
 		SessionID: "s_synopsis_test",
 		OpenedAt:  time.Date(2026, 5, 12, 17, 51, 9, 0, time.UTC),
 		ClosedAt:  time.Date(2026, 5, 12, 18, 30, 0, 0, time.UTC),
-		Reviewer: SynopsisReviewer{
-			Name:  "codex",
-			Impl:  "codex",
-			Model: "gpt-5.5",
-		},
-		ReviewContextPresent: true,
-		ReviewFocusPresent:   true,
 		Rounds: []SynopsisRound{
 			{
-				Number:          1,
-				OpenedAt:        time.Date(2026, 5, 12, 17, 51, 16, 0, time.UTC),
-				LogPath:         "round-01/_round.md",
-				NotesPath:       "round-01/_notes.md",
-				HasNotes:        true,
-				Verdict:         "needs_changes",
-				ReviewerName:    "codex",
-				ReviewerSummary: "the artifacts are close but not yet ship-ready.",
+				Number:               1,
+				OpenedAt:             time.Date(2026, 5, 12, 17, 51, 16, 0, time.UTC),
+				State:                "completed",
+				Reviewer:             SynopsisReviewer{Name: "codex", Impl: "codex", Model: "gpt-5.5"},
+				ReviewContextPresent: true,
+				ReviewFocusPresent:   true,
+				LogPath:              "round-01/_round.md",
+				NotesPath:            "round-01/_notes.md",
+				HasNotes:             true,
+				Verdict:              "needs_changes",
+				ReviewerSummary:      "the artifacts are close but not yet ship-ready.",
 				Concerns: []schema.Concern{{
 					ID:         "C-1",
 					Severity:   "major",
@@ -62,11 +58,20 @@ func TestWriteSynopsisRendersAllSections(t *testing.T) {
 				Commentary: "the reviewer's framing lined up with what we already suspected.",
 			},
 			{
-				Number:       2,
-				OpenedAt:     time.Date(2026, 5, 12, 18, 25, 11, 0, time.UTC),
-				LogPath:      "round-02/_round.md",
-				Verdict:      "ready_to_build",
-				ReviewerName: "codex",
+				Number:   2,
+				OpenedAt: time.Date(2026, 5, 12, 18, 10, 0, 0, time.UTC),
+				State:    "failed",
+				Reviewer: SynopsisReviewer{Name: "codex", Impl: "codex", Model: "gpt-5.5"},
+				Failure:  &SynopsisError{Code: "reviewer_failed", Message: "reviewer output failed schema validation"},
+				RawPath:  "round-02/_raw.txt",
+			},
+			{
+				Number:   3,
+				OpenedAt: time.Date(2026, 5, 12, 18, 25, 11, 0, time.UTC),
+				State:    "completed",
+				Reviewer: SynopsisReviewer{Name: "codex", Impl: "codex", Model: "gpt-5.5"},
+				LogPath:  "round-03/_round.md",
+				Verdict:  "ready_to_build",
 			},
 		},
 	}
@@ -81,25 +86,29 @@ func TestWriteSynopsisRendersAllSections(t *testing.T) {
 		"---\nsession_id: s_synopsis_test\n",
 		"opened_at: 2026-05-12T17:51:09Z\n",
 		"closed_at: 2026-05-12T18:30:00Z\n",
-		"round_count: 2\n",
-		"  name: codex\n",
-		"  impl: codex\n",
-		"  model: gpt-5.5\n",
-		"review_context_present: true\n",
-		"review_focus_present: true\n",
+		"round_count: 3\n",
+		"failed_round_count: 1\n",
 		"# Session synopsis\n",
 		"## Summary\n",
-		"Closed 2 rounds with reviewer 'codex'.",
+		"Closed 3 rounds (1 failed) with reviewer 'codex'.",
 		"Latest verdict: 'ready_to_build'.",
 		"Decisions across all rounds: 1 fixed / 1 deferred.",
 		"1 advisory note recorded across the arc.",
 		"## Round outcomes\n",
-		"| round | opened_at | verdict | concerns | questions | advisory | decisions | notes |",
-		"| 01 | 2026-05-12T17:51:16Z | needs_changes | 1 | 1 | 1 | 1 fixed / 1 deferred | yes |",
-		"| 02 | 2026-05-12T18:25:11Z | ready_to_build | 0 | 0 | 0 | - | - |",
+		"| round | opened_at | state | reviewer | verdict | concerns | questions | advisory | decisions | notes |",
+		"| 01 | 2026-05-12T17:51:16Z | completed | codex | needs_changes | 1 | 1 | 1 | 1 fixed / 1 deferred | yes |",
+		"| 02 | 2026-05-12T18:10:00Z | failed | codex | - | - | - | - | - | - |",
+		"| 03 | 2026-05-12T18:25:11Z | completed | codex | ready_to_build | 0 | 0 | 0 | - | - |",
 		"## Round detail\n",
 		"### Round 01\n",
+		"- Reviewer: 'codex' (impl 'codex', model 'gpt-5.5')\n",
+		"- Calibration: review_context present, review_focus present\n",
 		"### Round 02\n",
+		"- State: failed\n",
+		"- Failure: reviewer_failed - reviewer output failed schema validation\n",
+		"- Raw output: round-02/_raw.txt\n",
+		"### Round 03\n",
+		"- Calibration: review_context absent, review_focus absent\n",
 		"**Reviewer summary:** the artifacts are close but not yet ship-ready",
 		"**Concerns**",
 		"- **C-1** (major, 'work-order:M3'): missing detail — implementation would diverge — _suggestion_: clarify the work order",
@@ -118,12 +127,18 @@ func TestWriteSynopsisRendersAllSections(t *testing.T) {
 		}
 	}
 
-	// the second round had no findings, decisions, or commentary - its detail
-	// block must not include those headings.
-	round2 := content[strings.Index(content, "### Round 02"):]
+	// the later rounds had no findings, decisions, or commentary - their detail
+	// blocks must not include those headings.
+	later := content[strings.Index(content, "### Round 02"):]
 	for _, unwanted := range []string{"**Concerns**", "**Questions**", "**Advisory notes**", "**Decisions**", "**Commentary**"} {
-		if strings.Contains(round2, unwanted) {
-			t.Errorf("round 02 detail must not contain %q\n---\n%s", unwanted, round2)
+		if strings.Contains(later, unwanted) {
+			t.Errorf("rounds 02 and 03 detail must not contain %q\n---\n%s", unwanted, later)
+		}
+	}
+	// there is no session-level reviewer or calibration any more.
+	for _, unwanted := range []string{"reviewer:\n", "review_context_present:", "last_error:"} {
+		if strings.Contains(content, unwanted) {
+			t.Errorf("synopsis frontmatter must not contain %q\n---\n%s", unwanted, content)
 		}
 	}
 
@@ -139,7 +154,6 @@ func TestWriteSynopsisEmptyRounds(t *testing.T) {
 		SessionID: "s_empty",
 		OpenedAt:  time.Date(2026, 5, 12, 17, 0, 0, 0, time.UTC),
 		ClosedAt:  time.Date(2026, 5, 12, 17, 5, 0, 0, time.UTC),
-		Reviewer:  SynopsisReviewer{Name: "dummy", Impl: "dummy"},
 	}
 
 	path := filepath.Join(t.TempDir(), "_synopsis.md")
@@ -166,10 +180,11 @@ func TestWriteSynopsisUnparseableRound(t *testing.T) {
 		SessionID: "s_unparseable",
 		OpenedAt:  time.Date(2026, 5, 12, 17, 0, 0, 0, time.UTC),
 		ClosedAt:  time.Date(2026, 5, 12, 17, 10, 0, 0, time.UTC),
-		Reviewer:  SynopsisReviewer{Name: "codex"},
 		Rounds: []SynopsisRound{{
 			Number:      1,
 			OpenedAt:    time.Date(2026, 5, 12, 17, 1, 0, 0, time.UTC),
+			State:       "completed",
+			Reviewer:    SynopsisReviewer{Name: "codex"},
 			LogPath:     "round-01/_round.md",
 			Verdict:     "needs_changes",
 			Unparseable: true,
@@ -182,31 +197,13 @@ func TestWriteSynopsisUnparseableRound(t *testing.T) {
 	}
 	content := readFile(t, path)
 
-	if !strings.Contains(content, "_reviewer output unparseable; see round-01/_round.md for raw JSON_") {
+	if !strings.Contains(content, "_reviewer output unparseable; see round-01/_review.json for raw JSON_") {
 		t.Errorf("expected unparseable fallback; got:\n%s", content)
 	}
 	// the row in the outcomes table should still appear, with dashes for the
 	// per-finding counts since the parse failed.
-	if !strings.Contains(content, "| 01 | 2026-05-12T17:01:00Z | needs_changes | - | - | - | - | - |") {
+	if !strings.Contains(content, "| 01 | 2026-05-12T17:01:00Z | completed | codex | needs_changes | - | - | - | - | - |") {
 		t.Errorf("expected outcomes row with dashes for unparseable round; got:\n%s", content)
-	}
-}
-
-func TestWriteSynopsisLastError(t *testing.T) {
-	entry := SynopsisEntry{
-		SessionID: "s_err",
-		OpenedAt:  time.Date(2026, 5, 12, 17, 0, 0, 0, time.UTC),
-		ClosedAt:  time.Date(2026, 5, 12, 17, 5, 0, 0, time.UTC),
-		Reviewer:  SynopsisReviewer{Name: "codex"},
-		LastError: &SynopsisError{Code: "reviewer_failed", Message: "reviewer failed"},
-	}
-	path := filepath.Join(t.TempDir(), "_synopsis.md")
-	if err := WriteSynopsis(path, entry); err != nil {
-		t.Fatalf("write synopsis: %v", err)
-	}
-	content := readFile(t, path)
-	if !strings.Contains(content, "last_error:\n  code: reviewer_failed\n  message: reviewer failed\n") {
-		t.Errorf("expected last_error frontmatter block; got:\n%s", content)
 	}
 }
 

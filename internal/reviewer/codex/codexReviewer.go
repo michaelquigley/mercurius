@@ -63,19 +63,22 @@ func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (revi
 
 	stdout, stderr, runErr := r.run(ctx, req.WorkingDir, req.Prompt, schemaPath, lastMessagePath)
 
+	// every failure below holds output, so it is carried on the error rather than
+	// folded into the message. the last-message bytes are read here, before the
+	// deferred removal of the temporary directory.
 	output, err := os.ReadFile(lastMessagePath)
 	if err != nil {
-		if runErr != nil {
-			return reviewer.ReviewResponse{}, runErr
+		if runErr == nil {
+			runErr = fmt.Errorf("read codex last message file: %w", err)
 		}
-		return reviewer.ReviewResponse{}, fmt.Errorf("read codex last message file: %w", err)
+		return reviewer.ReviewResponse{}, reviewer.NewOutputError(runErr, outputSections(stdout, stderr, nil)...)
 	}
 	raw, err := jsonout.Object(output)
 	if err != nil {
 		if runErr != nil {
-			return reviewer.ReviewResponse{}, fmt.Errorf("%w; extract codex last message: %v", runErr, err)
+			err = fmt.Errorf("%w; extract codex last message: %v", runErr, err)
 		}
-		return reviewer.ReviewResponse{}, err
+		return reviewer.ReviewResponse{}, reviewer.NewOutputError(err, outputSections(stdout, stderr, output)...)
 	}
 
 	return reviewer.ReviewResponse{
@@ -100,11 +103,20 @@ func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string, sc
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	reviewer.PrepareCommand(cmd)
 
 	if err := cmd.Run(); err != nil {
-		return stdout.Bytes(), stderr.Bytes(), fmt.Errorf("codex reviewer failed: %w%s", err, commandOutputSuffix(stdout.Bytes(), stderr.Bytes()))
+		return stdout.Bytes(), stderr.Bytes(), fmt.Errorf("codex reviewer failed: %w", err)
 	}
 	return stdout.Bytes(), stderr.Bytes(), nil
+}
+
+func outputSections(stdout []byte, stderr []byte, lastMessage []byte) []reviewer.OutputSection {
+	return []reviewer.OutputSection{
+		{Name: "stdout", Bytes: stdout},
+		{Name: "stderr", Bytes: stderr},
+		{Name: "last message", Bytes: lastMessage},
+	}
 }
 
 func (r *Reviewer) prepareCodexHome(workingDir string) (string, func(), error) {
@@ -187,18 +199,4 @@ func linkCodexHomeEntry(sourceHome string, targetHome string, name string) error
 		return fmt.Errorf("link codex home entry '%s': %w", name, err)
 	}
 	return nil
-}
-
-func commandOutputSuffix(stdout []byte, stderr []byte) string {
-	var parts []string
-	if text := strings.TrimSpace(string(stderr)); text != "" {
-		parts = append(parts, fmt.Sprintf("stderr: %s", text))
-	}
-	if text := strings.TrimSpace(string(stdout)); text != "" {
-		parts = append(parts, fmt.Sprintf("stdout: %s", text))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return "; " + strings.Join(parts, "; ")
 }

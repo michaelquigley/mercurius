@@ -9,7 +9,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/michaelquigley/mercurius/internal/reviewer"
 	"github.com/michaelquigley/mercurius/internal/schema"
@@ -112,9 +114,17 @@ func TestReviewerReturnsCommandFailureWithOutput(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected review error")
 	}
-	for _, want := range []string{"codex reviewer failed", "failure details", "progress output"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("expected error to contain %q, got: %v", want, err)
+	if !strings.Contains(err.Error(), "codex reviewer failed") {
+		t.Fatalf("expected error to name the codex failure, got: %v", err)
+	}
+	// the captured output travels on the error, not in its message.
+	output := string(reviewer.CapturedOutput(err))
+	for _, want := range []string{"failure details", "progress output"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected carried output to contain %q, got: %q", want, output)
+		}
+		if strings.Contains(err.Error(), want) {
+			t.Fatalf("error message must not carry output %q: %v", want, err)
 		}
 	}
 
@@ -202,12 +212,97 @@ func TestReviewerRequiresWorkingDirAndSchema(t *testing.T) {
 	}
 }
 
+// a clean exit whose last message holds no json object is a failure that holds
+// output; the output must be carried on the error so the runner can keep it.
+func TestReviewerCarriesMalformedOutput(t *testing.T) {
+	helper := newFakeCodex(t, fakeCodexOptions{
+		output: "this is not a review object",
+		stdout: "progress before the bad answer",
+	})
+	r := New(Options{BinaryPath: helper.binaryPath})
+
+	_, err := r.Review(context.Background(), reviewer.ReviewRequest{
+		Prompt:     "review this prompt",
+		Schema:     schema.ReviewOutputSchema(),
+		WorkingDir: t.TempDir(),
+	})
+	var outputErr *reviewer.OutputError
+	if !errors.As(err, &outputErr) {
+		t.Fatalf("expected an OutputError, got %T: %v", err, err)
+	}
+	for _, want := range []string{"this is not a review object", "progress before the bad answer"} {
+		if !strings.Contains(string(outputErr.Output), want) {
+			t.Fatalf("carried output missing %q: %q", want, outputErr.Output)
+		}
+	}
+}
+
+// a reviewer that leaves a child holding its stdout and stderr open must not
+// hold Review past the wait delay. without WaitDelay, Wait blocks until the
+// child closes the pipes, and this test fails on its deadline.
+func TestReviewerReturnsWhileChildHoldsPipes(t *testing.T) {
+	setShortWaitDelay(t)
+	helper := newFakeCodex(t, fakeCodexOptions{
+		output:  validReviewOutput(),
+		lingers: true,
+	})
+	r := New(Options{BinaryPath: helper.binaryPath})
+
+	type result struct {
+		resp reviewer.ReviewResponse
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		resp, err := r.Review(context.Background(), reviewer.ReviewRequest{
+			Prompt:     "review this prompt",
+			Schema:     schema.ReviewOutputSchema(),
+			WorkingDir: t.TempDir(),
+		})
+		done <- result{resp, err}
+	}()
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("expected the result despite the lingering child: %v", got.err)
+		}
+		if string(got.resp.Raw) != validReviewOutput() {
+			t.Fatalf("raw output mismatch: %s", got.resp.Raw)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("review did not return while a child held its output pipes open")
+	}
+}
+
+func setShortWaitDelay(t *testing.T) {
+	t.Helper()
+	previous := reviewer.WaitDelay
+	reviewer.WaitDelay = 200 * time.Millisecond
+	t.Cleanup(func() { reviewer.WaitDelay = previous })
+}
+
+// killLingering kills the child a fake binary left running, by the pid it
+// recorded.
+func killLingering(t *testing.T, pidPath string) {
+	t.Helper()
+	t.Cleanup(func() {
+		raw, err := os.ReadFile(pidPath)
+		if err != nil {
+			return
+		}
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && pid > 0 {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+}
+
 type fakeCodexOptions struct {
 	output                string
 	stdout                string
 	stderr                string
 	exitCode              int
 	writeOutputBeforeExit bool
+	lingers               bool
 }
 
 type fakeCodex struct {
@@ -285,6 +380,10 @@ fi
 if [ -n "$last_message_path" ]; then
 	printf '%s' "$FAKE_CODEX_OUTPUT" > "$last_message_path"
 fi
+if [ -n "${FAKE_CODEX_LINGER_PID:-}" ]; then
+	sleep 60 &
+	printf '%s' "$!" > "$FAKE_CODEX_LINGER_PID"
+fi
 if [ "${FAKE_CODEX_EXIT_CODE:-0}" -ne 0 ]; then
 	if [ "${FAKE_CODEX_WRITE_OUTPUT_BEFORE_EXIT:-0}" -eq 0 ] && [ -n "$last_message_path" ]; then
 		rm -f "$last_message_path"
@@ -312,6 +411,13 @@ fi
 		t.Setenv("FAKE_CODEX_WRITE_OUTPUT_BEFORE_EXIT", "0")
 	}
 	t.Setenv("CODEX_HOME", helper.sourceCodexHome)
+	if options.lingers {
+		pidPath := filepath.Join(dir, "linger.pid")
+		t.Setenv("FAKE_CODEX_LINGER_PID", pidPath)
+		killLingering(t, pidPath)
+	} else {
+		t.Setenv("FAKE_CODEX_LINGER_PID", "")
+	}
 
 	return helper
 }

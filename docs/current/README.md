@@ -2,7 +2,7 @@
 
 These docs describe the current Mercurius implementation.
 
-Mercurius is a local MCP server that lets a design agent ask a reviewer, usually Codex, to review design and work-order artifacts. A session is a lightweight grouping of related single-shot rounds; each round snapshots its artifacts, runs a constrained review prompt, validates structured reviewer output, logs the round, and returns triage guidance to the design agent.
+Mercurius is a local MCP server that lets a design agent ask a reviewer, usually Codex, to review design and work-order artifacts. A session is a lightweight grouping of related single-shot rounds; each round snapshots its artifacts, runs a constrained review prompt, validates structured reviewer output, logs the round, and returns triage guidance to the design agent. Sessions and rounds live entirely on disk: the server holds nothing between tool calls, so any server process can serve any session.
 
 ## Start Here
 
@@ -16,12 +16,15 @@ Mercurius is a local MCP server that lets a design agent ask a reviewer, usually
 
 ## Current Capabilities
 
-- Single-project server process loaded from one `mercurius.yaml`.
-- One reviewer per server, configured singularly in the YAML.
+- Single-project server process configured by one `mercurius.yaml`, read on every tool call rather than at startup; the server starts without the file and a missing or broken file is a tool error.
+- Sessions on disk: `session.json` per session and a self-contained directory per round, with machine records (`_state.json`, `_run.json`, `_review.json`, `_notes.json`) beside the human ones. No in-memory registry and no `status.json`.
+- One reviewer per round, configured singularly in the YAML and resolved per round with `max_findings` and the calibration.
+- Rounds bounded by `reviewer.timeout` (default `20m`); one round at a time per log destination, enforced by a kernel lock on `runner.lock`, with a `conflict` on a second launch that names the running round.
+- Failed rounds stay on disk under their number with their stored error and raw output (`_raw.txt`); a round whose runner died is recorded as `runner_lost` by the next reader.
 - Codex, Claude, and pi reviewer implementations plus a dummy reviewer for tests and scaffolding.
 - Single-shot rounds: artifacts and findings are scoped to one round. Sessions are light groupings; no shared state flows between rounds in the same session.
-- Background rounds with `start_review_round` and `collect_round`. Use `mercurius monitor --wait` to poll for completion.
-- Per-round artifact snapshots and markdown logs in a self-contained round directory; commentary and decisions land in a sibling `_notes.md` file.
+- Background rounds with `start_review_round` and `collect_round`, run inside the server process. Use `mercurius monitor --wait` to poll for completion; the monitor only reads.
+- Per-round artifact snapshots and markdown logs in a self-contained round directory; commentary and decisions land in `_notes.json` and `_notes.md`.
 - Six-tool MCP surface (`open_session`, `start_review_round`, `collect_round`, `record_round_notes`, `close_session`, `session_status`) and five stable error codes (`user_error`, `not_found`, `conflict`, `reviewer_failed`, `internal_error`).
 - Structured reviewer output with blocking findings (`concerns`, `questions`) and separate `advisory_notes`.
 - `review_context`, `review_focus`, and `settled_decisions` live in `mercurius.yaml` and are re-read at the start of every round, so edits between rounds take effect with no session reopen. `review_context` is calibration (stable framing); `settled_decisions` are guards (decisions the reviewer should stop re-raising).

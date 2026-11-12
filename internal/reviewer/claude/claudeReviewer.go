@@ -61,13 +61,18 @@ func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (revi
 		return reviewer.ReviewResponse{Raw: raw, UsageNotes: r.usageNotes(env)}, nil
 	}
 
-	// when no envelope could be read and the process itself failed, the captured
-	// output is the most useful diagnostic. an is_error envelope or a missing json
-	// object is already descriptive, so prefer that message regardless of exit code.
+	// when no envelope could be read and the process itself failed, the process
+	// failure is the better message. an is_error envelope or a missing json object
+	// is already descriptive, so prefer that message regardless of exit code.
+	// either way the captured output is carried on the error, not in its message.
+	err := parseErr
 	if errors.Is(parseErr, errNotEnvelope) && runErr != nil {
-		return reviewer.ReviewResponse{}, fmt.Errorf("claude reviewer failed: %w%s", runErr, commandOutputSuffix(stdout, stderr))
+		err = fmt.Errorf("claude reviewer failed: %w", runErr)
 	}
-	return reviewer.ReviewResponse{}, parseErr
+	return reviewer.ReviewResponse{}, reviewer.NewOutputError(err,
+		reviewer.OutputSection{Name: "stdout", Bytes: stdout},
+		reviewer.OutputSection{Name: "stderr", Bytes: stderr},
+	)
 }
 
 func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string, schema json.RawMessage) ([]byte, []byte, error) {
@@ -80,6 +85,7 @@ func (r *Reviewer) run(ctx context.Context, workingDir string, prompt string, sc
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	reviewer.PrepareCommand(cmd)
 
 	err := cmd.Run()
 	return stdout.Bytes(), stderr.Bytes(), err
@@ -122,18 +128,4 @@ func (r *Reviewer) usageNotes(env envelope) string {
 		parts = append(parts, fmt.Sprintf("session_id='%s'", env.SessionID))
 	}
 	return strings.Join(parts, ", ")
-}
-
-func commandOutputSuffix(stdout []byte, stderr []byte) string {
-	var parts []string
-	if text := strings.TrimSpace(string(stderr)); text != "" {
-		parts = append(parts, fmt.Sprintf("stderr: %s", text))
-	}
-	if text := strings.TrimSpace(string(stdout)); text != "" {
-		parts = append(parts, fmt.Sprintf("stdout: %s", text))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return "; " + strings.Join(parts, "; ")
 }
