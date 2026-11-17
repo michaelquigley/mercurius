@@ -7,7 +7,6 @@
 package store
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +15,8 @@ import (
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/michaelquigley/df/dd"
 )
 
 // file names inside a log destination, a session directory, and a round
@@ -82,44 +83,44 @@ var ErrNotSession = errors.New("directory is not a session in this layout")
 
 // Session is session.json: the session's own facts and nothing else.
 type Session struct {
-	SessionID string     `json:"session_id"`
-	OpenedAt  time.Time  `json:"opened_at"`
-	State     string     `json:"state"`
-	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+	SessionID string
+	OpenedAt  time.Time
+	State     string
+	ClosedAt  *time.Time
 }
 
 // Run is _run.json: the inputs of one round, written once by the server that
 // prepared it and never changed.
 type Run struct {
-	SessionID            string          `json:"session_id"`
-	RoundNumber          int             `json:"round_number"`
-	OpenedAt             time.Time       `json:"opened_at"`
-	ServerPID            int             `json:"server_pid"`
-	Reviewer             RunReviewer     `json:"reviewer"`
-	ReviewerSource       string          `json:"reviewer_source"`
-	MaxFindings          int             `json:"max_findings"`
-	ReviewContextPresent bool            `json:"review_context_present"`
-	ReviewFocusPresent   bool            `json:"review_focus_present"`
-	Manifest             []ManifestEntry `json:"manifest"`
+	SessionID            string
+	RoundNumber          int
+	OpenedAt             time.Time
+	ServerPID            int
+	Reviewer             RunReviewer
+	ReviewerSource       string
+	MaxFindings          int
+	ReviewContextPresent bool
+	ReviewFocusPresent   bool
+	Manifest             []ManifestEntry
 }
 
 // RunReviewer is the fully resolved reviewer block a round runs with.
 type RunReviewer struct {
-	Name       string   `json:"name"`
-	Impl       string   `json:"impl"`
-	Model      string   `json:"model,omitempty"`
-	BinaryPath string   `json:"binary_path,omitempty"`
-	ExtraArgs  []string `json:"extra_args,omitempty"`
-	Timeout    Duration `json:"timeout"`
+	Name       string
+	Impl       string
+	Model      string `dd:",+omitempty"`
+	BinaryPath string `dd:",+omitempty"`
+	ExtraArgs  []string
+	Timeout    time.Duration
 }
 
 // ManifestEntry records one artifact snapshot.
 type ManifestEntry struct {
-	Name         string `json:"name"`
-	SourcePath   string `json:"source_path"`
-	SnapshotPath string `json:"snapshot_path"`
-	Size         int64  `json:"size"`
-	Hash         string `json:"hash"`
+	Name         string
+	SourcePath   string
+	SnapshotPath string
+	Size         int64
+	Hash         string
 }
 
 // State is _state.json: where a round is in its life. It is written last in any
@@ -127,71 +128,51 @@ type ManifestEntry struct {
 // the runner lock writes it. RunnerPID and ReviewerPID are for the operator to
 // read; Mercurius never signals a process by a pid it read from disk.
 type State struct {
-	State       string     `json:"state"`
-	StartedAt   time.Time  `json:"started_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	RunnerPID   int        `json:"runner_pid,omitempty"`
-	ReviewerPID int        `json:"reviewer_pid,omitempty"`
+	State       string
+	StartedAt   time.Time
+	UpdatedAt   time.Time
+	CompletedAt *time.Time
+	RunnerPID   int `dd:",+omitempty"`
+	ReviewerPID int `dd:",+omitempty"`
 	// OutlivedServer is set by the runner at finish: the runner was a separate
 	// process and the server that prepared the round was no longer its parent.
-	OutlivedServer bool         `json:"outlived_server,omitempty"`
-	Error          *StoredError `json:"error,omitempty"`
+	OutlivedServer bool
+	Error          *StoredError
 }
 
 // StoredError is a round failure as recorded in _state.json.
 type StoredError struct {
-	Code    string         `json:"code"`
-	Message string         `json:"message"`
-	Details map[string]any `json:"details,omitempty"`
-	At      time.Time      `json:"at"`
+	Code    string
+	Message string
+	Details map[string]any
+	At      time.Time
 }
 
 // Review is _review.json: the outcome of a completed round. Reviewers is a list
 // from the start so a multi-reviewer round needs no new shape.
 type Review struct {
-	Reviewers []ReviewerResult `json:"reviewers"`
+	Reviewers []ReviewerResult
 }
 
-// ReviewerResult is one reviewer's raw, schema-valid output.
+// ReviewerResult holds one reviewer's decoded, schema-valid output.
 type ReviewerResult struct {
-	ReviewerName string          `json:"reviewer_name"`
-	Raw          json.RawMessage `json:"raw"`
-	UsageNotes   string          `json:"usage_notes"`
+	ReviewerName string
+	Raw          map[string]any `dd:",+opaque"`
+	UsageNotes   string
 }
 
 // Notes is _notes.json: the triage recorded for a completed round.
 type Notes struct {
-	Commentary string     `json:"commentary"`
-	Decisions  []Decision `json:"decisions"`
-	RecordedAt time.Time  `json:"recorded_at"`
+	Commentary string
+	Decisions  []Decision
+	RecordedAt time.Time
 }
 
 // Decision is one human disposition for a reviewer ref.
 type Decision struct {
-	Ref         string `json:"ref"`
-	Disposition string `json:"disposition"`
-	Note        string `json:"note,omitempty"`
-}
-
-// Duration is a time.Duration written to JSON in its string form ('20m0s').
-type Duration time.Duration
-
-func (d Duration) MarshalJSON() ([]byte, error) {
-	return json.Marshal(time.Duration(d).String())
-}
-
-func (d *Duration) UnmarshalJSON(raw []byte) error {
-	var text string
-	if err := json.Unmarshal(raw, &text); err != nil {
-		return fmt.Errorf("duration must be a string: %w", err)
-	}
-	parsed, err := time.ParseDuration(text)
-	if err != nil {
-		return err
-	}
-	*d = Duration(parsed)
-	return nil
+	Ref         string
+	Disposition string
+	Note        string
 }
 
 // ValidSessionID reports whether id has the form of a session id. Ids arrive
@@ -219,7 +200,7 @@ func LockPath(logDestination string) string {
 // WriteJSON writes v as indented JSON through a temporary file in the target's
 // directory renamed over the target, so a reader never sees a partial file.
 func WriteJSON(path string, v any) error {
-	raw, err := json.MarshalIndent(v, "", "  ")
+	raw, err := dd.UnbindJSON(v)
 	if err != nil {
 		return err
 	}
@@ -251,14 +232,14 @@ func WriteFileAtomic(path string, raw []byte) error {
 	return os.Rename(tmpName, path)
 }
 
-// ReadJSON reads path into v. A missing file returns an error matching
-// os.ErrNotExist; a file that exists and cannot be parsed returns a ParseError.
+// ReadJSON strictly binds the machine file at path into v. A missing file
+// returns an error matching os.ErrNotExist; invalid content returns a ParseError.
 func ReadJSON(path string, v any) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(raw, v); err != nil {
+	if err := dd.BindJSON(v, raw, dd.Strict()); err != nil {
 		return &ParseError{Path: path, Err: err}
 	}
 	return nil

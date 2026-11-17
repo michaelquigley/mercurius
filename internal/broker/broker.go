@@ -772,7 +772,7 @@ func synopsisRound(roundDir string, n int) (roundlog.SynopsisRound, error) {
 		return sr, roundFileError(err, filepath.Join(roundDir, store.ReviewFileName))
 	}
 	if len(review.Reviewers) > 0 {
-		output, err := schema.ParseReviewOutput(review.Reviewers[0].Raw)
+		output, err := schema.BindReviewOutput(review.Reviewers[0].Raw)
 		if err != nil {
 			sr.Unparseable = true
 		} else {
@@ -960,13 +960,12 @@ func validDisposition(disposition string) bool {
 	return disposition == "fixed" || disposition == "rejected" || disposition == "deferred"
 }
 
-// refsFromReview recomputes the refs a round accepts for decisions from the raw
-// reviewer output, through the same schema parse that produced them the first
-// time. They are never stored.
+// refsFromReview binds the stored reviewer output to recover the refs a round
+// accepts for decisions.
 func refsFromReview(review store.Review) map[string]struct{} {
 	refs := map[string]struct{}{}
 	for _, result := range review.Reviewers {
-		output, err := schema.ParseReviewOutput(result.Raw)
+		output, err := schema.BindReviewOutput(result.Raw)
 		if err != nil {
 			continue
 		}
@@ -1002,7 +1001,7 @@ func runReviewer(cfg config.ReviewerConfig) store.RunReviewer {
 		Model:      cfg.Model,
 		BinaryPath: cfg.BinaryPath,
 		ExtraArgs:  append([]string(nil), cfg.ExtraArgs...),
-		Timeout:    store.Duration(cfg.Timeout),
+		Timeout:    cfg.Timeout,
 	}
 }
 
@@ -1025,7 +1024,7 @@ func reviewerInfoFromRun(r store.RunReviewer, source string) ReviewerInfo {
 		Model:      r.Model,
 		BinaryPath: r.BinaryPath,
 		ExtraArgs:  append([]string(nil), r.ExtraArgs...),
-		Timeout:    time.Duration(r.Timeout),
+		Timeout:    r.Timeout,
 		Source:     source,
 	}
 }
@@ -1061,7 +1060,7 @@ func resultsFromStore(results []store.ReviewerResult) []ReviewerResult {
 	for _, result := range results {
 		out = append(out, ReviewerResult{
 			ReviewerName: result.ReviewerName,
-			Raw:          append([]byte(nil), result.Raw...),
+			Raw:          result.Raw,
 			UsageNotes:   result.UsageNotes,
 		})
 	}

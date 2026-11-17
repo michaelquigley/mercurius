@@ -1,7 +1,6 @@
 package broker
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/michaelquigley/mercurius/internal/runner"
@@ -92,7 +91,7 @@ type ArtifactManifestEntry struct {
 // ReviewerResult records one reviewer response.
 type ReviewerResult struct {
 	ReviewerName string
-	Raw          json.RawMessage
+	Raw          map[string]any `dd:",+opaque"`
 	UsageNotes   string
 }
 

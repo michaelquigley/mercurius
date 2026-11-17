@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -24,19 +25,50 @@ func TestValidSessionID(t *testing.T) {
 }
 
 func TestDurationRoundTrip(t *testing.T) {
-	raw, err := json.Marshal(RunReviewer{Name: "x", Impl: "dummy", Timeout: Duration(20 * time.Minute)})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+	dir := t.TempDir()
+	path := filepath.Join(dir, RunFileName)
+	want := 20 * time.Minute
+	if err := WriteJSON(path, Run{Reviewer: RunReviewer{Name: "x", Impl: "dummy", Timeout: want}}); err != nil {
+		t.Fatalf("write run: %v", err)
 	}
-	if !strings.Contains(string(raw), `"timeout":"20m0s"`) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read run file: %v", err)
+	}
+	if !strings.Contains(string(raw), `"timeout": "20m0s"`) {
 		t.Fatalf("timeout not written as a duration string: %s", raw)
 	}
-	var back RunReviewer
-	if err := json.Unmarshal(raw, &back); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	back, err := ReadRun(dir)
+	if err != nil {
+		t.Fatalf("bind run: %v", err)
 	}
-	if time.Duration(back.Timeout) != 20*time.Minute {
-		t.Fatalf("timeout = %s", time.Duration(back.Timeout))
+	if back.Reviewer.Timeout != want {
+		t.Fatalf("timeout = '%s', want '%s'", back.Reviewer.Timeout, want)
+	}
+}
+
+func TestReviewRoundTripPreservesRawObject(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ReviewFileName)
+	want := Review{Reviewers: []ReviewerResult{{
+		ReviewerName: "test",
+		Raw: map[string]any{
+			"integer": json.Number("9007199254740993"),
+			"decimal": json.Number("1.50"),
+			"null":    nil,
+			"nested":  map[string]any{"value": "unchanged"},
+		},
+		UsageNotes: "test output",
+	}}}
+	if err := WriteJSON(path, want); err != nil {
+		t.Fatalf("write review: %v", err)
+	}
+	got, err := ReadReview(dir)
+	if err != nil {
+		t.Fatalf("read review: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("review = %#v, want %#v", got, want)
 	}
 }
 

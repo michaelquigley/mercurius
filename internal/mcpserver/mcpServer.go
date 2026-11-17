@@ -111,9 +111,9 @@ type ManifestEntryOutput struct {
 }
 
 type ReviewerOutput struct {
-	ReviewerName string          `json:"reviewer_name"`
-	Raw          json.RawMessage `json:"raw"`
-	UsageNotes   string          `json:"usage_notes"`
+	ReviewerName string         `json:"reviewer_name"`
+	Raw          map[string]any `json:"raw"`
+	UsageNotes   string         `json:"usage_notes"`
 }
 
 type RecordRoundNotesInput struct {
@@ -513,7 +513,7 @@ func reviewerOutput(results []broker.ReviewerResult) []ReviewerOutput {
 	for _, result := range results {
 		out = append(out, ReviewerOutput{
 			ReviewerName: result.ReviewerName,
-			Raw:          append(json.RawMessage(nil), result.Raw...),
+			Raw:          result.Raw,
 			UsageNotes:   result.UsageNotes,
 		})
 	}
@@ -525,7 +525,7 @@ func triageOutput(results []broker.ReviewerResult) RoundTriageOutput {
 		Guidance: noFindingsTriageGuidance(),
 	}
 	for _, result := range results {
-		output, err := schema.ParseReviewOutput(result.Raw)
+		output, err := schema.BindReviewOutput(result.Raw)
 		if err != nil {
 			continue
 		}

@@ -3,8 +3,10 @@
   "error": {
     "at": "<time>",
     "code": "reviewer_failed",
+    "details": {},
     "message": "reviewer failed"
   },
+  "outlived_server": false,
   "started_at": "<time>",
   "state": "failed",
   "updated_at": "<time>"

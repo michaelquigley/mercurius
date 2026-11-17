@@ -13,6 +13,7 @@
   "review_context_present": true,
   "review_focus_present": false,
   "reviewer": {
+    "extra_args": [],
     "impl": "dummy",
     "name": "dummy",
     "timeout": "20m0s"

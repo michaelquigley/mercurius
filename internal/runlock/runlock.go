@@ -12,13 +12,13 @@
 package runlock
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"syscall"
 	"time"
 
+	"github.com/michaelquigley/df/dd"
 	"github.com/michaelquigley/mercurius/internal/store"
 )
 
@@ -37,10 +37,10 @@ var (
 // lock itself is the kernel's; the note is only what the holder said about
 // itself when it took the lock.
 type Note struct {
-	SessionID   string    `json:"session_id"`
-	RoundNumber int       `json:"round_number"`
-	ServerPID   int       `json:"server_pid"`
-	StartedAt   time.Time `json:"started_at"`
+	SessionID   string
+	RoundNumber int
+	ServerPID   int
+	StartedAt   time.Time
 }
 
 // Lock is a held runner lock.
@@ -130,7 +130,7 @@ func (l *Lock) WriteNote(note Note) error {
 	if l == nil || l.file == nil {
 		return errors.New("runner lock is not held")
 	}
-	raw, err := json.MarshalIndent(note, "", "  ")
+	raw, err := dd.UnbindJSON(note)
 	if err != nil {
 		return err
 	}
@@ -156,7 +156,7 @@ func ReadNote(logDestination string) (Note, error) {
 		return Note{}, os.ErrNotExist
 	}
 	var note Note
-	if err := json.Unmarshal(raw, &note); err != nil {
+	if err := dd.BindJSON(&note, raw, dd.Strict()); err != nil {
 		return Note{}, fmt.Errorf("parse runner lock note: %w", err)
 	}
 	return note, nil

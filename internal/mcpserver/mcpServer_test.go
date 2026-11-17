@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/michaelquigley/df/dd"
 	"github.com/michaelquigley/mercurius/internal/broker"
 	"github.com/michaelquigley/mercurius/internal/config"
 	"github.com/michaelquigley/mercurius/internal/reviewer"
@@ -397,8 +399,12 @@ func TestCollectRoundTriageConcernFirst(t *testing.T) {
 }
 
 func TestTriageSkipsInvalidReview(t *testing.T) {
-	valid := reviewOutputWithConcernAndQuestion()
-	invalid := json.RawMessage(strings.Replace(string(valid), `"summary":`, `"summary": "duplicate", "summary":`, 1))
+	valid, err := dd.DecodeStrictJSON(reviewOutputWithConcernAndQuestion())
+	if err != nil {
+		t.Fatalf("decode review fixture: %v", err)
+	}
+	invalid := maps.Clone(valid)
+	invalid["unexpected"] = true
 	triage := triageOutput([]broker.ReviewerResult{
 		{ReviewerName: "invalid", Raw: invalid},
 		{ReviewerName: "valid", Raw: valid},
@@ -408,10 +414,9 @@ func TestTriageSkipsInvalidReview(t *testing.T) {
 	}
 }
 
-// TestOpenSessionRereadsConfig guards the cross-talk regression where
-// review_context was cached at server startup and leaked into later sessions
-// after mercurius.yaml had been edited. ConfigCalibrationProvider must observe
-// the current YAML on every open_session call.
+// TestOpenSessionRereadsConfig verifies that open_session reads the current
+// project configuration on every call so stale review context cannot leak into
+// later sessions.
 func TestOpenSessionRereadsConfig(t *testing.T) {
 	ctx, client, configPath := newTestClientWith(t, fixedReviewer{raw: validReviewOutput()}, baseTestConfig+"review_context: |\n  first calibration\n")
 

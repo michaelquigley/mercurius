@@ -1,11 +1,13 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,7 +37,8 @@ const baseUser = `reviewer:
 // need it if anything read markdown back.
 func TestSessionLifecycleAcrossBrokers(t *testing.T) {
 	ctx := context.Background()
-	r := newScriptedReviewer(scriptedResponse{raw: reviewOutputWithRefs()})
+	rawReview := reviewOutputWithRefs()
+	r := newScriptedReviewer(scriptedResponse{raw: rawReview})
 	h := newHarness(t, r, baseConfig+"review_focus: flag unclear acceptance criteria.\n")
 	design := writeArtifactFile(t, "design-v1")
 
@@ -101,8 +104,16 @@ func TestSessionLifecycleAcrossBrokers(t *testing.T) {
 	if content := readFile(t, filepath.Join(round1Dir, store.NotesFileName)); !strings.Contains(content, "- **fixed** (ref: C-1): fix landed.") {
 		t.Fatalf("notes not written:\n%s", content)
 	}
-	if logContent := readFile(t, filepath.Join(round1Dir, store.RoundLogFileName)); strings.Contains(logContent, "fix landed") {
+	logContent := readFile(t, filepath.Join(round1Dir, store.RoundLogFileName))
+	if strings.Contains(logContent, "fix landed") {
 		t.Fatalf("round log should not carry notes content: %s", logContent)
+	}
+	var prettyReview bytes.Buffer
+	if err := json.Indent(&prettyReview, rawReview, "", "  "); err != nil {
+		t.Fatalf("indent review fixture: %v", err)
+	}
+	if !strings.Contains(logContent, "```json\n"+prettyReview.String()+"\n```") {
+		t.Fatalf("round log does not preserve the reviewer's JSON order:\n%s", logContent)
 	}
 
 	// nothing may read the markdown back: delete it before collecting and
@@ -116,6 +127,13 @@ func TestSessionLifecycleAcrossBrokers(t *testing.T) {
 	}
 	if collected.RoundNumber != 1 || len(collected.Reviewers) != 1 || collected.Reviewers[0].ReviewerName != "dummy" {
 		t.Fatalf("collected = %+v", collected)
+	}
+	var wantReview map[string]any
+	if err := json.Unmarshal(rawReview, &wantReview); err != nil {
+		t.Fatalf("decode review fixture: %v", err)
+	}
+	if !reflect.DeepEqual(collected.Reviewers[0].Raw, wantReview) {
+		t.Fatalf("collected review = %#v, want %#v", collected.Reviewers[0].Raw, wantReview)
 	}
 	assertSnapshot(t, collected.Manifest[0], "design-v1")
 
@@ -181,6 +199,9 @@ func TestSessionLifecycleAcrossBrokers(t *testing.T) {
 		"- **fixed** (C-1): fix landed.",
 		"- **deferred** (Q-1): revisit later.",
 		"> second pass commentary",
+		"missing detail",
+		"budget",
+		"the design needs a detail and a budget decision",
 	} {
 		if !strings.Contains(synopsis, want) {
 			t.Errorf("synopsis missing %q\n---\n%s", want, synopsis)
@@ -466,11 +487,13 @@ func TestReviewerOutputDuplicateIdsRejected(t *testing.T) {
 // retry takes the next number; and collect_round answers the failure from disk
 // through a new broker.
 func TestFailedRoundStaysOnDisk(t *testing.T) {
+	const duplicateSummary = `{"verdict":"ready_to_build","summary":"first","summary":"second","concerns":[],"questions":[],"advisory_notes":[]}`
 	tests := []struct {
 		name    string
 		resp    scriptedResponse
 		message string
 		wantRaw string
+		cause   string
 	}{
 		{
 			name:    "reviewer error carrying output",
@@ -494,6 +517,13 @@ func TestFailedRoundStaysOnDisk(t *testing.T) {
 			resp:    scriptedResponse{raw: json.RawMessage(`{"not":"valid review output"}`)},
 			message: "reviewer output failed schema validation",
 			wantRaw: `{"not":"valid review output"}`,
+		},
+		{
+			name:    "duplicate key",
+			resp:    scriptedResponse{raw: json.RawMessage(duplicateSummary)},
+			message: "reviewer output failed schema validation",
+			wantRaw: duplicateSummary,
+			cause:   `duplicate key "summary"`,
 		},
 	}
 
@@ -521,6 +551,17 @@ func TestFailedRoundStaysOnDisk(t *testing.T) {
 			}
 			if _, ok := state.Error.Details["raw"]; ok {
 				t.Fatal("raw output must never be stored in the error")
+			}
+			if test.cause != "" {
+				cause, _ := state.Error.Details["cause"].(string)
+				if !strings.Contains(cause, test.cause) {
+					t.Fatalf("cause = '%s', want '%s'", cause, test.cause)
+				}
+			}
+			for _, name := range []string{store.RoundLogFileName, store.ReviewFileName} {
+				if _, err := os.Stat(filepath.Join(roundDir, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("failed review published '%s', stat error = %v", name, err)
+				}
 			}
 			rawPath := filepath.Join(roundDir, store.RawFileName)
 			if test.wantRaw != "" {
@@ -574,7 +615,7 @@ func TestMaxFindingsFailsRoundAndKeepsRaw(t *testing.T) {
 	assertBrokerCode(t, err, CodeReviewerFailed)
 	var be *Error
 	errors.As(err, &be)
-	if be.Message != "reviewer output exceeded max findings" || be.Details["findings"] != float64(2) {
+	if be.Message != "reviewer output exceeded max findings" || be.Details["findings"] != json.Number("2") {
 		t.Fatalf("failure = %+v", be)
 	}
 	if got := readFile(t, filepath.Join(store.RoundDir(open.SessionDir, 1), store.RawFileName)); got != string(raw) {
@@ -998,6 +1039,17 @@ func TestCorruptMachineFilesAreInternalErrors(t *testing.T) {
 	if _, err := h.startAndCollect(open.SessionID, []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}}); err != nil {
 		t.Fatalf("round: %v", err)
 	}
+	reviewPath := filepath.Join(store.RoundDir(open.SessionDir, 1), store.ReviewFileName)
+	withUnknownKey := strings.Replace(readFile(t, reviewPath), "{", `{"unexpected":true,`, 1)
+	if err := os.WriteFile(reviewPath, []byte(withUnknownKey), 0o600); err != nil {
+		t.Fatalf("write unknown key into review: %v", err)
+	}
+	_, err = h.broker().CollectRound(ctx, CollectRoundRequest{SessionID: open.SessionID, RoundNumber: 1})
+	assertBrokerCode(t, err, CodeInternalError)
+	if details := ErrorInfoFrom(err).Details; details["path"] != reviewPath {
+		t.Fatalf("expected error to name '%s', got %+v", reviewPath, details)
+	}
+
 	statePath := filepath.Join(store.RoundDir(open.SessionDir, 1), store.StateFileName)
 	if err := os.WriteFile(statePath, []byte("{not json"), 0o600); err != nil {
 		t.Fatalf("corrupt state: %v", err)
@@ -1324,7 +1376,7 @@ func writeRunningRound(t *testing.T, logDest string, sessionID string, sessionDi
 		RoundNumber: n,
 		OpenedAt:    now,
 		ServerPID:   os.Getpid(),
-		Reviewer:    store.RunReviewer{Name: "dummy", Impl: "dummy", Timeout: store.Duration(time.Minute)},
+		Reviewer:    store.RunReviewer{Name: "dummy", Impl: "dummy", Timeout: time.Minute},
 		MaxFindings: 6,
 	}); err != nil {
 		t.Fatalf("write run: %v", err)
@@ -1573,7 +1625,7 @@ func validReviewOutput(verdict string) json.RawMessage {
 func reviewOutputWithRefs() json.RawMessage {
 	return json.RawMessage(`{
 		"verdict": "needs_changes",
-		"summary": "reviewed",
+		"summary": "the design needs a detail and a budget decision",
 		"concerns": [{
 			"id": "C-1",
 			"severity": "major",

@@ -236,7 +236,7 @@ func TestRecordedPidsAreNeverSignalled(t *testing.T) {
 	now := time.Now().UTC()
 	if err := store.WriteJSON(filepath.Join(roundDir, store.RunFileName), store.Run{
 		SessionID: sessionID, RoundNumber: 1, OpenedAt: now, ServerPID: os.Getpid(),
-		Reviewer: store.RunReviewer{Name: "fake", Impl: "claude", Timeout: store.Duration(time.Minute)}, MaxFindings: 6,
+		Reviewer: store.RunReviewer{Name: "fake", Impl: "claude", Timeout: time.Minute}, MaxFindings: 6,
 	}); err != nil {
 		t.Fatalf("write run: %v", err)
 	}

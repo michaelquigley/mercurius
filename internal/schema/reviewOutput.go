@@ -91,19 +91,35 @@ func ReviewOutputSchemaWithMaxFindings(maxFindings int) json.RawMessage {
 
 // ValidateReviewOutput validates raw reviewer output against the canonical schema.
 func ValidateReviewOutput(raw json.RawMessage) error {
+	_, err := validateReviewOutputSchema(raw)
+	return err
+}
+
+// ReviewVerdict validates the JSON schema and returns the verdict for staging
+// the round log. The strict decode and cross-field checks still have to pass
+// before the log is published.
+func ReviewVerdict(raw json.RawMessage) (string, error) {
+	value, err := validateReviewOutputSchema(raw)
+	if err != nil {
+		return "", err
+	}
+	return value.(map[string]any)["verdict"].(string), nil
+}
+
+func validateReviewOutputSchema(raw json.RawMessage) (any, error) {
 	compiled, err := reviewOutputSchema()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 	if err != nil {
-		return fmt.Errorf("invalid review output json: %w", err)
+		return nil, fmt.Errorf("invalid review output json: %w", err)
 	}
 	if err := compiled.Validate(inst); err != nil {
-		return fmt.Errorf("review output schema violation: %w", err)
+		return nil, fmt.Errorf("review output schema violation: %w", err)
 	}
-	return nil
+	return inst, nil
 }
 
 // ParseReviewOutput validates and strictly binds raw reviewer output.
@@ -116,6 +132,12 @@ func ParseReviewOutput(raw json.RawMessage) (ReviewOutput, error) {
 	if err != nil {
 		return ReviewOutput{}, fmt.Errorf("parse review output: %w", err)
 	}
+	return BindAndValidateReviewOutput(value)
+}
+
+// BindAndValidateReviewOutput strictly binds a schema-validated and strictly
+// decoded object, then checks finding IDs and verdict consistency.
+func BindAndValidateReviewOutput(value map[string]any) (ReviewOutput, error) {
 	output, err := BindReviewOutput(value)
 	if err != nil {
 		return ReviewOutput{}, err

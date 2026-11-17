@@ -1,4 +1,5 @@
 {
+  "outlived_server": false,
   "runner_pid": 12345,
   "started_at": "<time>",
   "state": "running",

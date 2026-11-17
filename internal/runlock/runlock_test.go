@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/michaelquigley/df/dd"
 	"github.com/michaelquigley/mercurius/internal/store"
 )
 
@@ -75,6 +76,19 @@ func TestTakeOnceReadOnlyCreatesNothing(t *testing.T) {
 	}
 	if _, err := ReadNote(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("read note with no lock file = %v, want not-exist", err)
+	}
+}
+
+func TestReadNoteRejectsUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(`{"session_id":"s_abcdefghijkl","round_number":1,"server_pid":42,"started_at":"2026-01-01T12:00:00Z","extra":true}`)
+	if err := os.WriteFile(store.LockPath(dir), raw, 0o600); err != nil {
+		t.Fatalf("write lock note: %v", err)
+	}
+	_, err := ReadNote(dir)
+	var unknown *dd.UnknownFieldError
+	if !errors.As(err, &unknown) || unknown.Key != "extra" {
+		t.Fatalf("expected unknown key error, got %v", err)
 	}
 }
 

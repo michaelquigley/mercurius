@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/michaelquigley/df/dd"
 	"github.com/michaelquigley/df/dl"
 	"github.com/michaelquigley/mercurius/internal/config"
 	"github.com/michaelquigley/mercurius/internal/reviewer"
@@ -129,7 +130,7 @@ func (r *round) execute(build ReviewerFactory) error {
 		return r.fail(store.CodeInternalError, "build reviewer", err, map[string]any{"reviewer": run.Reviewer.Name})
 	}
 
-	timeout := time.Duration(run.Reviewer.Timeout)
+	timeout := run.Reviewer.Timeout
 	if timeout <= 0 {
 		timeout = config.DefaultReviewerTimeout
 	}
@@ -168,11 +169,39 @@ func (r *round) execute(build ReviewerFactory) error {
 		return r.fail(store.CodeReviewerFailed, message, reviewErr, details)
 	}
 
-	output, err := schema.ParseReviewOutput(resp.Raw)
+	verdict, err := schema.ReviewVerdict(resp.Raw)
 	if err != nil {
-		details := map[string]any{"reviewer": run.Reviewer.Name}
-		r.keepRaw(resp.Raw, details)
-		return r.fail(store.CodeReviewerFailed, "reviewer output failed schema validation", err, details)
+		return r.failInvalidReview(resp.Raw, err)
+	}
+
+	// stage the markdown from the original bytes. its final path is published
+	// only after strict decoding, cross-field validation, and the finding limit.
+	logPath := filepath.Join(r.dir, store.RoundLogFileName)
+	pendingLog := logPath + ".pending"
+	defer func() { _ = os.Remove(pendingLog) }()
+	if err := roundlog.WriteInitial(pendingLog, roundlog.Entry{
+		SessionID:   run.SessionID,
+		RoundNumber: run.RoundNumber,
+		OpenedAt:    run.OpenedAt,
+		Verdict:     verdict,
+		PromptPath:  store.PromptFileName,
+		Manifest:    roundlogManifest(run.Manifest),
+		Reviewers: []roundlog.ReviewerOutput{{
+			Name:       run.Reviewer.Name,
+			Raw:        resp.Raw,
+			UsageNotes: resp.UsageNotes,
+		}},
+	}); err != nil {
+		return r.fail(store.CodeInternalError, "write round log", err, map[string]any{"log_path": logPath})
+	}
+
+	raw, err := dd.DecodeStrictJSON(resp.Raw)
+	if err != nil {
+		return r.failInvalidReview(resp.Raw, fmt.Errorf("parse review output: %w", err))
+	}
+	output, err := schema.BindAndValidateReviewOutput(raw)
+	if err != nil {
+		return r.failInvalidReview(resp.Raw, err)
 	}
 	if err := schema.ValidateFindingLimit(output, run.MaxFindings); err != nil {
 		details := map[string]any{
@@ -188,23 +217,14 @@ func (r *round) execute(build ReviewerFactory) error {
 
 	results := []store.ReviewerResult{{
 		ReviewerName: run.Reviewer.Name,
-		Raw:          append([]byte(nil), resp.Raw...),
+		Raw:          raw,
 		UsageNotes:   resp.UsageNotes,
 	}}
 	reviewPath := filepath.Join(r.dir, store.ReviewFileName)
 	if err := store.WriteJSON(reviewPath, store.Review{Reviewers: results}); err != nil {
 		return r.fail(store.CodeInternalError, "write review", err, map[string]any{"review_path": reviewPath})
 	}
-	logPath := filepath.Join(r.dir, store.RoundLogFileName)
-	if err := roundlog.WriteInitial(logPath, roundlog.Entry{
-		SessionID:   run.SessionID,
-		RoundNumber: run.RoundNumber,
-		OpenedAt:    run.OpenedAt,
-		Verdict:     output.Verdict,
-		PromptPath:  store.PromptFileName,
-		Manifest:    roundlogManifest(run.Manifest),
-		Reviewers:   roundlogReviewers(results),
-	}); err != nil {
+	if err := os.Rename(pendingLog, logPath); err != nil {
 		return r.fail(store.CodeInternalError, "write round log", err, map[string]any{"log_path": logPath})
 	}
 
@@ -268,6 +288,12 @@ func (r *round) fail(code string, message string, err error, details map[string]
 	return r.finish()
 }
 
+func (r *round) failInvalidReview(raw []byte, err error) error {
+	details := map[string]any{"reviewer": r.run.Reviewer.Name}
+	r.keepRaw(raw, details)
+	return r.fail(store.CodeReviewerFailed, "reviewer output failed schema validation", err, details)
+}
+
 func reviewerArtifacts(manifest []store.ManifestEntry) []reviewer.Artifact {
 	out := make([]reviewer.Artifact, 0, len(manifest))
 	for _, entry := range manifest {
@@ -285,18 +311,6 @@ func roundlogManifest(manifest []store.ManifestEntry) []roundlog.ArtifactManifes
 			SnapshotPath: entry.SnapshotPath,
 			Size:         entry.Size,
 			Hash:         entry.Hash,
-		})
-	}
-	return out
-}
-
-func roundlogReviewers(results []store.ReviewerResult) []roundlog.ReviewerOutput {
-	out := make([]roundlog.ReviewerOutput, 0, len(results))
-	for _, result := range results {
-		out = append(out, roundlog.ReviewerOutput{
-			Name:       result.ReviewerName,
-			Raw:        result.Raw,
-			UsageNotes: result.UsageNotes,
 		})
 	}
 	return out

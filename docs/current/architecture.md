@@ -62,9 +62,9 @@ Configuration is per round. The reviewer (from the user-level config, or the pro
 9. Write `_state.json` as `running`. The round exists from this moment.
 10. Start the runner process, passing it the lock, close the server's own copy of the lock, and return.
 
-The runner then reads `_run.json` and `_prompt.md`, builds the reviewer from the reviewer block recorded in `_run.json`, dispatches it under the round timeout, validates the raw output against the JSON schema, readiness consistency, and the finding limit, and writes the outcome:
+The runner reads `_run.json` and `_prompt.md`, builds the recorded reviewer, and dispatches it under the round timeout. It validates the reviewer's bytes against the JSON Schema and writes a pending markdown log from those bytes. It then strictly decodes the review once, rejecting duplicate keys, and checks finding IDs, readiness consistency, and the finding limit before publishing the outcome:
 
-- on success, `_review.json` and `_round.md`, then `_state.json` as `completed`;
+- on success, it writes the decoded object to `_review.json`, renames the pending log to `_round.md`, then writes `_state.json` as `completed`;
 - on failure, whatever the reviewer produced to `_raw.txt`, then `_state.json` as `failed` with the stored error.
 
 `_state.json` is always written last, so a round that says `completed` has its outcome on disk. Along the way the runner records its own pid (`runner_pid`) and, once the reviewer has started, the reviewer's (`reviewer_pid`) in `_state.json`, for the operator to read. At finish it records `outlived_server`: true when the server that prepared the round, named by `server_pid` in `_run.json`, is no longer the runner's parent. A round that outlived its server is one the old in-memory design would have lost. The runner releases the lock when it exits.
@@ -92,7 +92,7 @@ The lock is therefore also the permission to write a running round's state; noth
 
 The guard is project-wide rather than per session on purpose. The path duplicate launches actually take is a new session: an agent loses the session id, or gets an error, opens a fresh session, and launches there. A per-session guard never sees that. The cost is that two harnesses cannot run reviews at the same moment in one project; separate worktrees each resolve their own log destination and so get their own lock.
 
-The lock file's content is a note about the current holder (`session_id`, `round_number`, `server_pid`, `started_at`). The note is rewritten in place through the held descriptor; the file is never replaced, because the lock belongs to the file's inode. The launch `conflict` reports `started_by_this_server` by comparing the note's `server_pid` with the answering server's own, and `runner_pid` from the running round's state.
+The lock file's content is a strictly bound JSON note about the current holder (`session_id`, `round_number`, `server_pid`, `started_at`). The note is rewritten in place through the held descriptor; the file is never replaced, because the lock belongs to the file's inode. The launch `conflict` reports `started_by_this_server` by comparing the note's `server_pid` with the answering server's own, and `runner_pid` from the running round's state. If the note cannot be read, the lock still prevents a duplicate launch and the refusal omits holder details.
 
 The server takes the lock and hands it to the runner. The lock belongs to the open file description, so a child that inherits the descriptor shares it, and it is released when the last copy closes. Two rules keep exactly one holder:
 
@@ -165,13 +165,15 @@ The assembled prompt is written to `<session_dir>/round-NN/_prompt.md` when the 
 
 Each fact has one home, and the homes are divided by who writes them. `session.json` carries what belongs to the session and nothing else: its id, when it opened, and whether and when it closed. A round directory carries everything about that round. The server writes the inputs and the round's first state; the runner writes the outcome and the final state; `record_round_notes` writes the notes later.
 
-The human documents each have a machine twin written in the same motion: `_review.json` beside `_round.md`, `_notes.json` beside `_notes.md`. Mercurius reads the twins and never parses its own markdown back. The refs a round accepts for decisions are not stored; they are recomputed from the raw output in `_review.json` through the same schema parse that produced them. The artifact manifest is an input, known before the reviewer runs and as true of a failed round as of a completed one, so it lives in `_run.json`.
+The human documents have machine twins. `_review.json` stores the decoded reviewer object with sorted keys and preserves its values, including numeric spellings and nulls. `_round.md` displays the reviewer's original JSON in its original key order. Mercurius binds the stored reviewer object directly when building triage, checking decision refs, and writing the synopsis. `_notes.json` holds the notes alongside `_notes.md`. The artifact manifest is a round input, so it lives in `_run.json`.
 
 A round exists once its `_state.json` exists. A round directory without one is a leftover from a server that died while preparing it; it is not listed, and the next `start_review_round` in that session removes it.
 
 `_config.yaml` is the exact `mercurius.yaml` bytes this round ran with, captured beside the rendered prompt so the round's input and output sit together: a guard present in `_config.yaml` but absent from `_prompt.md` (rendered empty) stays diagnosable after the fact. Because they record the raw config and the resolved reviewer, `_config.yaml` and `_run.json` can contain a `binary_path`, `model`, or `extra_args`; the `.mercurius/` tree is local and gitignored, so treat it accordingly. Other files in the round directory are the snapshotted artifacts under their declared names.
 
-All JSON files are written through a temporary file renamed over the target, so a reader never sees a partial file. Session ids from tool calls and from `monitor --session` are checked against `^s_[A-Za-z0-9]{12}$` before they are joined into a path; anything else is `not_found`. A matching directory with no `session.json` is `not_found` with a detail saying it is not a session in this layout; sessions written by older Mercurius versions are not read. A `session.json`, `_run.json`, or `_state.json` that exists and cannot be parsed is an `internal_error` naming the file.
+Session and round JSON files are written with sorted keys through a temporary file renamed over the target. The reviewer timeout is a duration string such as `20m0s`. Empty reviewer `extra_args` are written as `[]`, `outlived_server` is always a boolean, empty stored error `details` are written as `{}`, and a decision with no note has `"note": ""`.
+
+Every machine JSON read uses strict binding. A session or round file with malformed JSON, a duplicate or unknown key, or a wrong field type returns an `internal_error` naming the file when a tool tries to read it. Session ids from tool calls and from `monitor --session` must match `^s_[A-Za-z0-9]{12}$` before they are joined into a path. Invalid ids return `not_found`, as does a matching directory without `session.json`.
 
 ## Round Logs
 
