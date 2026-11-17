@@ -2,11 +2,15 @@
   "additionalProperties": false,
   "properties": {
     "round_number": {
+      "minimum": 1,
       "type": "integer"
     },
     "session_id": {
       "type": "string"
     }
   },
+  "required": [
+    "session_id"
+  ],
   "type": "object"
 }

@@ -60,7 +60,7 @@ func TestDummyReviewFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	openOutput := decodeStructured[OpenSessionOutput](t, openResult)
+	openOutput := bindStructured[OpenSessionOutput](t, openResult)
 	if openOutput.SessionID == "" {
 		t.Fatal("expected session id")
 	}
@@ -99,7 +99,7 @@ func TestDummyReviewFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("record notes: %v", err)
 	}
-	notesOutput := decodeStructured[RecordRoundNotesOutput](t, notesResult)
+	notesOutput := bindStructured[RecordRoundNotesOutput](t, notesResult)
 	if !notesOutput.CommentaryRecorded || notesOutput.DecisionsRecorded != 0 {
 		t.Fatalf("notes output = %+v", notesOutput)
 	}
@@ -113,7 +113,7 @@ func TestDummyReviewFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session status: %v", err)
 	}
-	statusOutput := decodeStructured[SessionStatusOutput](t, statusResult)
+	statusOutput := bindStructured[SessionStatusOutput](t, statusResult)
 	if statusOutput.RoundCount != 1 || len(statusOutput.Rounds) != 1 || !statusOutput.Rounds[0].HasNotes {
 		t.Fatalf("status output = %+v", statusOutput)
 	}
@@ -134,8 +134,8 @@ func TestDummyReviewFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("close session: %v", err)
 	}
-	closeOutput := decodeStructured[CloseSessionOutput](t, closeResult)
-	if closeOutput.SessionID != openOutput.SessionID || closeOutput.ClosedAt == "" {
+	closeOutput := bindStructured[CloseSessionOutput](t, closeResult)
+	if closeOutput.SessionID != openOutput.SessionID || closeOutput.ClosedAt.IsZero() {
 		t.Fatalf("close output = %+v", closeOutput)
 	}
 	if closeOutput.SynopsisPath == "" {
@@ -169,7 +169,7 @@ func TestArtifactNameValidationOnStartRound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	sessionID := decodeStructured[OpenSessionOutput](t, openResult).SessionID
+	sessionID := bindStructured[OpenSessionOutput](t, openResult).SessionID
 
 	tests := []string{
 		"dir/file",
@@ -213,7 +213,7 @@ func TestFailedRoundReturnsToolErrorAndStatusShowsIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session status: %v", err)
 	}
-	status := decodeStructured[SessionStatusOutput](t, statusResult)
+	status := bindStructured[SessionStatusOutput](t, statusResult)
 	if status.RoundCount != 1 || status.Rounds[0].State != "failed" {
 		t.Fatalf("a failed round stays listed: %+v", status)
 	}
@@ -264,7 +264,7 @@ func TestServerStartsWithoutConfig(t *testing.T) {
 	if err != nil || second.IsError {
 		t.Fatalf("open after writing the config: result=%+v err=%v", second, err)
 	}
-	opened := decodeStructured[OpenSessionOutput](t, second)
+	opened := bindStructured[OpenSessionOutput](t, second)
 	if opened.Reviewer == nil || opened.Reviewer.Source != "user config" {
 		t.Fatalf("open must report the reviewer and where it came from: %+v", opened.Reviewer)
 	}
@@ -288,7 +288,7 @@ func TestAsyncReviewTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	sessionID := decodeStructured[OpenSessionOutput](t, openResult).SessionID
+	sessionID := bindStructured[OpenSessionOutput](t, openResult).SessionID
 
 	startResult, err := client.CallTool(ctx, &mcp.CallToolParams{
 		Name: "start_review_round",
@@ -303,7 +303,7 @@ func TestAsyncReviewTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start review round: %v", err)
 	}
-	start := decodeStructured[StartReviewRoundOutput](t, startResult)
+	start := bindStructured[StartReviewRoundOutput](t, startResult)
 	if start.RoundNumber != 1 || start.State != "running" || start.MonitorCommand == "" || start.Reviewer.Name != "dummy" {
 		t.Fatalf("start output = %+v", start)
 	}
@@ -347,7 +347,7 @@ func TestAsyncReviewTools(t *testing.T) {
 			},
 		})
 		if err == nil && collectResult != nil && !collectResult.IsError {
-			collected = decodeStructured[CollectedRoundOutput](t, collectResult)
+			collected = bindStructured[CollectedRoundOutput](t, collectResult)
 			break
 		}
 		select {
@@ -424,7 +424,7 @@ func TestOpenSessionRereadsConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session 1: %v", err)
 	}
-	if out := decodeStructured[OpenSessionOutput](t, first); !out.ReviewContextPresent {
+	if out := bindStructured[OpenSessionOutput](t, first); !out.ReviewContextPresent {
 		t.Fatalf("first open: expected review_context_present, got %+v", out)
 	}
 
@@ -438,7 +438,7 @@ func TestOpenSessionRereadsConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session 2: %v", err)
 	}
-	out2 := decodeStructured[OpenSessionOutput](t, second)
+	out2 := bindStructured[OpenSessionOutput](t, second)
 	if out2.ReviewContextPresent || out2.Reviewer != nil {
 		t.Fatalf("second open: expected review_context and reviewer absent after yaml edit, got %+v", out2)
 	}
@@ -466,7 +466,7 @@ func TestStartReviewRoundRereadsConfigLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	sessionID := decodeStructured[OpenSessionOutput](t, openResult).SessionID
+	sessionID := bindStructured[OpenSessionOutput](t, openResult).SessionID
 
 	// round 1: no guard configured yet.
 	round1 := startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
@@ -505,7 +505,7 @@ func TestStartReviewRoundFailsCleanlyOnBrokenConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	sessionID := decodeStructured[OpenSessionOutput](t, openResult).SessionID
+	sessionID := bindStructured[OpenSessionOutput](t, openResult).SessionID
 
 	// break the YAML between open and the round.
 	writeConfigFile(t, configPath, "this: is: not: valid: yaml\n\t::broken")
@@ -532,7 +532,7 @@ func TestStartReviewRoundFailsCleanlyOnBrokenConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session status: %v", err)
 	}
-	status := decodeStructured[SessionStatusOutput](t, statusResult)
+	status := bindStructured[SessionStatusOutput](t, statusResult)
 	if status.State != "active" {
 		t.Fatalf("session state = %q, want active after a failed re-read", status.State)
 	}
@@ -635,7 +635,7 @@ func TestRecordRoundNotesPersistsDecisionsOnFirstCall(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("first call errored: %+v", result.StructuredContent)
 	}
-	out := decodeStructured[RecordRoundNotesOutput](t, result)
+	out := bindStructured[RecordRoundNotesOutput](t, result)
 	if out.DecisionsRecorded != 1 {
 		t.Fatalf("decisions recorded on first call = %d, want 1", out.DecisionsRecorded)
 	}
@@ -777,7 +777,9 @@ func newTestClientWithLauncher(t *testing.T, launcher *runner.InProcess, configB
 		Launcher:       launcher,
 	})
 	server := mcp.NewServer(&mcp.Implementation{Name: "test-project", Version: Version}, nil)
-	RegisterTools(server, b)
+	if err := RegisterTools(server, b); err != nil {
+		t.Fatalf("register tools: %v", err)
+	}
 	ctx, client := newTestClientForServer(t, server)
 	return ctx, client, configPath
 }
@@ -817,7 +819,7 @@ func openTestSession(t *testing.T, ctx context.Context, client *mcp.ClientSessio
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	return decodeStructured[OpenSessionOutput](t, openResult).SessionID, artifactPath
+	return bindStructured[OpenSessionOutput](t, openResult).SessionID, artifactPath
 }
 
 func startAndCollectRoundTool(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string, artifactPath string) CollectedRoundOutput {
@@ -845,7 +847,7 @@ func startRoundTool(t *testing.T, ctx context.Context, client *mcp.ClientSession
 	if result.IsError {
 		t.Fatalf("start review round returned tool error: %+v", result.StructuredContent)
 	}
-	return decodeStructured[StartReviewRoundOutput](t, result)
+	return bindStructured[StartReviewRoundOutput](t, result)
 }
 
 func collectRound(t *testing.T, ctx context.Context, client *mcp.ClientSession, sessionID string, roundNumber int) CollectedRoundOutput {
@@ -864,9 +866,9 @@ func collectRound(t *testing.T, ctx context.Context, client *mcp.ClientSession, 
 			t.Fatalf("collect round: %v", err)
 		}
 		if !result.IsError {
-			return decodeStructured[CollectedRoundOutput](t, result)
+			return bindStructured[CollectedRoundOutput](t, result)
 		}
-		payload := decodeStructured[ToolErrorOutput](t, result)
+		payload := bindStructured[ToolErrorOutput](t, result)
 		if payload.Error.Code != broker.CodeConflict {
 			t.Fatalf("collect round returned tool error: %+v", payload.Error)
 		}
@@ -897,7 +899,7 @@ func startAndCollectRoundToolError(t *testing.T, ctx context.Context, client *mc
 	if result.IsError {
 		return assertToolError(t, result, nil, wantStableCode)
 	}
-	started := decodeStructured[StartReviewRoundOutput](t, result)
+	started := bindStructured[StartReviewRoundOutput](t, result)
 
 	deadline := time.After(5 * time.Second)
 	for {
@@ -912,7 +914,7 @@ func startAndCollectRoundToolError(t *testing.T, ctx context.Context, client *mc
 			t.Fatalf("collect round: %v", err)
 		}
 		if result.IsError {
-			payload := decodeStructured[ToolErrorOutput](t, result)
+			payload := bindStructured[ToolErrorOutput](t, result)
 			if payload.Error.Code == broker.CodeConflict {
 				select {
 				case <-deadline:
@@ -927,19 +929,19 @@ func startAndCollectRoundToolError(t *testing.T, ctx context.Context, client *mc
 	}
 }
 
-func decodeStructured[T any](t *testing.T, result *mcp.CallToolResult) T {
+func bindStructured[T any](t *testing.T, result *mcp.CallToolResult) T {
 	t.Helper()
 
 	if result == nil {
 		t.Fatal("nil tool result")
 	}
-	raw, err := json.Marshal(result.StructuredContent)
-	if err != nil {
-		t.Fatalf("marshal structured content: %v", err)
+	data, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("expected object in structured content, got %T", result.StructuredContent)
 	}
 	var out T
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("decode structured content: %v; raw=%s", err, string(raw))
+	if err := dd.Bind(&out, data); err != nil {
+		t.Fatalf("bind structured content: %v", err)
 	}
 	return out
 }
@@ -956,7 +958,7 @@ func assertToolError(t *testing.T, result *mcp.CallToolResult, err error, wantSt
 	if !result.IsError {
 		t.Fatalf("expected IsError result, got %+v", result)
 	}
-	payload := decodeStructured[ToolErrorOutput](t, result)
+	payload := bindStructured[ToolErrorOutput](t, result)
 	if payload.Error.Code != wantStableCode {
 		t.Fatalf("stable code = %s, want %s; payload=%+v", payload.Error.Code, wantStableCode, payload)
 	}

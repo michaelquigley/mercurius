@@ -104,7 +104,7 @@ What a caller sees change:
 
 ### Strictness
 
-- **Tool arguments:** `DecodeStrictJSON`, then the schema, then a strict `dd.Bind`. An arguments value that is absent or is `null` is treated as an empty object before any of that, for every tool. `open_session` accepts a `null` arguments value today, some clients send one for a tool with no parameters, and the strict decoder would otherwise refuse it for not being an object. A tool with required fields then fails on the missing field.
+- **Tool arguments:** `DecodeStrictJSON`, then the schema, then a strict `dd.Bind`. An arguments value that is absent or is `null` is treated as an empty object before any of that, for every tool. `open_session` accepts a `null` arguments value today, some clients send one for a tool with no parameters, and the strict decoder would otherwise refuse it for not being an object. A tool with required fields then fails on the missing field. The schema is checked against a copy of the decoded arguments in which each `json.Number` is a native number, and the bind gets the original. The validator, `jsonschema-go` at v0.4.2 and unchanged in v0.4.3, takes a value's type from its Go kind, so it reads a `json.Number` as a string and refuses `round_number: 1` for not being an integer. With the copy, `1` passes both; `1.0` passes the schema, which counts it as an integer, and is refused by the strict bind, which checks its spelling.
 - **On-disk files:** a strict bind. A machine file with an unknown key or a wrong type answers `internal_error` naming the file, the same as an unparseable one does today.
 - **Review output:** the JSON Schema validation runs first on the reviewer's bytes, unchanged, then a strict decode and a strict bind. The schema is already as strict as the bind, so the only new refusal is a duplicate key.
 - **Config:** `MergeYAML` over the defaults, as today, with unknown keys collected by `+extra` and refused.
@@ -170,7 +170,7 @@ The store still holds the raw output as bytes in this stage, so every caller sti
 
 ## Stage 5 — the MCP payloads
 
-- A binding adapter in `internal/mcpserver`, ported from terminus's `internal/mcpserver/binding.go`: each tool is registered through the SDK's raw handler with its explicit input schema; absent or `null` arguments become an empty object; arguments are decoded strictly, validated, and bound; results and the error envelope are unbound with `dd.Unbind`.
+- A binding adapter in `internal/mcpserver`, ported from terminus's `internal/mcpserver/binding.go`: each tool is registered through the SDK's raw handler with its explicit input schema; absent or `null` arguments become an empty object; arguments are decoded strictly, validated against a copy with native numbers, and bound from the original; results and the error envelope are unbound with `dd.Unbind`.
 - The six input schemas from the target.
 - The input and output structs lose their `json` tags, take the tags the target lists, and the output timestamps become `time.Time`. The raw reviewer object in the `collect_round` output is the `+opaque` value. The server's time-formatting helpers are removed.
 - `decodeStructured` is replaced by the stage 1 helper for shape, and by a `dd.Bind` from the structured content where a test wants a typed value.

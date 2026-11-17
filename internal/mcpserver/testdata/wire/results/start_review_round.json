@@ -2,6 +2,7 @@
   "monitor_command": "mercurius monitor --config <project>/mercurius.yaml --session <session> --wait",
   "next_action": "tell the user this review is running; they can monitor it with the monitor_command and re-engage you when the round completes",
   "reviewer": {
+    "extra_args": [],
     "impl": "dummy",
     "name": "dummy",
     "source": "user config",

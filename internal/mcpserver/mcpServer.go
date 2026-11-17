@@ -2,18 +2,13 @@ package mcpserver
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"time"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/michaelquigley/mercurius/internal/broker"
 	"github.com/michaelquigley/mercurius/internal/config"
 	"github.com/michaelquigley/mercurius/internal/runner"
 	"github.com/michaelquigley/mercurius/internal/schema"
 	"github.com/michaelquigley/push/build"
-	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -22,182 +17,182 @@ const Version = "v0.0.0-dev"
 type EmptyInput struct{}
 
 type ArtifactInput struct {
-	Name string `json:"name,omitempty"`
-	Path string `json:"path,omitempty"`
+	Name string `dd:",+required"`
+	Path string `dd:",+required"`
 }
 
 type OpenSessionInput struct{}
 
 // OpenSessionOutput describes a new session. max_findings, the calibration
 // presence flags, and reviewer describe the configuration at the moment of the
-// call, as information; they are not stored on the session. reviewer is null
+// call, as information; they are not stored on the session. reviewer is omitted
 // when no reviewer is configured.
 type OpenSessionOutput struct {
-	SessionID            string              `json:"session_id"`
-	OpenedAt             string              `json:"opened_at"`
-	MaxFindings          int                 `json:"max_findings"`
-	ReviewContextPresent bool                `json:"review_context_present"`
-	ReviewFocusPresent   bool                `json:"review_focus_present"`
-	Reviewer             *ReviewerInfoOutput `json:"reviewer"`
+	SessionID            string
+	OpenedAt             time.Time
+	MaxFindings          int
+	ReviewContextPresent bool
+	ReviewFocusPresent   bool
+	Reviewer             *ReviewerInfoOutput
 }
 
 type StartRoundInput struct {
-	SessionID string          `json:"session_id,omitempty"`
-	Artifacts []ArtifactInput `json:"artifacts,omitempty"`
+	SessionID string          `dd:",+required"`
+	Artifacts []ArtifactInput `dd:",+required"`
 }
 
 type CollectedRoundOutput struct {
-	RoundNumber int                   `json:"round_number"`
-	LogPath     string                `json:"log_path"`
-	Manifest    []ManifestEntryOutput `json:"manifest"`
-	Reviewers   []ReviewerOutput      `json:"reviewers"`
-	Triage      RoundTriageOutput     `json:"triage"`
-	NextAction  string                `json:"next_action"`
+	RoundNumber int
+	LogPath     string
+	Manifest    []ManifestEntryOutput
+	Reviewers   []ReviewerOutput
+	Triage      RoundTriageOutput
+	NextAction  string
 }
 
 type RoundTriageOutput struct {
-	TotalFindings     int                    `json:"total_findings"`
-	RemainingFindings int                    `json:"remaining_findings"`
-	Findings          []TriageFindingOutput  `json:"findings"`
-	AdvisoryNotes     []TriageAdvisoryOutput `json:"advisory_notes"`
-	NextFinding       *TriageFindingOutput   `json:"next_finding"`
-	Guidance          string                 `json:"guidance"`
+	TotalFindings     int
+	RemainingFindings int
+	Findings          []TriageFindingOutput
+	AdvisoryNotes     []TriageAdvisoryOutput
+	NextFinding       *TriageFindingOutput
+	Guidance          string
 }
 
 type TriageFindingOutput struct {
-	ReviewerName string  `json:"reviewer_name"`
-	Ref          string  `json:"ref"`
-	Kind         string  `json:"kind"`
-	Severity     *string `json:"severity,omitempty"`
-	Location     *string `json:"location,omitempty"`
-	Title        string  `json:"title"`
-	Detail       string  `json:"detail"`
-	Suggestion   *string `json:"suggestion,omitempty"`
+	ReviewerName string
+	Ref          string
+	Kind         string
+	Severity     *string
+	Location     *string
+	Title        string
+	Detail       string
+	Suggestion   *string
 }
 
 type TriageAdvisoryOutput struct {
-	ReviewerName string  `json:"reviewer_name"`
-	Ref          string  `json:"ref"`
-	Location     string  `json:"location"`
-	Note         string  `json:"note"`
-	Rationale    string  `json:"rationale"`
-	Suggestion   *string `json:"suggestion,omitempty"`
+	ReviewerName string
+	Ref          string
+	Location     string
+	Note         string
+	Rationale    string
+	Suggestion   *string
 }
 
 // StartReviewRoundOutput describes a round handed to its runner. status_path
 // points at the round's _state.json.
 type StartReviewRoundOutput struct {
-	SessionID      string             `json:"session_id"`
-	RoundNumber    int                `json:"round_number"`
-	State          string             `json:"state"`
-	Reviewer       ReviewerInfoOutput `json:"reviewer"`
-	StartedAt      string             `json:"started_at"`
-	StatusPath     string             `json:"status_path"`
-	MonitorCommand string             `json:"monitor_command"`
-	NextAction     string             `json:"next_action"`
+	SessionID      string
+	RoundNumber    int
+	State          string
+	Reviewer       ReviewerInfoOutput
+	StartedAt      time.Time
+	StatusPath     string
+	MonitorCommand string
+	NextAction     string
 }
 
 type CollectRoundInput struct {
-	SessionID   string `json:"session_id,omitempty"`
-	RoundNumber int    `json:"round_number,omitempty"`
+	SessionID   string `dd:",+required"`
+	RoundNumber int
 }
 
 type ManifestEntryOutput struct {
-	Name         string `json:"name"`
-	SourcePath   string `json:"source_path"`
-	SnapshotPath string `json:"snapshot_path"`
-	Size         int64  `json:"size"`
-	Hash         string `json:"hash"`
+	Name         string
+	SourcePath   string
+	SnapshotPath string
+	Size         int64
+	Hash         string
 }
 
 type ReviewerOutput struct {
-	ReviewerName string         `json:"reviewer_name"`
-	Raw          map[string]any `json:"raw"`
-	UsageNotes   string         `json:"usage_notes"`
+	ReviewerName string
+	Raw          map[string]any `dd:",+opaque"`
+	UsageNotes   string
 }
 
 type RecordRoundNotesInput struct {
-	SessionID   string          `json:"session_id,omitempty"`
-	RoundNumber int             `json:"round_number,omitempty"`
-	Commentary  string          `json:"commentary,omitempty"`
-	Decisions   []DecisionInput `json:"decisions,omitempty"`
+	SessionID   string `dd:",+required"`
+	RoundNumber int    `dd:",+required"`
+	Commentary  string
+	Decisions   []DecisionInput
 }
 
 type DecisionInput struct {
-	Ref         string `json:"ref,omitempty"`
-	Disposition string `json:"disposition,omitempty"`
-	Note        string `json:"note,omitempty"`
+	Ref         string `dd:",+required"`
+	Disposition string `dd:",+required"`
+	Note        string
 }
 
 type RecordRoundNotesOutput struct {
-	RoundNumber        int    `json:"round_number"`
-	LogPath            string `json:"log_path"`
-	CommentaryRecorded bool   `json:"commentary_recorded"`
-	DecisionsRecorded  int    `json:"decisions_recorded"`
-	NextAction         string `json:"next_action"`
+	RoundNumber        int
+	LogPath            string
+	CommentaryRecorded bool
+	DecisionsRecorded  int
+	NextAction         string
 }
 
 type CloseSessionInput struct {
-	SessionID string `json:"session_id,omitempty"`
+	SessionID string `dd:",+required"`
 }
 
 type CloseSessionOutput struct {
-	SessionID    string `json:"session_id"`
-	ClosedAt     string `json:"closed_at"`
-	SynopsisPath string `json:"synopsis_path"`
+	SessionID    string
+	ClosedAt     time.Time
+	SynopsisPath string
 }
 
 type SessionStatusInput struct {
-	SessionID string `json:"session_id,omitempty"`
+	SessionID string `dd:",+required"`
 }
 
 // SessionStatusOutput is a read-only session view. The reviewer, finding limit,
 // and any failure are reported per round.
 type SessionStatusOutput struct {
-	SessionID  string              `json:"session_id"`
-	State      string              `json:"state"`
-	OpenedAt   string              `json:"opened_at"`
-	ClosedAt   *string             `json:"closed_at"`
-	RoundCount int                 `json:"round_count"`
-	Rounds     []RoundStatusOutput `json:"rounds"`
+	SessionID  string
+	State      string
+	OpenedAt   time.Time
+	ClosedAt   *time.Time
+	RoundCount int
+	Rounds     []RoundStatusOutput
 }
 
 type RoundStatusOutput struct {
-	RoundNumber    int                `json:"round_number"`
-	OpenedAt       string             `json:"opened_at"`
-	State          string             `json:"state"`
-	Reviewer       ReviewerInfoOutput `json:"reviewer"`
-	MaxFindings    int                `json:"max_findings"`
-	StatePath      string             `json:"state_path"`
-	LogPath        string             `json:"log_path,omitempty"`
-	CompletedAt    *string            `json:"completed_at"`
-	HasNotes       bool               `json:"has_notes"`
-	DecisionCount  int                `json:"decision_count"`
-	OutlivedServer bool               `json:"outlived_server"`
-	Error          *ErrorOutput       `json:"error"`
+	RoundNumber    int
+	OpenedAt       time.Time
+	State          string
+	Reviewer       ReviewerInfoOutput
+	MaxFindings    int
+	StatePath      string
+	LogPath        string `dd:",+omitempty"`
+	CompletedAt    *time.Time
+	HasNotes       bool
+	DecisionCount  int
+	OutlivedServer bool
+	Error          *ErrorOutput
 }
 
 type ReviewerInfoOutput struct {
-	Name       string   `json:"name"`
-	Impl       string   `json:"impl"`
-	Model      string   `json:"model,omitempty"`
-	BinaryPath string   `json:"binary_path,omitempty"`
-	ExtraArgs  []string `json:"extra_args,omitempty"`
-	Timeout    string   `json:"timeout"`
+	Name       string
+	Impl       string
+	Model      string `dd:",+omitempty"`
+	BinaryPath string `dd:",+omitempty"`
+	ExtraArgs  []string
+	Timeout    string
 	// Source is where the reviewer came from: 'user config' or 'project
 	// override'.
-	Source string `json:"source"`
+	Source string
 }
 
 type ToolErrorOutput struct {
-	Error ErrorOutput `json:"error"`
+	Error ErrorOutput
 }
 
 type ErrorOutput struct {
-	Code    string         `json:"code"`
-	Message string         `json:"message"`
-	Details map[string]any `json:"details"`
-	At      string         `json:"at,omitempty"`
+	Code    string
+	Message string
+	Details map[string]any
+	At      time.Time `dd:",+omitempty"`
 }
 
 // Options configures a server.
@@ -235,240 +230,150 @@ func New(options Options) (*mcp.Server, *broker.Broker, error) {
 		Launcher:       launcher,
 	})
 	server := mcp.NewServer(&mcp.Implementation{Name: config.ProjectName(configPath), Version: build.String()}, nil)
-	RegisterTools(server, b)
-	return server, b, nil
-}
-
-// recordRoundNotesDispositions are the valid disposition values, surfaced on the
-// record_round_notes input schema so a client sees them at the boundary. They
-// mirror broker.validDisposition, which stays as a defense-in-depth backstop.
-var recordRoundNotesDispositions = []any{"fixed", "rejected", "deferred"}
-
-// recordRoundNotesInputSchema is an explicit input schema for record_round_notes.
-// reflection inference leaves disposition an unconstrained string with no
-// description, so a client cannot see the valid values from the schema and often
-// malforms the first call (the dropped-decisions defect). spelling the schema out
-// surfaces the disposition enum and field descriptions, and because the SDK
-// validates incoming arguments against the resolved schema, an invalid
-// disposition is rejected at the boundary before the broker is reached.
-func recordRoundNotesInputSchema() *jsonschema.Schema {
-	return &jsonschema.Schema{
-		Type: "object",
-		Properties: map[string]*jsonschema.Schema{
-			"session_id": {
-				Type:        "string",
-				Description: "the session id returned by open_session.",
-			},
-			"round_number": {
-				Type:        "integer",
-				Description: "the round number whose notes are being recorded.",
-			},
-			"commentary": {
-				Type:        "string",
-				Description: "free-form human commentary for the round.",
-			},
-			"decisions": {
-				Type:        "array",
-				Description: "one entry per reviewer finding triaged this round; include the full array on the first call rather than a later one.",
-				Items: &jsonschema.Schema{
-					Type:     "object",
-					Required: []string{"ref", "disposition"},
-					Properties: map[string]*jsonschema.Schema{
-						"ref": {
-							Type:        "string",
-							Description: "the reviewer finding id this decision is about (a concern, question, or advisory id from the round).",
-						},
-						"disposition": {
-							Type:        "string",
-							Enum:        recordRoundNotesDispositions,
-							Description: "how the finding was handled: 'fixed' (addressed in the artifacts), 'rejected' (declined, e.g. out of scope), or 'deferred' (acknowledged, to be handled later).",
-						},
-						"note": {
-							Type:        "string",
-							Description: "optional human note explaining the decision.",
-						},
-					},
-				},
-			},
-		},
+	if err := RegisterTools(server, b); err != nil {
+		return nil, nil, err
 	}
+	return server, b, nil
 }
 
 // RegisterTools installs the Mercurius MCP tool surface. The broker resolves
 // the configuration on every call, so edits to mercurius.yaml take effect on the
 // next call without a server restart.
-func RegisterTools(server *mcp.Server, b *broker.Broker) {
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "open_session",
-		Description: "open a new Mercurius review session, a lightweight container for rounds. sessions live on disk, so any later server process can serve this session by its id. if mercurius.yaml is missing or unreadable this errors with code 'user_error' naming the path; write or fix the file and call again. the reviewer is not set in mercurius.yaml: it comes from the operator's user-level config, and a 'reviewer' block in mercurius.yaml is a 'user_error' telling you to remove it; remove it, do not rename it. the max_findings, review_context_present, review_focus_present, and reviewer fields describe the configuration at this moment, as information; they are not frozen on the session. calibration, the reviewer, and max_findings are re-read at the start of every round. artifacts are not registered at session open; pass them to each start_review_round call.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ OpenSessionInput) (*mcp.CallToolResult, any, error) {
-		response, err := b.OpenSession(ctx, broker.OpenSessionRequest{})
-		if err != nil {
-			return toolErrorResult(err)
-		}
-		return nil, OpenSessionOutput{
-			SessionID:            response.SessionID,
-			OpenedAt:             formatTime(response.OpenedAt),
-			MaxFindings:          response.MaxFindings,
-			ReviewContextPresent: response.ReviewContextPresent,
-			ReviewFocusPresent:   response.ReviewFocusPresent,
-			Reviewer:             reviewerInfoOutputPtr(response.Reviewer),
-		}, nil
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "start_review_round",
-		Description: "start one review round in the background and return immediately. artifacts are required and are scoped to this round only; nothing carries over between rounds in the same session. review_context, review_focus, settled_decisions, and max_findings are resolved from mercurius.yaml, and the reviewer from the operator's user-level config, at the start of this round and recorded on it. if either file is missing, mid-edit, or broken, or no reviewer is configured, this errors with code 'user_error' naming the file and nothing is started; fix it and start the round again. the response's reviewer.source says where the reviewer came from ('user config' or 'project override'); on a project override, tell the user the round runs on the project's own reviewer. one round runs at a time per project: if another round is running, in this session or any other, this errors with code 'conflict' naming that round; do not open a new session to get around it, tell the user and collect that round when it finishes. a failed round keeps its number, so a retry is the next round. use the returned monitor_command to tell the user how to watch progress; the round may outlive the MCP client timeout.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input StartRoundInput) (*mcp.CallToolResult, any, error) {
-		response, err := b.StartReviewRound(ctx, broker.StartRoundRequest{
-			SessionID: input.SessionID,
-			Artifacts: artifactsFromInput(input.Artifacts),
-		})
-		if err != nil {
-			return toolErrorResult(err)
-		}
-		return nil, StartReviewRoundOutput{
-			SessionID:      response.SessionID,
-			RoundNumber:    response.RoundNumber,
-			State:          response.State,
-			Reviewer:       reviewerInfoOutput(response.Reviewer),
-			StartedAt:      formatTime(response.StartedAt),
-			StatusPath:     response.StatusPath,
-			MonitorCommand: response.MonitorCommand,
-			NextAction:     response.NextAction,
-		}, nil
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "collect_round",
-		Description: "return a completed review round result with triage guidance. if the round is still running, this errors with code 'conflict'; tell the user to keep monitoring instead of retrying immediately. if the round failed, this returns the stored failure as a tool error, for as long as the round directory exists; the reviewer's raw output, when there was any, is at details.raw_path. when findings are present, walk them one at a time, explaining each finding and its proposed solution clearly and briefly.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input CollectRoundInput) (*mcp.CallToolResult, any, error) {
-		response, err := b.CollectRound(ctx, broker.CollectRoundRequest{
-			SessionID:   input.SessionID,
-			RoundNumber: input.RoundNumber,
-		})
-		if err != nil {
-			return toolErrorResult(err)
-		}
-		triage := triageOutput(response.Reviewers)
-		return nil, CollectedRoundOutput{
-			RoundNumber: response.RoundNumber,
-			LogPath:     response.LogPath,
-			Manifest:    manifestOutput(response.Manifest),
-			Reviewers:   reviewerOutput(response.Reviewers),
-			Triage:      triage,
-			NextAction:  collectedRoundNextAction(triage),
-		}, nil
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "record_round_notes",
-		Description: "record commentary and human decisions for a completed round; a failed or running round answers 'conflict'. each decision is {ref, disposition, note}; disposition must be one of 'fixed', 'rejected', or 'deferred'. include the full decisions array on the FIRST call rather than recording commentary first and decisions on a later call. notes land in _notes.json and its human twin _notes.md inside the round directory; there is no separate close_round step. after this returns, pause and ask the user whether to start another round, open a new session, or stop; do not immediately call another Mercurius tool unless the user explicitly asks you to continue.",
-		InputSchema: recordRoundNotesInputSchema(),
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RecordRoundNotesInput) (*mcp.CallToolResult, any, error) {
-		response, err := b.RecordRoundNotes(ctx, broker.RecordRoundNotesRequest{
-			SessionID:   input.SessionID,
-			RoundNumber: input.RoundNumber,
-			Commentary:  input.Commentary,
-			Decisions:   decisionsFromInput(input.Decisions),
-		})
-		if err != nil {
-			return toolErrorResult(err)
-		}
-		return nil, RecordRoundNotesOutput{
-			RoundNumber:        response.RoundNumber,
-			LogPath:            response.LogPath,
-			CommentaryRecorded: response.CommentaryRecorded,
-			DecisionsRecorded:  response.DecisionsRecorded,
-			NextAction:         "pause and ask the user whether to start another review round, open a new session, or stop",
-		}, nil
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "close_session",
-		Description: "close a Mercurius review session. sessions are light groupings of rounds; closure marks the arc done and writes a human-readable _synopsis.md at the session root, rendered from disk, that summarizes every round - failed ones included - with its reviewer, findings, and any recorded decisions. the synopsis_path field on the response points at that file.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input CloseSessionInput) (*mcp.CallToolResult, any, error) {
-		response, err := b.CloseSession(ctx, broker.CloseSessionRequest{
-			SessionID: input.SessionID,
-		})
-		if err != nil {
-			return toolErrorResult(err)
-		}
-		return nil, CloseSessionOutput{
-			SessionID:    response.SessionID,
-			ClosedAt:     formatTime(response.ClosedAt),
-			SynopsisPath: response.SynopsisPath,
-		}, nil
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "session_status",
-		Description: "return the current status of a Mercurius review session: every round with its state (running, completed, or failed), reviewer, finding limit, whether it outlived the server that started it, and any failure.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input SessionStatusInput) (*mcp.CallToolResult, any, error) {
-		response, err := b.SessionStatus(ctx, input.SessionID)
-		if err != nil {
-			return toolErrorResult(err)
-		}
-		return nil, sessionStatusOutput(response), nil
-	})
-}
-
-func rpcError(err error) error {
-	var brokerErr *broker.Error
-	if errors.As(err, &brokerErr) {
-		var code int64 = jsonrpc.CodeInvalidParams
-		if brokerErr.Code == broker.CodeInternalError {
-			code = jsonrpc.CodeInternalError
-		}
-		return wireError(code, brokerErr.Code, brokerErr.Message, brokerErr.Details, brokerErr.Err)
-	}
-	return wireError(jsonrpc.CodeInternalError, broker.CodeInternalError, "internal error", nil, err)
-}
-
-func toolErrorResult(err error) (*mcp.CallToolResult, any, error) {
-	var brokerErr *broker.Error
-	if !errors.As(err, &brokerErr) {
-		return nil, nil, rpcError(err)
-	}
-
-	output := errorOutput(broker.ErrorInfoFrom(err))
-	text := fmt.Sprintf("%s: %s", output.Code, output.Message)
-	if cause, ok := output.Details["cause"].(string); ok && cause != "" {
-		text += "\ncause: " + cause
-	}
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: text},
+func RegisterTools(server *mcp.Server, b *broker.Broker) error {
+	if err := register(server, tool[OpenSessionInput, OpenSessionOutput]{
+		name:        "open_session",
+		description: "open a new Mercurius review session, a lightweight container for rounds. sessions live on disk, so any later server process can serve this session by its id. if mercurius.yaml is missing or unreadable this errors with code 'user_error' naming the path; write or fix the file and call again. the reviewer is not set in mercurius.yaml: it comes from the operator's user-level config, and a 'reviewer' block in mercurius.yaml is a 'user_error' telling you to remove it; remove it, do not rename it. the max_findings, review_context_present, review_focus_present, and reviewer fields describe the configuration at this moment, as information; they are not frozen on the session. calibration, the reviewer, and max_findings are re-read at the start of every round. artifacts are not registered at session open; pass them to each start_review_round call.",
+		input:       objectSchema(nil),
+		run: func(ctx context.Context, _ OpenSessionInput) (OpenSessionOutput, error) {
+			response, err := b.OpenSession(ctx, broker.OpenSessionRequest{})
+			if err != nil {
+				return OpenSessionOutput{}, err
+			}
+			return OpenSessionOutput{
+				SessionID:            response.SessionID,
+				OpenedAt:             response.OpenedAt,
+				MaxFindings:          response.MaxFindings,
+				ReviewContextPresent: response.ReviewContextPresent,
+				ReviewFocusPresent:   response.ReviewFocusPresent,
+				Reviewer:             reviewerInfoOutputPtr(response.Reviewer),
+			}, nil
 		},
-		StructuredContent: ToolErrorOutput{Error: output},
-		IsError:           true,
-	}, nil, nil
-}
-
-func wireError(code int64, stableCode string, message string, details map[string]any, cause error) *jsonrpc.Error {
-	payloadDetails := map[string]any{}
-	for key, value := range details {
-		payloadDetails[key] = value
-	}
-	if cause != nil {
-		payloadDetails["cause"] = cause.Error()
+	}); err != nil {
+		return err
 	}
 
-	raw, err := json.Marshal(ToolErrorOutput{
-		Error: ErrorOutput{
-			Code:    stableCode,
-			Message: message,
-			Details: payloadDetails,
+	if err := register(server, tool[StartRoundInput, StartReviewRoundOutput]{
+		name:        "start_review_round",
+		description: "start one review round in the background and return immediately. artifacts are required and are scoped to this round only; nothing carries over between rounds in the same session. review_context, review_focus, settled_decisions, and max_findings are resolved from mercurius.yaml, and the reviewer from the operator's user-level config, at the start of this round and recorded on it. if either file is missing, mid-edit, or broken, or no reviewer is configured, this errors with code 'user_error' naming the file and nothing is started; fix it and start the round again. the response's reviewer.source says where the reviewer came from ('user config' or 'project override'); on a project override, tell the user the round runs on the project's own reviewer. one round runs at a time per project: if another round is running, in this session or any other, this errors with code 'conflict' naming that round; do not open a new session to get around it, tell the user and collect that round when it finishes. a failed round keeps its number, so a retry is the next round. use the returned monitor_command to tell the user how to watch progress; the round may outlive the MCP client timeout.",
+		input:       startRoundInputSchema(),
+		run: func(ctx context.Context, input StartRoundInput) (StartReviewRoundOutput, error) {
+			response, err := b.StartReviewRound(ctx, broker.StartRoundRequest{
+				SessionID: input.SessionID,
+				Artifacts: artifactsFromInput(input.Artifacts),
+			})
+			if err != nil {
+				return StartReviewRoundOutput{}, err
+			}
+			return StartReviewRoundOutput{
+				SessionID:      response.SessionID,
+				RoundNumber:    response.RoundNumber,
+				State:          response.State,
+				Reviewer:       reviewerInfoOutput(response.Reviewer),
+				StartedAt:      response.StartedAt,
+				StatusPath:     response.StatusPath,
+				MonitorCommand: response.MonitorCommand,
+				NextAction:     response.NextAction,
+			}, nil
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := register(server, tool[CollectRoundInput, CollectedRoundOutput]{
+		name:        "collect_round",
+		description: "return a completed review round result with triage guidance. if the round is still running, this errors with code 'conflict'; tell the user to keep monitoring instead of retrying immediately. if the round failed, this returns the stored failure as a tool error, for as long as the round directory exists; the reviewer's raw output, when there was any, is at details.raw_path. when findings are present, walk them one at a time, explaining each finding and its proposed solution clearly and briefly.",
+		input:       collectRoundInputSchema(),
+		run: func(ctx context.Context, input CollectRoundInput) (CollectedRoundOutput, error) {
+			response, err := b.CollectRound(ctx, broker.CollectRoundRequest{
+				SessionID:   input.SessionID,
+				RoundNumber: input.RoundNumber,
+			})
+			if err != nil {
+				return CollectedRoundOutput{}, err
+			}
+			triage := triageOutput(response.Reviewers)
+			return CollectedRoundOutput{
+				RoundNumber: response.RoundNumber,
+				LogPath:     response.LogPath,
+				Manifest:    manifestOutput(response.Manifest),
+				Reviewers:   reviewerOutput(response.Reviewers),
+				Triage:      triage,
+				NextAction:  collectedRoundNextAction(triage),
+			}, nil
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := register(server, tool[RecordRoundNotesInput, RecordRoundNotesOutput]{
+		name:        "record_round_notes",
+		description: "record commentary and human decisions for a completed round; a failed or running round answers 'conflict'. each decision is {ref, disposition, note}; disposition must be one of 'fixed', 'rejected', or 'deferred'. include the full decisions array on the FIRST call rather than recording commentary first and decisions on a later call. notes land in _notes.json and its human twin _notes.md inside the round directory; there is no separate close_round step. after this returns, pause and ask the user whether to start another round, open a new session, or stop; do not immediately call another Mercurius tool unless the user explicitly asks you to continue.",
+		input:       recordRoundNotesInputSchema(),
+		run: func(ctx context.Context, input RecordRoundNotesInput) (RecordRoundNotesOutput, error) {
+			response, err := b.RecordRoundNotes(ctx, broker.RecordRoundNotesRequest{
+				SessionID:   input.SessionID,
+				RoundNumber: input.RoundNumber,
+				Commentary:  input.Commentary,
+				Decisions:   decisionsFromInput(input.Decisions),
+			})
+			if err != nil {
+				return RecordRoundNotesOutput{}, err
+			}
+			return RecordRoundNotesOutput{
+				RoundNumber:        response.RoundNumber,
+				LogPath:            response.LogPath,
+				CommentaryRecorded: response.CommentaryRecorded,
+				DecisionsRecorded:  response.DecisionsRecorded,
+				NextAction:         "pause and ask the user whether to start another review round, open a new session, or stop",
+			}, nil
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := register(server, tool[CloseSessionInput, CloseSessionOutput]{
+		name:        "close_session",
+		description: "close a Mercurius review session. sessions are light groupings of rounds; closure marks the arc done and writes a human-readable _synopsis.md at the session root, rendered from disk, that summarizes every round - failed ones included - with its reviewer, findings, and any recorded decisions. the synopsis_path field on the response points at that file.",
+		input:       sessionIDInputSchema(),
+		run: func(ctx context.Context, input CloseSessionInput) (CloseSessionOutput, error) {
+			response, err := b.CloseSession(ctx, broker.CloseSessionRequest{
+				SessionID: input.SessionID,
+			})
+			if err != nil {
+				return CloseSessionOutput{}, err
+			}
+			return CloseSessionOutput{
+				SessionID:    response.SessionID,
+				ClosedAt:     response.ClosedAt,
+				SynopsisPath: response.SynopsisPath,
+			}, nil
+		},
+	}); err != nil {
+		return err
+	}
+
+	return register(server, tool[SessionStatusInput, SessionStatusOutput]{
+		name:        "session_status",
+		description: "return the current status of a Mercurius review session: every round with its state (running, completed, or failed), reviewer, finding limit, whether it outlived the server that started it, and any failure.",
+		input:       sessionIDInputSchema(),
+		run: func(ctx context.Context, input SessionStatusInput) (SessionStatusOutput, error) {
+			response, err := b.SessionStatus(ctx, input.SessionID)
+			if err != nil {
+				return SessionStatusOutput{}, err
+			}
+			return sessionStatusOutput(response), nil
 		},
 	})
-	if err != nil {
-		raw = json.RawMessage(`{"error":{"code":"internal_error","message":"internal error","details":{"cause":"error payload marshal failed"}}}`)
-	}
-	return &jsonrpc.Error{
-		Code:    code,
-		Message: message,
-		Data:    raw,
-	}
 }
 
 func artifactsFromInput(inputs []ArtifactInput) []broker.Artifact {
@@ -651,8 +556,8 @@ func sessionStatusOutput(status broker.SessionStatusResponse) SessionStatusOutpu
 	return SessionStatusOutput{
 		SessionID:  status.SessionID,
 		State:      status.State,
-		OpenedAt:   formatTime(status.OpenedAt),
-		ClosedAt:   formatTimePtr(status.ClosedAt),
+		OpenedAt:   status.OpenedAt,
+		ClosedAt:   status.ClosedAt,
 		RoundCount: status.RoundCount,
 		Rounds:     roundStatusOutput(status.Rounds),
 	}
@@ -663,13 +568,13 @@ func roundStatusOutput(rounds []broker.RoundStatus) []RoundStatusOutput {
 	for _, round := range rounds {
 		out = append(out, RoundStatusOutput{
 			RoundNumber:    round.RoundNumber,
-			OpenedAt:       formatTime(round.OpenedAt),
+			OpenedAt:       round.OpenedAt,
 			State:          round.State,
 			Reviewer:       reviewerInfoOutput(round.Reviewer),
 			MaxFindings:    round.MaxFindings,
 			StatePath:      round.StatePath,
 			LogPath:        round.LogPath,
-			CompletedAt:    formatTimePtr(round.CompletedAt),
+			CompletedAt:    round.CompletedAt,
 			HasNotes:       round.HasNotes,
 			DecisionCount:  round.DecisionCount,
 			OutlivedServer: round.OutlivedServer,
@@ -719,27 +624,8 @@ func errorOutput(info *broker.ErrorInfo) ErrorOutput {
 		Code:    info.Code,
 		Message: info.Message,
 		Details: cloneDetails(info.Details),
-		At:      formatTimeOptional(info.At),
+		At:      info.At,
 	}
-}
-
-func formatTime(t time.Time) string {
-	return t.UTC().Format(time.RFC3339)
-}
-
-func formatTimeOptional(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	return formatTime(t)
-}
-
-func formatTimePtr(t *time.Time) *string {
-	if t == nil {
-		return nil
-	}
-	formatted := formatTime(*t)
-	return &formatted
 }
 
 func cloneString(s *string) *string {

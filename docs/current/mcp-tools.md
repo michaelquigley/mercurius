@@ -9,9 +9,11 @@ Mercurius exposes six MCP tools:
 - `close_session`
 - `session_status`
 
-Every tool call reads the configuration and the session directory afresh; the server holds no session state between calls, so any server process can serve any session. A missing or unparseable `mercurius.yaml`, or one with a plain `reviewer` block, is a `user_error` from whichever tool is called, naming the path in `details.config_path`. An unparseable or invalid user-level config is a `user_error` naming it in `details.user_config_path`. Write or fix the file and call again, with no reconnect. See [Configuration](configuration.md) for the two files.
+The server holds no session state between calls. Each valid request reads the configuration afresh and consults the session directory as needed. A missing or unparseable `mercurius.yaml`, or one with a plain `reviewer` block, is a `user_error` naming the path in `details.config_path`. An unparseable or invalid user-level config is a `user_error` naming it in `details.user_config_path`. Write or fix the file and call again, with no reconnect. See [Configuration](configuration.md) for the two files.
 
-Expected broker failures are returned as tool error results with structured content:
+Every tool except `open_session` requires a string `session_id`. A malformed id string reaches the broker and returns `not_found`. Omitted arguments and a whole arguments value of `null` are treated as an empty object. Inside the arguments object, unknown keys and explicit `null` values are rejected, including in nested objects. Where a tool takes `round_number`, it accepts positive integers written without a decimal point or exponent.
+
+Expected broker failures and invalid arguments are returned as tool error results with structured content:
 
 ```json
 {
@@ -23,6 +25,8 @@ Expected broker failures are returned as tool error results with structured cont
 }
 ```
 
+If an argument fails schema validation, the result has `isError: true`, `error.code: "user_error"`, and `error.message: "arguments failed schema validation"`. The validator's reason is in `error.details.cause`. Invalid JSON, duplicate keys, and values that fail strict binding also return `user_error` with a cause.
+
 Error codes (five stable classes):
 
 - `user_error`: caller can fix it (missing or unparseable `mercurius.yaml`, a reviewer block in it, an invalid user-level config, no reviewer configured, artifact validation, decision validation, bad log destination)
@@ -32,6 +36,8 @@ Error codes (five stable classes):
 - `internal_error`: broker bug, a write that failed, or a session or round file that cannot be parsed
 
 Refusals are returned to the caller and are not stored anywhere. A round's own failure is stored with the round and returned by `collect_round`.
+
+Timestamps such as `opened_at`, `started_at`, `completed_at`, and `closed_at` in successful results use RFC 3339 with fractional seconds when present. Reviewer descriptions include an `extra_args` array, empty when no arguments are configured. Empty `model` and `binary_path` fields are omitted.
 
 ## `open_session`
 
@@ -43,11 +49,11 @@ Request:
 {}
 ```
 
-Response includes `session_id`, `opened_at`, and, as information about the configuration at this moment, `max_findings`, `reviewer` (the resolved reviewer block with its `source`, or `null` when none is configured), and the `review_context_present` and `review_focus_present` booleans. None of these is stored on the session: the reviewer, `max_findings`, and calibration are resolved again at the start of every round and recorded on that round. `open_session` succeeds with no reviewer configured; `start_review_round` is where the absence becomes an error.
+Response includes `session_id`, `opened_at`, `max_findings`, and the `review_context_present` and `review_focus_present` booleans. If a reviewer is configured, the response includes `reviewer` with its `source`. The reviewer, finding limit, and calibration describe the current configuration and are resolved again and recorded at each round's start. `open_session` succeeds with no reviewer configured. Starting a round requires one.
 
 ## `start_review_round`
 
-Starts one background review round and returns immediately. Artifacts are required and scoped to this round only - nothing from a prior round in the same session carries over.
+Starts one background review round and returns immediately. The request requires a nonempty `artifacts` array. Each entry requires a string `name` and an absolute `path`. Artifacts are scoped to the round.
 
 The reviewer (from the user-level config, or the project's `reviewer_override`), `max_findings`, and calibration (`review_context`, `review_focus`, `settled_decisions`) are resolved at the start of this round and recorded in the round's `_run.json`, the reviewer with its `reviewer_source`, so edits between rounds take effect immediately with no session reopen. The round also snapshots the exact config bytes it read to `_config.yaml` in the round directory, beside the rendered `_prompt.md`.
 
@@ -88,15 +94,15 @@ Request:
 { "session_id": "s_...", "round_number": 1 }
 ```
 
-`round_number` may be omitted to collect the session's latest round.
+Omit `round_number` to collect the session's latest round. An explicit round number must be at least 1.
 
 Response includes:
 
 - `manifest`: snapshot metadata.
-- `reviewers`: raw reviewer outputs and usage notes.
-- `triage.findings`: blocking concerns and questions, in reviewer-emitted order.
-- `triage.advisory_notes`: non-blocking polish.
-- `triage.next_finding`: default first blocking finding (highest severity, ties broken by id).
+- `reviewers`: decoded reviewer JSON objects and usage notes.
+- `triage.findings`: blocking concerns and questions, in reviewer-emitted order. An empty list is `[]`.
+- `triage.advisory_notes`: non-blocking polish. An empty list is `[]`.
+- `triage.next_finding`: default first blocking finding (highest severity, ties broken by id). The field is omitted when there are no blocking findings.
 - `triage.guidance`: instructions for the design agent on how to walk findings.
 - `next_action`: a one-line summary of what the agent should do next.
 
@@ -123,7 +129,7 @@ Request:
 }
 ```
 
-Dispositions are `fixed`, `rejected`, or `deferred`. This enum is declared on the tool's input schema, so a client sees the valid values directly and an invalid disposition is rejected at the schema boundary before the broker is reached. Include the full `decisions` array on the first call rather than recording commentary first and decisions later. Decision refs must match a concern, question, or advisory_note id from this round; the valid refs are recomputed from the round's raw reviewer output, and an unknown ref errors with them listed in the error `details`. The notes files are rewritten if called again on the same round; decisions do not carry forward into future rounds.
+The request requires `round_number` of at least 1. `commentary` and `decisions` are optional fields, and the call must supply some commentary or at least one decision. Each decision requires `ref` and `disposition`, with an optional `note`. The schema accepts dispositions `fixed`, `rejected`, and `deferred`. Include the full `decisions` array on the first call. Decision refs must match a concern, question, or advisory note ID from this round. An unknown ref returns the valid refs in the error `details`. Another call on the same round rewrites the notes files. Decisions are scoped to the round.
 
 ## `close_session`
 
@@ -139,14 +145,14 @@ Response fields: `session_id`, `closed_at`, `synopsis_path`.
 
 ## `session_status`
 
-Returns a read-only session view: `session_id`, `state`, `opened_at`, `closed_at`, `round_count`, and `rounds`, which lists every round that was started, failed ones included. There is no session-level reviewer, finding limit, or error. Each round carries:
+Returns `session_id`, `state`, `opened_at`, `round_count`, and `rounds`, which lists every round that was started, including failed rounds. The response includes `closed_at` only when the session is closed. Reviewer, finding limit, and error information belong to the rounds. Each round carries:
 
-- `round_number`, `opened_at`, `state` (`running`, `completed`, or `failed`), and `completed_at`;
+- `round_number`, `opened_at`, `state` (`running`, `completed`, or `failed`), and `completed_at` once the round ends;
 - `reviewer` (the block the round ran with, with its `source`) and `max_findings`;
 - `state_path` (its `_state.json`) and, once completed, `log_path` (its `_round.md`);
 - `has_notes` and `decision_count`;
 - `outlived_server`, true when the round finished after the server that started it was gone;
-- `error`, the stored failure of a failed round.
+- `error`, present only for a failed round.
 
 A latest round marked running whose runner is gone is recorded as failed with `details.reason: runner_lost` before it is reported.
 

@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -119,12 +120,22 @@ func TestWireLifecycle(t *testing.T) {
 	checkError(broker.CodeNotFound, callWireTool(t, ctx, client, "session_status", map[string]any{
 		"session_id": "s_missing",
 	}))
-	checkError(broker.CodeUserError, callWireTool(t, ctx, client, "start_review_round", map[string]any{
-		"session_id": sessionID,
-		"artifacts":  nil,
-	}))
+	// the schema now refuses null artifacts before the broker. pin the old
+	// broker error envelope here and the new boundary response in TestWireArguments.
+	userError, err := toolErrorResult(&broker.Error{
+		Code:    broker.CodeUserError,
+		Message: "invalid artifacts",
+		Err:     errors.New("artifact list is empty"),
+	})
+	if err != nil {
+		t.Fatalf("encode broker error: %v", err)
+	}
+	checkError(broker.CodeUserError, userError)
 
-	checkResult("start_review_round", start())
+	started := start()
+	checkResult("start_review_round", started)
+	statePath := filepath.Join(store.RoundDir(sessionDir, 1), store.StateFileName)
+	checkStartedAtPrecision(t, started, statePath)
 	launcher.Wait()
 	checkResult("collect_round_findings", collect(1))
 	checkResult("record_round_notes", callWireTool(t, ctx, client, "record_round_notes", map[string]any{
@@ -219,5 +230,22 @@ func requireWireRound(t *testing.T, result *mcp.CallToolResult, want int) {
 	payload, ok := result.StructuredContent.(map[string]any)
 	if !ok || result.IsError || payload["round_number"] != float64(want) {
 		t.Fatalf("expected result for round '%d', got %+v", want, result)
+	}
+}
+
+func checkStartedAtPrecision(t *testing.T, result *mcp.CallToolResult, statePath string) {
+	t.Helper()
+	state, ok := decodeWireJSON(t, []byte(readFileContent(t, statePath))).(map[string]any)
+	if !ok {
+		t.Fatal("expected an object in the round state file")
+	}
+	stamp, _ := state["started_at"].(string)
+	parsed, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil || parsed.Nanosecond() == 0 {
+		t.Fatalf("expected started_at with fractional seconds in the state file, got '%s'", stamp)
+	}
+	payload, ok := result.StructuredContent.(map[string]any)
+	if !ok || payload["started_at"] != stamp {
+		t.Fatalf("tool result started_at = '%v', want file value '%s'", payload["started_at"], stamp)
 	}
 }

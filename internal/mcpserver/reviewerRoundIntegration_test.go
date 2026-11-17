@@ -49,7 +49,9 @@ func TestReviewerRoundIntegration(t *testing.T) {
 	})
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "integration", Version: Version}, nil)
-	RegisterTools(server, b)
+	if err := RegisterTools(server, b); err != nil {
+		t.Fatalf("register tools: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -73,7 +75,7 @@ func TestReviewerRoundIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	sessionID := decodeStructured[OpenSessionOutput](t, openResult).SessionID
+	sessionID := bindStructured[OpenSessionOutput](t, openResult).SessionID
 
 	startResult, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 		Name: "start_review_round",
@@ -88,7 +90,7 @@ func TestReviewerRoundIntegration(t *testing.T) {
 	if startResult.IsError {
 		t.Fatalf("start review round tool error: %+v", startResult.StructuredContent)
 	}
-	roundNumber := decodeStructured[StartReviewRoundOutput](t, startResult).RoundNumber
+	roundNumber := bindStructured[StartReviewRoundOutput](t, startResult).RoundNumber
 
 	// poll collect_round until the background round completes.
 	deadline := time.After(150 * time.Second)
@@ -102,10 +104,10 @@ func TestReviewerRoundIntegration(t *testing.T) {
 			t.Fatalf("collect round: %v", err)
 		}
 		if !result.IsError {
-			collected = decodeStructured[CollectedRoundOutput](t, result)
+			collected = bindStructured[CollectedRoundOutput](t, result)
 			break
 		}
-		payload := decodeStructured[ToolErrorOutput](t, result)
+		payload := bindStructured[ToolErrorOutput](t, result)
 		if payload.Error.Code != broker.CodeConflict {
 			t.Fatalf("collect round tool error: %+v", payload.Error)
 		}

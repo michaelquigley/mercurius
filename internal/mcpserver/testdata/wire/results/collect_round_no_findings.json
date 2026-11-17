@@ -25,10 +25,9 @@
   ],
   "round_number": 3,
   "triage": {
-    "advisory_notes": null,
-    "findings": null,
+    "advisory_notes": [],
+    "findings": [],
     "guidance": "No concerns or questions were returned. Summarize that there are no blocking findings, present triage.advisory_notes separately if present, then ask whether to record notes, start another review round, or close the session.",
-    "next_finding": null,
     "remaining_findings": 0,
     "total_findings": 0
   }

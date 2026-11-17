@@ -12,16 +12,22 @@
             "type": "string"
           }
         },
+        "required": [
+          "name",
+          "path"
+        ],
         "type": "object"
       },
-      "type": [
-        "null",
-        "array"
-      ]
+      "minItems": 1,
+      "type": "array"
     },
     "session_id": {
       "type": "string"
     }
   },
+  "required": [
+    "session_id",
+    "artifacts"
+  ],
   "type": "object"
 }

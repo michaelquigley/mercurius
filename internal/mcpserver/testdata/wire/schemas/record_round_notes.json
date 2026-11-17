@@ -1,4 +1,5 @@
 {
+  "additionalProperties": false,
   "properties": {
     "commentary": {
       "description": "free-form human commentary for the round.",
@@ -7,6 +8,7 @@
     "decisions": {
       "description": "one entry per reviewer finding triaged this round; include the full array on the first call rather than a later one.",
       "items": {
+        "additionalProperties": false,
         "properties": {
           "disposition": {
             "description": "how the finding was handled: 'fixed' (addressed in the artifacts), 'rejected' (declined, e.g. out of scope), or 'deferred' (acknowledged, to be handled later).",
@@ -36,6 +38,7 @@
     },
     "round_number": {
       "description": "the round number whose notes are being recorded.",
+      "minimum": 1,
       "type": "integer"
     },
     "session_id": {
@@ -43,5 +46,9 @@
       "type": "string"
     }
   },
+  "required": [
+    "session_id",
+    "round_number"
+  ],
   "type": "object"
 }

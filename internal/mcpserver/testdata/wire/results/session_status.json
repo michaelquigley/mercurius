@@ -1,18 +1,17 @@
 {
-  "closed_at": null,
   "opened_at": "<time>",
   "round_count": 3,
   "rounds": [
     {
       "completed_at": "<time>",
       "decision_count": 2,
-      "error": null,
       "has_notes": true,
       "log_path": "<project>/reviews/<session>/round-01/_round.md",
       "max_findings": 6,
       "opened_at": "<time>",
       "outlived_server": false,
       "reviewer": {
+        "extra_args": [],
         "impl": "dummy",
         "name": "dummy",
         "source": "user config",
@@ -39,6 +38,7 @@
       "opened_at": "<time>",
       "outlived_server": false,
       "reviewer": {
+        "extra_args": [],
         "impl": "dummy",
         "name": "dummy",
         "source": "user config",
@@ -49,14 +49,13 @@
       "state_path": "<project>/reviews/<session>/round-02/_state.json"
     },
     {
-      "completed_at": null,
       "decision_count": 0,
-      "error": null,
       "has_notes": false,
       "max_findings": 6,
       "opened_at": "<time>",
       "outlived_server": false,
       "reviewer": {
+        "extra_args": [],
         "impl": "dummy",
         "name": "dummy",
         "source": "user config",

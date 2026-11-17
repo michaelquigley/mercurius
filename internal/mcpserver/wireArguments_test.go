@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,9 +13,8 @@ import (
 
 type wireArgumentAnswer struct {
 	round   int
-	text    string
-	code    string
-	details map[string]any
+	message string
+	cause   string
 }
 
 func TestWireArguments(t *testing.T) {
@@ -27,28 +27,24 @@ func TestWireArguments(t *testing.T) {
 		"{{session}}", string(marshalWireJSON(t, sessionID)),
 		"{{artifact}}", string(marshalWireJSON(t, artifactPath)),
 	)
-	sdkError := func(text string) wireArgumentAnswer {
-		return wireArgumentAnswer{text: `validating "arguments": ` + text}
+	schemaError := func(cause string) wireArgumentAnswer {
+		return wireArgumentAnswer{message: "arguments failed schema validation", cause: cause}
 	}
-	unknownKey := sdkError(`validating root: unexpected additional properties ["unknown"]`)
-	missingSession := wireArgumentAnswer{
-		text:    "not_found: session not found",
-		code:    broker.CodeNotFound,
-		details: map[string]any{"session_id": ""},
+	roundBindError := func(inputType string, lexeme string) wireArgumentAnswer {
+		field := inputType + ".RoundNumber"
+		return wireArgumentAnswer{
+			message: "bind arguments",
+			cause:   fmt.Sprintf(`binding field %s from key "round_number": %s: number %s is not an integer`, field, field, lexeme),
+		}
 	}
-	missingRound := wireArgumentAnswer{
-		text:    "not_found: round not found",
-		code:    broker.CodeNotFound,
-		details: map[string]any{"round_number": float64(0)},
-	}
-	nullArtifacts := wireArgumentAnswer{
-		text:    "user_error: invalid artifacts\ncause: artifact list is empty",
-		code:    broker.CodeUserError,
-		details: map[string]any{"cause": "artifact list is empty"},
-	}
-	sessionWrongType := sdkError(`validating root: validating /properties/session_id: type: 5 has type "integer", want "string"`)
-	sessionNull := sdkError(`validating root: validating /properties/session_id: type: <invalid reflect.Value> has type "null", want "string"`)
-	roundWrongType := sdkError(`validating root: validating /properties/round_number: type: 1 has type "string", want "integer"`)
+	unknownKey := schemaError(`validating root: unexpected additional properties ["unknown"]`)
+	missingSession := schemaError(`validating root: required: missing properties: ["session_id"]`)
+	missingRound := schemaError(`validating root: required: missing properties: ["round_number"]`)
+	zeroRound := schemaError(`validating root: validating /properties/round_number: minimum: 0/1 is less than 1.000000`)
+	nullArtifacts := schemaError(`validating root: validating /properties/artifacts: type: <invalid reflect.Value> has type "null", want "array"`)
+	sessionWrongType := schemaError(`validating root: validating /properties/session_id: type: 5 has type "integer", want "string"`)
+	sessionNull := schemaError(`validating root: validating /properties/session_id: type: <invalid reflect.Value> has type "null", want "string"`)
+	roundWrongType := schemaError(`validating root: validating /properties/round_number: type: 1 has type "string", want "integer"`)
 
 	type argumentCase struct {
 		name string
@@ -67,12 +63,12 @@ func TestWireArguments(t *testing.T) {
 	}{
 		{"open_session", []argumentCase{
 			{"unknown_key", `{"unknown":true}`, unknownKey},
-			{"wrong_type", `[]`, sdkError(`unmarshaling arguments: json: cannot unmarshal "[]" into Go value of type map[string]interface {}`)},
+			{"wrong_type", `[]`, wireArgumentAnswer{message: "malformed arguments", cause: "$: expected object at top level, got []interface {}"}},
 			{"null_arguments", `null`, wireArgumentAnswer{}},
 		}},
 		{"start_review_round", []argumentCase{
 			{"unknown_key", `{"session_id":{{session}},"artifacts":[{"name":"design.md","path":{{artifact}}}],"unknown":true}`, unknownKey},
-			{"wrong_type", `{"session_id":{{session}},"artifacts":"invalid"}`, sdkError(`validating root: validating /properties/artifacts: type: invalid has type "string", want one of "null, array"`)},
+			{"wrong_type", `{"session_id":{{session}},"artifacts":"invalid"}`, schemaError(`validating root: validating /properties/artifacts: type: invalid has type "string", want "array"`)},
 			{"missing_session_id", `{"artifacts":[{"name":"design.md","path":{{artifact}}}]}`, missingSession},
 			{"explicit_null", `{"session_id":{{session}},"artifacts":null}`, nullArtifacts},
 		}},
@@ -81,20 +77,22 @@ func TestWireArguments(t *testing.T) {
 			{"wrong_type", `{"session_id":{{session}},"round_number":"1"}`, roundWrongType},
 			{"missing_session_id", `{"round_number":1}`, missingSession},
 			{"missing_round_number", `{"session_id":{{session}}}`, wireArgumentAnswer{round: 2}},
-			{"explicit_null", `{"session_id":{{session}},"round_number":null}`, sdkError(`validating root: validating /properties/round_number: type: <invalid reflect.Value> has type "null", want "integer"`)},
-			{"zero_round_number", `{"session_id":{{session}},"round_number":0}`, wireArgumentAnswer{round: 2}},
-			{"decimal_round_number", `{"session_id":{{session}},"round_number":1.0}`, wireArgumentAnswer{round: 1}},
-			{"exponent_round_number", `{"session_id":{{session}},"round_number":1e0}`, wireArgumentAnswer{round: 1}},
+			{"explicit_null", `{"session_id":{{session}},"round_number":null}`, schemaError(`validating root: validating /properties/round_number: type: <invalid reflect.Value> has type "null", want "integer"`)},
+			{"zero_round_number", `{"session_id":{{session}},"round_number":0}`, zeroRound},
+			{"integer_round_number", `{"session_id":{{session}},"round_number":1}`, wireArgumentAnswer{round: 1}},
+			{"decimal_round_number", `{"session_id":{{session}},"round_number":1.0}`, roundBindError("CollectRoundInput", "1.0")},
+			{"exponent_round_number", `{"session_id":{{session}},"round_number":1e0}`, roundBindError("CollectRoundInput", "1e0")},
 		}},
 		{"record_round_notes", []argumentCase{
-			{"unknown_key", `{"session_id":{{session}},"round_number":1,"commentary":"reviewed","unknown":true}`, wireArgumentAnswer{round: 1}},
+			{"unknown_key", `{"session_id":{{session}},"round_number":1,"commentary":"reviewed","unknown":true}`, unknownKey},
 			{"wrong_type", `{"session_id":{{session}},"round_number":"1","commentary":"reviewed"}`, roundWrongType},
 			{"missing_session_id", `{"round_number":1,"commentary":"reviewed"}`, missingSession},
 			{"missing_round_number", `{"session_id":{{session}},"commentary":"reviewed"}`, missingRound},
-			{"explicit_null", `{"session_id":{{session}},"round_number":1,"commentary":null}`, sdkError(`validating root: validating /properties/commentary: type: <invalid reflect.Value> has type "null", want "string"`)},
-			{"zero_round_number", `{"session_id":{{session}},"round_number":0,"commentary":"reviewed"}`, missingRound},
-			{"decimal_round_number", `{"session_id":{{session}},"round_number":1.0,"commentary":"reviewed"}`, wireArgumentAnswer{round: 1}},
-			{"exponent_round_number", `{"session_id":{{session}},"round_number":1e0,"commentary":"reviewed"}`, wireArgumentAnswer{round: 1}},
+			{"explicit_null", `{"session_id":{{session}},"round_number":1,"commentary":null}`, schemaError(`validating root: validating /properties/commentary: type: <invalid reflect.Value> has type "null", want "string"`)},
+			{"zero_round_number", `{"session_id":{{session}},"round_number":0,"commentary":"reviewed"}`, zeroRound},
+			{"integer_round_number", `{"session_id":{{session}},"round_number":1,"commentary":"reviewed"}`, wireArgumentAnswer{round: 1}},
+			{"decimal_round_number", `{"session_id":{{session}},"round_number":1.0,"commentary":"reviewed"}`, roundBindError("RecordRoundNotesInput", "1.0")},
+			{"exponent_round_number", `{"session_id":{{session}},"round_number":1e0,"commentary":"reviewed"}`, roundBindError("RecordRoundNotesInput", "1e0")},
 		}},
 		{"close_session", sessionCases},
 		{"session_status", sessionCases},
@@ -116,7 +114,7 @@ func TestWireArguments(t *testing.T) {
 
 func checkWireArgumentAnswer(t *testing.T, result *mcp.CallToolResult, want wireArgumentAnswer) {
 	t.Helper()
-	if want.text == "" {
+	if want.message == "" {
 		if result.IsError || result.StructuredContent == nil {
 			t.Fatalf("expected successful tool result, got %+v", result)
 		}
@@ -126,21 +124,17 @@ func checkWireArgumentAnswer(t *testing.T, result *mcp.CallToolResult, want wire
 		return
 	}
 
-	if !result.IsError || len(result.Content) != 1 {
+	payload := assertToolError(t, result, nil, broker.CodeUserError)
+	wantDetails := map[string]any{"cause": want.cause}
+	if payload.Message != want.message || !reflect.DeepEqual(payload.Details, wantDetails) {
+		t.Fatalf("tool error = %+v, want message '%s' and details %+v", payload, want.message, wantDetails)
+	}
+	if len(result.Content) != 1 {
 		t.Fatalf("expected one tool error message, got %+v", result)
 	}
 	content, ok := result.Content[0].(*mcp.TextContent)
-	if !ok || content.Text != want.text {
-		t.Fatalf("tool error content = %+v, want '%s'", result.Content[0], want.text)
-	}
-	if want.code == "" {
-		if result.StructuredContent != nil {
-			t.Fatalf("expected a text-only sdk error, got structured content %+v", result.StructuredContent)
-		}
-		return
-	}
-	payload := assertToolError(t, result, nil, want.code)
-	if !reflect.DeepEqual(payload.Details, want.details) {
-		t.Fatalf("tool error details = %+v, want %+v", payload.Details, want.details)
+	wantText := "user_error: " + want.message + "\ncause: " + want.cause
+	if !ok || content.Text != wantText {
+		t.Fatalf("tool error content = %+v, want '%s'", result.Content[0], wantText)
 	}
 }
