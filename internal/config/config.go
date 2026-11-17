@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"github.com/michaelquigley/df/dd"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -47,11 +47,11 @@ type Config struct {
 // SettledDecision is one operator-side guard: a decision already made that the
 // reviewer should stop re-raising. DoNotFlag is the load-bearing instruction
 // rendered into the round prompt; ID is an operator-side handle for finding and
-// editing the guard and never reaches the reviewer. dd auto-converts the field
-// names to 'id' and 'do_not_flag', so no struct tags are needed.
+// editing the guard and never reaches the reviewer.
 type SettledDecision struct {
 	ID        string
 	DoNotFlag string
+	Extra     map[string]any `dd:",+extra"`
 }
 
 // ReviewerConfig configures the reviewer. Timeout bounds one round; zero means
@@ -63,6 +63,7 @@ type ReviewerConfig struct {
 	Model      string
 	ExtraArgs  []string
 	Timeout    time.Duration
+	Extra      map[string]any `dd:",+extra"`
 }
 
 // where a resolved reviewer came from.
@@ -107,12 +108,14 @@ type projectFile struct {
 	ReviewFocus      string
 	SettledDecisions []SettledDecision
 	ReviewerOverride *ReviewerConfig
+	Extra            map[string]any `dd:",+extra"`
 }
 
 // userFile is the YAML shape of the user-level config. The reviewer is a fact
 // about the installation, set once here.
 type userFile struct {
 	Reviewer *ReviewerConfig
+	Extra    map[string]any `dd:",+extra"`
 }
 
 // ProjectPath returns the absolute project config path for a --config value,
@@ -143,8 +146,8 @@ func UserConfigPath() string {
 
 // Resolve reads and validates the configuration a broker operation runs with.
 // It is called by every operation, so edits to either file take effect on the
-// next call. The project file is read exactly once; the returned bytes are the
-// ones parsed.
+// next call. Each file is read and parsed once. The returned project bytes
+// are the ones parsed.
 //
 // The reviewer comes from the user-level file's reviewer block, unless the
 // project file has a reviewer_override block, which replaces it whole, timeout
@@ -172,7 +175,7 @@ func Resolve(projectPath string, userPath string) (*Resolved, error) {
 	if err := dd.MergeYAML(file, raw); err != nil {
 		return nil, &FileError{Path: absPath, Err: fmt.Errorf("config '%s': %w", absPath, err)}
 	}
-	if err := checkRenamedFields(absPath, userPath, raw); err != nil {
+	if err := checkProjectKeys(absPath, userPath, file.Extra); err != nil {
 		return nil, &FileError{Path: absPath, Err: err}
 	}
 
@@ -199,6 +202,9 @@ func Resolve(projectPath string, userPath string) (*Resolved, error) {
 	}
 	switch {
 	case file.ReviewerOverride != nil:
+		if err := rejectUnknownKeys(file.ReviewerOverride.Extra); err != nil {
+			return nil, &FileError{Path: absPath, Err: fmt.Errorf("config '%s': reviewer_override: %w", absPath, err)}
+		}
 		reviewerCfg, err := resolveReviewer(*file.ReviewerOverride, baseDir)
 		if err != nil {
 			return nil, &FileError{Path: absPath, Err: fmt.Errorf("config '%s': reviewer_override: %w", absPath, err)}
@@ -233,8 +239,14 @@ func readUserReviewer(userPath string) (*ReviewerConfig, error) {
 	if err := dd.MergeYAML(file, raw); err != nil {
 		return nil, &FileError{Path: absPath, Err: fmt.Errorf("user config '%s': %w", absPath, err)}
 	}
+	if err := rejectUnknownKeys(file.Extra); err != nil {
+		return nil, &FileError{Path: absPath, Err: fmt.Errorf("user config '%s': %w", absPath, err)}
+	}
 	if file.Reviewer == nil {
 		return nil, nil
+	}
+	if err := rejectUnknownKeys(file.Reviewer.Extra); err != nil {
+		return nil, &FileError{Path: absPath, Err: fmt.Errorf("user config '%s': reviewer: %w", absPath, err)}
 	}
 	reviewerCfg, err := resolveReviewer(*file.Reviewer, filepath.Dir(absPath))
 	if err != nil {
@@ -265,6 +277,11 @@ func resolveReviewer(block ReviewerConfig, baseDir string) (*ReviewerConfig, err
 func (c *Config) Validate() error {
 	if c.MaxFindings <= 0 {
 		return fmt.Errorf("max_findings must be greater than zero")
+	}
+	for i, decision := range c.SettledDecisions {
+		if err := rejectUnknownKeys(decision.Extra); err != nil {
+			return fmt.Errorf("settled_decisions[%d]: %w", i, err)
+		}
 	}
 	return nil
 }
@@ -299,36 +316,40 @@ func EnsureLogDestination(path string) error {
 	return nil
 }
 
-// checkRenamedFields rejects configs that still use renamed or moved YAML keys.
-// dd silently drops unknown fields, so a stale key would otherwise produce
-// confusing review behavior with no error. It works from the already-read
-// bytes so the config file is not read a second time. absPath and userPath are
-// used only for error messages.
+// checkProjectKeys reports stale keys before other unknown keys so a project
+// with an old config still gets its migration instructions.
 //
 // A plain reviewer block is rejected with a message that names the user-level
 // file and says to remove the block. It deliberately does not mention
 // reviewer_override: an agent that wrote the block out of habit should remove
 // it, not rename it into an override nobody decided on.
-func checkRenamedFields(absPath string, userPath string, raw []byte) error {
-	var generic map[string]any
-	if err := yaml.Unmarshal(raw, &generic); err != nil {
-		// dd already validated the YAML; ignore parse errors here so this
-		// guard does not produce a different error than the primary load.
-		return nil
-	}
-	if _, ok := generic["prompt_overrides"]; ok {
+func checkProjectKeys(absPath string, userPath string, extra map[string]any) error {
+	if _, ok := extra["prompt_overrides"]; ok {
 		return fmt.Errorf("config '%s': field 'prompt_overrides' has been renamed to 'review_focus'; update the YAML key", absPath)
 	}
-	if _, ok := generic["default_budget"]; ok {
+	if _, ok := extra["default_budget"]; ok {
 		return fmt.Errorf("config '%s': field 'default_budget' has been removed; rounds are single-shot and no longer share a budget across a session", absPath)
 	}
-	if _, ok := generic["reviewer"]; ok {
+	if _, ok := extra["reviewer"]; ok {
 		return fmt.Errorf("config '%s': the reviewer is set per installation in the user-level config %s, not in the project file; remove the 'reviewer' block from this file", absPath, describeUserPath(userPath))
 	}
-	if _, ok := generic["reviewers"]; ok {
+	if _, ok := extra["reviewers"]; ok {
 		return fmt.Errorf("config '%s': the reviewer is set per installation in the user-level config %s, not in the project file; remove the 'reviewers' block from this file", absPath, describeUserPath(userPath))
 	}
+	if err := rejectUnknownKeys(extra); err != nil {
+		return fmt.Errorf("config '%s': %w", absPath, err)
+	}
 	return nil
+}
+
+// rejectUnknownKeys reports the first unknown key in lexical order. dd
+// captures keys in each bound object's own +extra field.
+func rejectUnknownKeys(extra map[string]any) error {
+	if len(extra) == 0 {
+		return nil
+	}
+	keys := slices.Sorted(maps.Keys(extra))
+	return fmt.Errorf("unknown key '%s'", keys[0])
 }
 
 // describeUserPath quotes the user-level config path for a message, or says

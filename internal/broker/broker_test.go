@@ -224,7 +224,11 @@ func TestSessionLifecycleAcrossBrokers(t *testing.T) {
 // second round's _run.json holds the new reviewer.
 func TestConfigurationIsResolvedPerRound(t *testing.T) {
 	ctx := context.Background()
-	h := newHarness(t, newScriptedReviewer(), baseConfig+"review_context: calibration-alpha\n")
+	h := newHarness(t, newScriptedReviewer(), baseConfig+`review_context: calibration-alpha
+settled_decisions:
+  - id: blank
+    do_not_flag: ""
+`)
 	open, err := h.broker().OpenSession(ctx, OpenSessionRequest{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -249,8 +253,12 @@ settled_decisions:
 
 	round1 := store.RoundDir(open.SessionDir, 1)
 	round2 := store.RoundDir(open.SessionDir, 2)
-	if prompt := readFile(t, filepath.Join(round1, store.PromptFileName)); !strings.Contains(prompt, "calibration-alpha") {
-		t.Fatalf("round 1 prompt missing its calibration:\n%s", prompt)
+	prompt1 := readFile(t, filepath.Join(round1, store.PromptFileName))
+	if !strings.Contains(prompt1, "calibration-alpha") {
+		t.Fatalf("round 1 prompt missing its calibration:\n%s", prompt1)
+	}
+	if strings.Contains(prompt1, "## Settled decisions") {
+		t.Fatalf("round 1 prompt rendered the blank guard:\n%s", prompt1)
 	}
 	prompt2 := readFile(t, filepath.Join(round2, store.PromptFileName))
 	if !strings.Contains(prompt2, "calibration-bravo") || strings.Contains(prompt2, "calibration-alpha") {

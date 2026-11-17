@@ -18,6 +18,8 @@ flowchart LR
 
 Neither file is read at startup. Every tool call reads both, so the server starts in a project with no `mercurius.yaml`, and an edit to either file takes effect on the next call. A missing or broken file is a `user_error` from the tool call naming the file at fault, rather than a server that fails to launch. Write or fix the file and call again; the harness does not need to reconnect. Each round records the reviewer, `max_findings`, and calibration it ran with in its `_run.json`.
 
+Unknown keys are errors in either file, including inside `reviewer`, `reviewer_override`, and each `settled_decisions` entry. The tool returns `user_error` naming the file and the unrecognized key. The [removed fields](#removed-fields) retain their migration messages.
+
 ## The User-Level Config
 
 ### Location

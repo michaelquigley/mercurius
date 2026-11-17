@@ -453,6 +453,59 @@ func TestOpenSessionRereadsConfig(t *testing.T) {
 	}
 }
 
+func TestUnknownConfigKeysBecomeToolErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   string
+		userFile bool
+		cause    string
+	}{
+		{
+			name:   "project key",
+			config: "review_foucs: misplaced focus\n",
+			cause:  "unknown key 'review_foucs'",
+		},
+		{
+			name:     "user key",
+			config:   "reviewr:\n  name: dummy\n  impl: dummy\n",
+			userFile: true,
+			cause:    "unknown key 'reviewr'",
+		},
+		{
+			name:     "user reviewer key",
+			config:   baseTestUser + "  modle: example\n",
+			userFile: true,
+			cause:    "reviewer: unknown key 'modle'",
+		},
+		{
+			name:   "project reviewer override key",
+			config: "reviewer_override:\n  name: dummy\n  impl: dummy\n  binary_paht: tools/dummy\n",
+			cause:  "reviewer_override: unknown key 'binary_paht'",
+		},
+		{
+			name:   "settled decision key",
+			config: "settled_decisions:\n  - id: example\n    do_not_falg: a guard\n",
+			cause:  "settled_decisions[0]: unknown key 'do_not_falg'",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, client, configPath := newTestClientWith(t, fixedReviewer{raw: validReviewOutput()}, baseTestConfig)
+			path, pathKey, label := configPath, "config_path", "config"
+			if test.userFile {
+				path, pathKey, label = testUserPath(configPath), "user_config_path", "user config"
+			}
+			writeConfigFile(t, path, test.config)
+			result, err := client.CallTool(ctx, &mcp.CallToolParams{Name: "open_session"})
+			payload := assertToolError(t, result, err, broker.CodeUserError)
+			wantCause := label + " '" + path + "': " + test.cause
+			if payload.Details[pathKey] != path || payload.Details["cause"] != wantCause {
+				t.Fatalf("details = %+v, want '%s' and cause '%s'", payload.Details, path, wantCause)
+			}
+		})
+	}
+}
+
 // TestStartReviewRoundRereadsConfigLive is the core of the live-re-read change:
 // a guard added to mercurius.yaml between rounds must appear in the very next
 // round's prompt with no session reopen, and the round's _config.yaml must hold

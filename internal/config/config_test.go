@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,19 +136,12 @@ reviewer:
 // not rename it.
 func TestResolveRejectsProjectReviewerBlock(t *testing.T) {
 	dir := t.TempDir()
-	cfgPath := writeProject(t, dir, "reviewer:\n  name: codex\n  impl: codex\n")
+	cfgPath := writeProject(t, dir, "review_foucs: a typo\nreviewer:\n  name: codex\n  impl: codex\n")
 	userPath := writeUser(t, dir, "reviewer:\n  name: dummy\n  impl: dummy\n")
 	_, err := Resolve(cfgPath, userPath)
-	if err == nil {
-		t.Fatal("expected a project reviewer block to be refused")
-	}
-	for _, want := range []string{userPath, "remove the 'reviewer' block"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("expected the message to contain %q, got %v", want, err)
-		}
-	}
-	if strings.Contains(err.Error(), "override") {
-		t.Fatalf("the message must not mention the override key: %v", err)
+	want := fmt.Sprintf("config '%s': the reviewer is set per installation in the user-level config '%s', not in the project file; remove the 'reviewer' block from this file", cfgPath, userPath)
+	if err == nil || err.Error() != want {
+		t.Fatalf("expected '%s', got %v", want, err)
 	}
 	var fileErr *FileError
 	if !errors.As(err, &fileErr) || fileErr.Path != cfgPath {
@@ -159,23 +153,35 @@ func TestResolveRejectsRenamedFields(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
-		want []string
+		want string
 	}{
-		{name: "prompt_overrides", body: "prompt_overrides: |\n  stale\n", want: []string{"prompt_overrides", "review_focus"}},
-		{name: "default_budget", body: "default_budget: 4\n", want: []string{"default_budget"}},
-		{name: "reviewers", body: "reviewers:\n  - name: dummy\n    impl: dummy\n", want: []string{"'reviewers'", "remove"}},
+		{
+			name: "prompt_overrides",
+			body: "prompt_overrides: |\n  stale\n",
+			want: "field 'prompt_overrides' has been renamed to 'review_focus'; update the YAML key",
+		},
+		{
+			name: "default_budget",
+			body: "default_budget: 4\n",
+			want: "field 'default_budget' has been removed; rounds are single-shot and no longer share a budget across a session",
+		},
+		{
+			name: "reviewers",
+			body: "reviewers:\n  - name: dummy\n    impl: dummy\n",
+			want: "the reviewer is set per installation in the user-level config (no user config directory could be determined on this system), not in the project file; remove the 'reviewers' block from this file",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
-			_, err := Resolve(writeProject(t, dir, test.body), "")
-			if err == nil {
-				t.Fatal("expected a renamed-field error")
+			path := writeProject(t, t.TempDir(), test.body)
+			_, err := Resolve(path, "")
+			want := fmt.Sprintf("config '%s': %s", path, test.want)
+			if err == nil || err.Error() != want {
+				t.Fatalf("expected '%s', got %v", want, err)
 			}
-			for _, want := range test.want {
-				if !strings.Contains(err.Error(), want) {
-					t.Fatalf("expected %q in error, got %v", want, err)
-				}
+			var fileErr *FileError
+			if !errors.As(err, &fileErr) || fileErr.Path != path {
+				t.Fatalf("the error must name the project file as the one to fix: %#v", err)
 			}
 		})
 	}
@@ -375,8 +381,7 @@ settled_decisions:
 
 func TestResolveToleratesEmptyAndDuplicateGuards(t *testing.T) {
 	// an empty do_not_flag and duplicate ids must not fail the load: a guard
-	// should cost almost nothing to write, and a too-strict validator would
-	// fail rounds on trivial guard typos.
+	// can be left blank, and its id is an operator-side handle only.
 	resolved, err := Resolve(writeProject(t, t.TempDir(), `
 settled_decisions:
   - id: dupe
