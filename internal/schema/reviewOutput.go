@@ -7,42 +7,43 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/michaelquigley/df/dd"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // ReviewOutput is the canonical structured response returned by a reviewer.
 type ReviewOutput struct {
-	Verdict       string         `json:"verdict"`
-	Summary       string         `json:"summary"`
-	Concerns      []Concern      `json:"concerns"`
-	Questions     []Question     `json:"questions"`
-	AdvisoryNotes []AdvisoryNote `json:"advisory_notes"`
+	Verdict       string
+	Summary       string
+	Concerns      []Concern
+	Questions     []Question
+	AdvisoryNotes []AdvisoryNote
 }
 
 // Concern identifies a problem or improvement found during review.
 type Concern struct {
-	ID         string  `json:"id"`
-	Severity   string  `json:"severity"`
-	Location   string  `json:"location"`
-	Claim      string  `json:"claim"`
-	Rationale  string  `json:"rationale"`
-	Suggestion *string `json:"suggestion"`
+	ID         string
+	Severity   string
+	Location   string
+	Claim      string
+	Rationale  string
+	Suggestion *string `dd:",+nullable"`
 }
 
 // Question records a clarification needed before the reviewer can decide.
 type Question struct {
-	ID          string `json:"id"`
-	Topic       string `json:"topic"`
-	WhyItBlocks string `json:"why_it_blocks"`
+	ID          string
+	Topic       string
+	WhyItBlocks string
 }
 
 // AdvisoryNote records non-blocking polish or downstream considerations.
 type AdvisoryNote struct {
-	ID         string  `json:"id"`
-	Location   string  `json:"location"`
-	Note       string  `json:"note"`
-	Rationale  string  `json:"rationale"`
-	Suggestion *string `json:"suggestion"`
+	ID         string
+	Location   string
+	Note       string
+	Rationale  string
+	Suggestion *string `dd:",+nullable"`
 }
 
 //go:embed reviewOutputSchema.json
@@ -105,21 +106,35 @@ func ValidateReviewOutput(raw json.RawMessage) error {
 	return nil
 }
 
-// ParseReviewOutput validates and unmarshals raw reviewer output.
+// ParseReviewOutput validates and strictly binds raw reviewer output.
 func ParseReviewOutput(raw json.RawMessage) (ReviewOutput, error) {
 	if err := ValidateReviewOutput(raw); err != nil {
 		return ReviewOutput{}, err
 	}
 
-	var output ReviewOutput
-	if err := json.Unmarshal(raw, &output); err != nil {
+	value, err := dd.DecodeStrictJSON(raw)
+	if err != nil {
 		return ReviewOutput{}, fmt.Errorf("parse review output: %w", err)
+	}
+	output, err := BindReviewOutput(value)
+	if err != nil {
+		return ReviewOutput{}, err
 	}
 	if err := ValidateUniqueIDs(output); err != nil {
 		return ReviewOutput{}, err
 	}
 	if err := ValidateReviewConsistency(output); err != nil {
 		return ReviewOutput{}, err
+	}
+	return output, nil
+}
+
+// BindReviewOutput strictly binds an already-decoded review that the caller
+// has validated. It does not repeat schema or cross-field checks.
+func BindReviewOutput(value map[string]any) (ReviewOutput, error) {
+	var output ReviewOutput
+	if err := dd.Bind(&output, value, dd.Strict()); err != nil {
+		return ReviewOutput{}, fmt.Errorf("bind review output: %w", err)
 	}
 	return output, nil
 }

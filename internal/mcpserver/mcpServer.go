@@ -525,11 +525,11 @@ func triageOutput(results []broker.ReviewerResult) RoundTriageOutput {
 		Guidance: noFindingsTriageGuidance(),
 	}
 	for _, result := range results {
-		var raw schema.ReviewOutput
-		if err := json.Unmarshal(result.Raw, &raw); err != nil {
+		output, err := schema.ParseReviewOutput(result.Raw)
+		if err != nil {
 			continue
 		}
-		for _, concern := range raw.Concerns {
+		for _, concern := range output.Concerns {
 			severity := concern.Severity
 			location := concern.Location
 			triage.Findings = append(triage.Findings, TriageFindingOutput{
@@ -543,7 +543,7 @@ func triageOutput(results []broker.ReviewerResult) RoundTriageOutput {
 				Suggestion:   cloneString(concern.Suggestion),
 			})
 		}
-		for _, question := range raw.Questions {
+		for _, question := range output.Questions {
 			triage.Findings = append(triage.Findings, TriageFindingOutput{
 				ReviewerName: result.ReviewerName,
 				Ref:          question.ID,
@@ -552,7 +552,7 @@ func triageOutput(results []broker.ReviewerResult) RoundTriageOutput {
 				Detail:       question.WhyItBlocks,
 			})
 		}
-		for _, note := range raw.AdvisoryNotes {
+		for _, note := range output.AdvisoryNotes {
 			triage.AdvisoryNotes = append(triage.AdvisoryNotes, TriageAdvisoryOutput{
 				ReviewerName: result.ReviewerName,
 				Ref:          note.ID,

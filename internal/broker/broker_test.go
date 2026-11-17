@@ -17,7 +17,6 @@ import (
 	"github.com/michaelquigley/mercurius/internal/reviewer"
 	"github.com/michaelquigley/mercurius/internal/runlock"
 	"github.com/michaelquigley/mercurius/internal/runner"
-	"github.com/michaelquigley/mercurius/internal/schema"
 	"github.com/michaelquigley/mercurius/internal/store"
 )
 
@@ -420,26 +419,30 @@ func TestReviewerOutputDuplicateIdsRejected(t *testing.T) {
 	}{
 		{
 			name: "duplicate within concerns",
-			raw: mustMarshal(t, schema.ReviewOutput{
-				Verdict: "needs_changes",
-				Summary: "reviewed",
-				Concerns: []schema.Concern{
-					{ID: "C-1", Severity: "major", Location: "x", Claim: "a", Rationale: "b"},
-					{ID: "C-1", Severity: "minor", Location: "y", Claim: "c", Rationale: "d"},
-				},
-				Questions:     []schema.Question{},
-				AdvisoryNotes: []schema.AdvisoryNote{},
-			}),
+			raw: json.RawMessage(`{
+				"verdict": "needs_changes",
+				"summary": "reviewed",
+				"concerns": [
+					{"id": "C-1", "severity": "major", "location": "x", "claim": "a", "rationale": "b", "suggestion": null},
+					{"id": "C-1", "severity": "minor", "location": "y", "claim": "c", "rationale": "d", "suggestion": null}
+				],
+				"questions": [],
+				"advisory_notes": []
+			}`),
 		},
 		{
 			name: "id reused across concerns and advisory_notes",
-			raw: mustMarshal(t, schema.ReviewOutput{
-				Verdict:       "needs_changes",
-				Summary:       "reviewed",
-				Concerns:      []schema.Concern{{ID: "C-1", Severity: "major", Location: "x", Claim: "a", Rationale: "b"}},
-				Questions:     []schema.Question{},
-				AdvisoryNotes: []schema.AdvisoryNote{{ID: "C-1", Location: "y", Note: "polish", Rationale: "tone"}},
-			}),
+			raw: json.RawMessage(`{
+				"verdict": "needs_changes",
+				"summary": "reviewed",
+				"concerns": [
+					{"id": "C-1", "severity": "major", "location": "x", "claim": "a", "rationale": "b", "suggestion": null}
+				],
+				"questions": [],
+				"advisory_notes": [
+					{"id": "C-1", "location": "y", "note": "polish", "rationale": "tone", "suggestion": null}
+				]
+			}`),
 		},
 	}
 	for _, tc := range cases {
@@ -451,6 +454,10 @@ func TestReviewerOutputDuplicateIdsRejected(t *testing.T) {
 			}
 			_, err = h.startAndCollect(open.SessionID, []Artifact{{Name: "design", Path: writeArtifactFile(t, "content")}})
 			assertBrokerCode(t, err, CodeReviewerFailed)
+			cause, _ := ErrorInfoFrom(err).Details["cause"].(string)
+			if !strings.Contains(cause, "review output reuses id 'C-1'") {
+				t.Fatalf("expected duplicate id failure, got '%s'", cause)
+			}
 		})
 	}
 }
@@ -557,7 +564,7 @@ func TestFailedRoundStaysOnDisk(t *testing.T) {
 
 func TestMaxFindingsFailsRoundAndKeepsRaw(t *testing.T) {
 	ctx := context.Background()
-	raw := reviewOutputWithFindingCounts(t, 1, 1)
+	raw := reviewOutputWithRefs()
 	h := newHarness(t, newScriptedReviewer(scriptedResponse{raw: raw}), baseConfig+"max_findings: 1\n")
 	open, err := h.broker().OpenSession(ctx, OpenSessionRequest{})
 	if err != nil {
@@ -1549,22 +1556,13 @@ func assertBrokerCode(t *testing.T, err error, code string) {
 	}
 }
 
-func mustMarshal(t *testing.T, v any) json.RawMessage {
-	t.Helper()
-	raw, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	return raw
-}
-
 func validReviewOutput(verdict string) json.RawMessage {
-	raw, err := json.Marshal(schema.ReviewOutput{
-		Verdict:       verdict,
-		Summary:       "reviewed",
-		Concerns:      []schema.Concern{},
-		Questions:     []schema.Question{},
-		AdvisoryNotes: []schema.AdvisoryNote{},
+	raw, err := json.Marshal(map[string]any{
+		"verdict":        verdict,
+		"summary":        "reviewed",
+		"concerns":       []any{},
+		"questions":      []any{},
+		"advisory_notes": []any{},
 	})
 	if err != nil {
 		panic(err)
@@ -1573,46 +1571,24 @@ func validReviewOutput(verdict string) json.RawMessage {
 }
 
 func reviewOutputWithRefs() json.RawMessage {
-	suggestion := "clarify the work order"
-	raw, err := json.Marshal(schema.ReviewOutput{
-		Verdict: "needs_changes",
-		Summary: "reviewed",
-		Concerns: []schema.Concern{
-			{ID: "C-1", Severity: "major", Location: "work-order:M3", Claim: "missing detail", Rationale: "implementation would diverge", Suggestion: &suggestion},
-		},
-		Questions: []schema.Question{
-			{ID: "Q-1", Topic: "budget", WhyItBlocks: "cannot judge loop length"},
-		},
-		AdvisoryNotes: []schema.AdvisoryNote{},
-	})
-	if err != nil {
-		panic(err)
-	}
-	return raw
-}
-
-func reviewOutputWithFindingCounts(t *testing.T, concernCount int, questionCount int) json.RawMessage {
-	t.Helper()
-	suggestion := "tighten the artifact"
-	output := schema.ReviewOutput{
-		Verdict:       "needs_changes",
-		Summary:       "reviewed",
-		Concerns:      make([]schema.Concern, 0, concernCount),
-		Questions:     make([]schema.Question, 0, questionCount),
-		AdvisoryNotes: []schema.AdvisoryNote{},
-	}
-	for i := 0; i < concernCount; i++ {
-		output.Concerns = append(output.Concerns, schema.Concern{
-			ID: "C-" + strconv.Itoa(i+1), Severity: "major", Location: "design",
-			Claim: "missing detail", Rationale: "implementation would diverge", Suggestion: &suggestion,
-		})
-	}
-	for i := 0; i < questionCount; i++ {
-		output.Questions = append(output.Questions, schema.Question{
-			ID: "Q-" + strconv.Itoa(i+1), Topic: "scope", WhyItBlocks: "cannot decide implementation shape",
-		})
-	}
-	return mustMarshal(t, output)
+	return json.RawMessage(`{
+		"verdict": "needs_changes",
+		"summary": "reviewed",
+		"concerns": [{
+			"id": "C-1",
+			"severity": "major",
+			"location": "work-order:M3",
+			"claim": "missing detail",
+			"rationale": "implementation would diverge",
+			"suggestion": "clarify the work order"
+		}],
+		"questions": [{
+			"id": "Q-1",
+			"topic": "budget",
+			"why_it_blocks": "cannot judge loop length"
+		}],
+		"advisory_notes": []
+	}`)
 }
 
 func writeArtifactFile(t *testing.T, content string) string {

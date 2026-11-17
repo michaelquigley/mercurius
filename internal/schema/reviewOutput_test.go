@@ -2,8 +2,12 @@ package schema
 
 import (
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/michaelquigley/df/dd"
 )
 
 func TestValidateReviewOutputAcceptsMinimalValidOutput(t *testing.T) {
@@ -212,6 +216,107 @@ func TestParseReviewOutput(t *testing.T) {
 	}
 	if output.Verdict != "needs_changes" || output.Concerns[0].ID != "C-1" || output.Questions[0].ID != "Q-1" || output.AdvisoryNotes[0].ID != "A-1" {
 		t.Fatalf("unexpected parsed output: %+v", output)
+	}
+
+	decoded, err := dd.DecodeStrictJSON(raw)
+	if err != nil {
+		t.Fatalf("decode review output: %v", err)
+	}
+	bound, err := BindReviewOutput(decoded)
+	if err != nil {
+		t.Fatalf("bind decoded review output: %v", err)
+	}
+	if !reflect.DeepEqual(output, bound) {
+		t.Fatalf("bound review output = %#v, want %#v", bound, output)
+	}
+}
+
+func TestParseReviewOutputSuggestionVariants(t *testing.T) {
+	const review = `{
+		"verdict": "needs_changes",
+		"summary": "changes needed",
+		"concerns": [{
+			"id": "C-1",
+			"severity": "major",
+			"location": "design",
+			"claim": "scope is ambiguous",
+			"rationale": "implementations would diverge"{{concern}}
+		}],
+		"questions": [],
+		"advisory_notes": [{
+			"id": "A-1",
+			"location": "design",
+			"note": "shorten the introduction",
+			"rationale": "easier to scan"{{advisory}}
+		}]
+	}`
+	const null = `,"suggestion": null`
+	suggestion := "revise the design"
+	const text = `,"suggestion": "revise the design"`
+	tests := []struct {
+		name     string
+		concern  string
+		advisory string
+		want     *string
+		wantErr  bool
+	}{
+		{name: "null", concern: null, advisory: null},
+		{name: "string", concern: text, advisory: text, want: &suggestion},
+		{name: "omitted concern suggestion", advisory: null, wantErr: true},
+		{name: "omitted advisory suggestion", concern: null, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			raw := json.RawMessage(strings.NewReplacer("{{concern}}", test.concern, "{{advisory}}", test.advisory).Replace(review))
+			output, err := ParseReviewOutput(raw)
+			if test.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "review output schema violation") || !strings.Contains(err.Error(), "suggestion") {
+					t.Fatalf("expected schema violation for missing suggestion, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parse review output: %v", err)
+			}
+			if len(output.Concerns) != 1 || len(output.AdvisoryNotes) != 1 {
+				t.Fatalf("unexpected parsed output: %+v", output)
+			}
+			if !reflect.DeepEqual(output.Concerns[0].Suggestion, test.want) ||
+				!reflect.DeepEqual(output.AdvisoryNotes[0].Suggestion, test.want) {
+				t.Fatalf("unexpected concern or advisory suggestion: %+v", output)
+			}
+		})
+	}
+}
+
+func TestParseReviewOutputRejectsDuplicateKey(t *testing.T) {
+	raw := json.RawMessage(`{
+		"verdict": "ready_to_build",
+		"summary": "ready",
+		"concerns": [],
+		"questions": [],
+		"advisory_notes": [{
+			"id": "A-1",
+			"location": "design",
+			"note": "shorten the introduction",
+			"rationale": "easier to scan",
+			"suggestion": null,
+			"suggestion": "remove the last paragraph"
+		}]
+	}`)
+
+	_, err := ParseReviewOutput(raw)
+	var duplicate *dd.DuplicateKeyError
+	if !errors.As(err, &duplicate) || duplicate.Key != "suggestion" {
+		t.Fatalf("expected duplicate suggestion key error, got %v", err)
+	}
+}
+
+func TestBindReviewOutputRejectsUnknownField(t *testing.T) {
+	_, err := BindReviewOutput(map[string]any{"extra": true})
+	var unknown *dd.UnknownFieldError
+	if !errors.As(err, &unknown) || unknown.Key != "extra" {
+		t.Fatalf("expected unknown field error, got %v", err)
 	}
 }
 

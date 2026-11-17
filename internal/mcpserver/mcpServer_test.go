@@ -16,7 +16,6 @@ import (
 	"github.com/michaelquigley/mercurius/internal/config"
 	"github.com/michaelquigley/mercurius/internal/reviewer"
 	"github.com/michaelquigley/mercurius/internal/runner"
-	"github.com/michaelquigley/mercurius/internal/schema"
 	"github.com/michaelquigley/mercurius/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -361,7 +360,7 @@ func TestAsyncReviewTools(t *testing.T) {
 }
 
 func TestCollectRoundTriageConcernFirst(t *testing.T) {
-	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithConcernAndQuestion(t))
+	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithConcernAndQuestion())
 	sessionID, artifactPath := openTestSession(t, ctx, client)
 
 	collected := startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
@@ -394,6 +393,18 @@ func TestCollectRoundTriageConcernFirst(t *testing.T) {
 		if !strings.Contains(collected.Triage.Guidance, want) {
 			t.Fatalf("triage guidance missing %q:\n%s", want, collected.Triage.Guidance)
 		}
+	}
+}
+
+func TestTriageSkipsInvalidReview(t *testing.T) {
+	valid := reviewOutputWithConcernAndQuestion()
+	invalid := json.RawMessage(strings.Replace(string(valid), `"summary":`, `"summary": "duplicate", "summary":`, 1))
+	triage := triageOutput([]broker.ReviewerResult{
+		{ReviewerName: "invalid", Raw: invalid},
+		{ReviewerName: "valid", Raw: valid},
+	})
+	if len(triage.Findings) != 2 || triage.Findings[0].ReviewerName != "valid" || triage.Findings[1].ReviewerName != "valid" {
+		t.Fatalf("triage should include only the valid review, got %+v", triage.Findings)
 	}
 }
 
@@ -598,7 +609,7 @@ func TestRecordRoundNotesSchemaCarriesDispositionEnum(t *testing.T) {
 // explicit schema the first call lands, and an invalid disposition is rejected at
 // the boundary rather than silently recording zero decisions.
 func TestRecordRoundNotesPersistsDecisionsOnFirstCall(t *testing.T) {
-	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithConcernAndQuestion(t))
+	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithConcernAndQuestion())
 	sessionID, artifactPath := openTestSession(t, ctx, client)
 	startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
 
@@ -691,7 +702,7 @@ func TestSelectNextFindingBySeverity(t *testing.T) {
 }
 
 func TestCollectRoundTriageAdvisoryNotes(t *testing.T) {
-	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithAdvisoryOnly(t))
+	ctx, client := newTestClientWithFixedReviewer(t, reviewOutputWithAdvisoryOnly())
 	sessionID, artifactPath := openTestSession(t, ctx, client)
 
 	collected := startAndCollectRoundTool(t, ctx, client, sessionID, artifactPath)
@@ -1039,68 +1050,44 @@ func waitBlockingStarted(t *testing.T, r *blockingReviewer) {
 }
 
 func validReviewOutput() json.RawMessage {
-	raw, err := json.Marshal(schema.ReviewOutput{
-		Verdict:       "ready_to_build",
-		Summary:       "ready",
-		Concerns:      []schema.Concern{},
-		Questions:     []schema.Question{},
-		AdvisoryNotes: []schema.AdvisoryNote{},
-	})
-	if err != nil {
-		panic(err)
-	}
-	return raw
+	return json.RawMessage(wireReviewWithoutFindings)
 }
 
-func reviewOutputWithConcernAndQuestion(t *testing.T) json.RawMessage {
-	t.Helper()
-
-	suggestion := "make the acceptance criteria explicit"
-	raw, err := json.Marshal(schema.ReviewOutput{
-		Verdict: "needs_changes",
-		Summary: "needs one clarification and one answer",
-		Concerns: []schema.Concern{{
-			ID:         "C-1",
-			Severity:   "major",
-			Location:   "docs/design.md",
-			Claim:      "scope is ambiguous",
-			Rationale:  "implementation would diverge",
-			Suggestion: &suggestion,
-		}},
-		Questions: []schema.Question{{
-			ID:          "Q-1",
-			Topic:       "rollout",
-			WhyItBlocks: "cannot determine deployment order",
-		}},
-		AdvisoryNotes: []schema.AdvisoryNote{},
-	})
-	if err != nil {
-		t.Fatalf("marshal concern/question review output: %v", err)
-	}
-	return raw
+func reviewOutputWithConcernAndQuestion() json.RawMessage {
+	return json.RawMessage(`{
+		"verdict": "needs_changes",
+		"summary": "needs one clarification and one answer",
+		"concerns": [{
+			"id": "C-1",
+			"severity": "major",
+			"location": "docs/design.md",
+			"claim": "scope is ambiguous",
+			"rationale": "implementation would diverge",
+			"suggestion": "make the acceptance criteria explicit"
+		}],
+		"questions": [{
+			"id": "Q-1",
+			"topic": "rollout",
+			"why_it_blocks": "cannot determine deployment order"
+		}],
+		"advisory_notes": []
+	}`)
 }
 
-func reviewOutputWithAdvisoryOnly(t *testing.T) json.RawMessage {
-	t.Helper()
-
-	suggestion := "trim the second paragraph"
-	raw, err := json.Marshal(schema.ReviewOutput{
-		Verdict:   "ready_to_build",
-		Summary:   "ready with optional polish",
-		Concerns:  []schema.Concern{},
-		Questions: []schema.Question{},
-		AdvisoryNotes: []schema.AdvisoryNote{{
-			ID:         "A-1",
-			Location:   "docs/design.md",
-			Note:       "shorten one paragraph",
-			Rationale:  "easier to scan",
-			Suggestion: &suggestion,
-		}},
-	})
-	if err != nil {
-		t.Fatalf("marshal advisory review output: %v", err)
-	}
-	return raw
+func reviewOutputWithAdvisoryOnly() json.RawMessage {
+	return json.RawMessage(`{
+		"verdict": "ready_to_build",
+		"summary": "ready with optional polish",
+		"concerns": [],
+		"questions": [],
+		"advisory_notes": [{
+			"id": "A-1",
+			"location": "docs/design.md",
+			"note": "shorten one paragraph",
+			"rationale": "easier to scan",
+			"suggestion": "trim the second paragraph"
+		}]
+	}`)
 }
 
 // inProcessLauncher runs rounds in this test process with the production
