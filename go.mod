@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/google/jsonschema-go v0.4.2
-	github.com/michaelquigley/df v0.3.12
+	github.com/michaelquigley/df v1.0.6
 	github.com/michaelquigley/push v0.2.1
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2

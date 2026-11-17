@@ -11,8 +11,8 @@ github.com/google/jsonschema-go v0.4.2 h1:tmrUohrwoLZZS/P3x7ex0WAVknEkBZM46iALbc
 github.com/google/jsonschema-go v0.4.2/go.mod h1:r5quNTdLOYEz95Ru18zA0ydNbBuYoo9tgaYcxEYhJVE=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
-github.com/michaelquigley/df v0.3.12 h1:puq7VvVvivH65XJy/AK/dWbtuRl3huDW3F5u1VPZ5Ow=
-github.com/michaelquigley/df v0.3.12/go.mod h1:Ym3uLqdbI6DxhqzLLtAzQ2ry7KfPKCjfXEgoOL23xfI=
+github.com/michaelquigley/df v1.0.6 h1:yGt4/8ziEeftCj8ZpJ4+k9cUx9K4Y4NUOqCGeXfEvDU=
+github.com/michaelquigley/df v1.0.6/go.mod h1:Ym3uLqdbI6DxhqzLLtAzQ2ry7KfPKCjfXEgoOL23xfI=
 github.com/michaelquigley/figlet v0.1.0 h1:GXhiuV2uGxAgZL0xz/9ftdobgt00bLvFDDc1R0A2OV8=
 github.com/michaelquigley/figlet v0.1.0/go.mod h1:o01j/eykadr5SKE51qSYuvQ1n9AftzHtGuaAEK8252A=
 github.com/michaelquigley/push v0.2.1 h1:yz0O1yMTMNQGrrZCypD0pczbQUWXItQr76sQHUZD5YM=

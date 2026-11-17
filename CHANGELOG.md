@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+CHANGE: Updated `github.com/michaelquigley/df` from `v0.3.12` to `v1.0.6`.
+
 ## v0.2.0
 
 CHANGE: **The reviewer moves out of `mercurius.yaml` into a user-level config, `~/.config/mercurius/config.yaml`.** It is set once per installation and every project uses it. Run `mercurius bootstrap --user` to write a starter, then remove the `reviewer` block from each project file; a project file that still has one is refused. A project that needs its own reviewer uses a `reviewer_override` block, and each round reports which of the two it ran on.
