@@ -1,0 +1,11 @@
+{
+  "completed_at": "<time>",
+  "error": {
+    "at": "<time>",
+    "code": "reviewer_failed",
+    "message": "reviewer failed"
+  },
+  "started_at": "<time>",
+  "state": "failed",
+  "updated_at": "<time>"
+}

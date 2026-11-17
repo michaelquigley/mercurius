@@ -1,0 +1,93 @@
+{
+  "log_path": "<project>/reviews/<session>/round-01/_round.md",
+  "manifest": [
+    {
+      "hash": "sha256:<hash>",
+      "name": "design.md",
+      "size": 9,
+      "snapshot_path": "<project>/reviews/<session>/round-01/design.md",
+      "source_path": "<project>/design.md"
+    }
+  ],
+  "next_action": "pause; present all triage.findings as a concise overview with triage.advisory_notes separate if present; then walk findings one at a time starting with triage.next_finding; for each, compress the finding and its proposed solution to the plainest, fewest-words version, present it, then stop and wait for the user's decision before acting - confidence that you can predict their decision is not consent; implement only after they respond, then stop and wait again before advancing to the next finding",
+  "reviewers": [
+    {
+      "raw": {
+        "advisory_notes": [
+          {
+            "id": "A-1",
+            "location": "design.md",
+            "note": "shorten the introduction",
+            "rationale": "easier to scan",
+            "suggestion": null
+          }
+        ],
+        "concerns": [
+          {
+            "claim": "scope is ambiguous",
+            "id": "C-1",
+            "location": "design.md",
+            "rationale": "implementation would diverge",
+            "severity": "major",
+            "suggestion": "state the acceptance criteria"
+          }
+        ],
+        "questions": [
+          {
+            "id": "Q-1",
+            "topic": "rollout",
+            "why_it_blocks": "deployment order is unclear"
+          }
+        ],
+        "summary": "one clarification and one answer",
+        "verdict": "needs_changes"
+      },
+      "reviewer_name": "dummy",
+      "usage_notes": "fixed"
+    }
+  ],
+  "round_number": 1,
+  "triage": {
+    "advisory_notes": [
+      {
+        "location": "design.md",
+        "note": "shorten the introduction",
+        "rationale": "easier to scan",
+        "ref": "A-1",
+        "reviewer_name": "dummy"
+      }
+    ],
+    "findings": [
+      {
+        "detail": "implementation would diverge",
+        "kind": "concern",
+        "location": "design.md",
+        "ref": "C-1",
+        "reviewer_name": "dummy",
+        "severity": "major",
+        "suggestion": "state the acceptance criteria",
+        "title": "scope is ambiguous"
+      },
+      {
+        "detail": "deployment order is unclear",
+        "kind": "question",
+        "ref": "Q-1",
+        "reviewer_name": "dummy",
+        "title": "rollout"
+      }
+    ],
+    "guidance": "First present all entries in triage.findings as a concise overview so the user sees the full review landscape. Present triage.advisory_notes separately as non-blocking polish when present. Then walk findings one at a time, defaulting to triage.next_finding unless the user chooses another ref. For each finding, compress it and its proposed solution to the plainest, fewest-words version you can - hedges stripped, jargon removed - so the user can make a fast call; this radical compression is the default, not a fallback. Present that, then stop and wait for the user's decision before acting - do not implement the fix until the user has actually responded, because confidence that you can predict their decision is not consent. Implement only after they respond. Then stop and wait again - do not advance to the next finding, record notes, or call another Mercurius tool until the user explicitly responds. One finding per turn, coming and going: this preserves a fresh turn and tool-call budget for each finding.",
+    "next_finding": {
+      "detail": "implementation would diverge",
+      "kind": "concern",
+      "location": "design.md",
+      "ref": "C-1",
+      "reviewer_name": "dummy",
+      "severity": "major",
+      "suggestion": "state the acceptance criteria",
+      "title": "scope is ambiguous"
+    },
+    "remaining_findings": 1,
+    "total_findings": 2
+  }
+}

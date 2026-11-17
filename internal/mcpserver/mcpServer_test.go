@@ -744,11 +744,16 @@ func testUserPath(configPath string) string {
 // config path so a test can edit the file between calls.
 func newTestClientWith(t *testing.T, r reviewer.Reviewer, configBody string) (context.Context, *mcp.ClientSession, string) {
 	t.Helper()
+	launcher := runner.NewInProcess(func(store.RunReviewer) (reviewer.Reviewer, error) { return r, nil })
+	return newTestClientWithLauncher(t, launcher, configBody)
+}
+
+func newTestClientWithLauncher(t *testing.T, launcher *runner.InProcess, configBody string) (context.Context, *mcp.ClientSession, string) {
+	t.Helper()
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "mercurius.yaml")
 	writeConfigFile(t, configPath, configBody)
 	writeConfigFile(t, testUserPath(configPath), baseTestUser)
-	launcher := runner.NewInProcess(func(store.RunReviewer) (reviewer.Reviewer, error) { return r, nil })
 	t.Cleanup(launcher.Wait)
 	b := broker.New(broker.Options{
 		ConfigPath:     configPath,

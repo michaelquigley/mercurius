@@ -1,0 +1,72 @@
+{
+  "closed_at": null,
+  "opened_at": "<time>",
+  "round_count": 3,
+  "rounds": [
+    {
+      "completed_at": "<time>",
+      "decision_count": 2,
+      "error": null,
+      "has_notes": true,
+      "log_path": "<project>/reviews/<session>/round-01/_round.md",
+      "max_findings": 6,
+      "opened_at": "<time>",
+      "outlived_server": false,
+      "reviewer": {
+        "impl": "dummy",
+        "name": "dummy",
+        "source": "user config",
+        "timeout": "20m0s"
+      },
+      "round_number": 1,
+      "state": "completed",
+      "state_path": "<project>/reviews/<session>/round-01/_state.json"
+    },
+    {
+      "completed_at": "<time>",
+      "decision_count": 0,
+      "error": {
+        "at": "<time>",
+        "code": "reviewer_failed",
+        "details": {
+          "cause": "reviewer unavailable",
+          "reviewer": "dummy"
+        },
+        "message": "reviewer failed"
+      },
+      "has_notes": false,
+      "max_findings": 6,
+      "opened_at": "<time>",
+      "outlived_server": false,
+      "reviewer": {
+        "impl": "dummy",
+        "name": "dummy",
+        "source": "user config",
+        "timeout": "20m0s"
+      },
+      "round_number": 2,
+      "state": "failed",
+      "state_path": "<project>/reviews/<session>/round-02/_state.json"
+    },
+    {
+      "completed_at": null,
+      "decision_count": 0,
+      "error": null,
+      "has_notes": false,
+      "max_findings": 6,
+      "opened_at": "<time>",
+      "outlived_server": false,
+      "reviewer": {
+        "impl": "dummy",
+        "name": "dummy",
+        "source": "user config",
+        "timeout": "20m0s"
+      },
+      "round_number": 3,
+      "state": "running",
+      "state_path": "<project>/reviews/<session>/round-03/_state.json"
+    }
+  ],
+  "session_id": "<session>",
+  "state": "active"
+}

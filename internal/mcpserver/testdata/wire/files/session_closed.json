@@ -1,0 +1,6 @@
+{
+  "closed_at": "<time>",
+  "opened_at": "<time>",
+  "session_id": "<session>",
+  "state": "closed"
+}

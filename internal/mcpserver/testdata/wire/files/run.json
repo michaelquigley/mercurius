@@ -1,0 +1,24 @@
+{
+  "manifest": [
+    {
+      "hash": "sha256:<hash>",
+      "name": "design.md",
+      "size": 9,
+      "snapshot_path": "<project>/reviews/<session>/round-01/design.md",
+      "source_path": "<project>/design.md"
+    }
+  ],
+  "max_findings": 6,
+  "opened_at": "<time>",
+  "review_context_present": true,
+  "review_focus_present": false,
+  "reviewer": {
+    "impl": "dummy",
+    "name": "dummy",
+    "timeout": "20m0s"
+  },
+  "reviewer_source": "user config",
+  "round_number": 1,
+  "server_pid": 12345,
+  "session_id": "<session>"
+}

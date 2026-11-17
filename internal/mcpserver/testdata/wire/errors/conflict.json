@@ -1,0 +1,16 @@
+{
+  "error": {
+    "code": "conflict",
+    "details": {
+      "monitor_command": "mercurius monitor --config <project>/mercurius.yaml --session <session> --wait",
+      "next_action": "do not start another round or open a new session to get around this; tell the user round 3 of session '<session>' is still running, wait for it to finish, then call collect_round on session '<session>'",
+      "runner_pid": 12345,
+      "running_for": "<elapsed>",
+      "running_round_number": 3,
+      "running_session_id": "<session>",
+      "started_at": "<time>",
+      "started_by_this_server": true
+    },
+    "message": "round 3 of session '<session>' is already running in this project"
+  }
+}

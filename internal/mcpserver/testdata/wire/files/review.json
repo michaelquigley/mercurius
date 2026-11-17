@@ -1,0 +1,38 @@
+{
+  "reviewers": [
+    {
+      "raw": {
+        "advisory_notes": [
+          {
+            "id": "A-1",
+            "location": "design.md",
+            "note": "shorten the introduction",
+            "rationale": "easier to scan",
+            "suggestion": null
+          }
+        ],
+        "concerns": [
+          {
+            "claim": "scope is ambiguous",
+            "id": "C-1",
+            "location": "design.md",
+            "rationale": "implementation would diverge",
+            "severity": "major",
+            "suggestion": "state the acceptance criteria"
+          }
+        ],
+        "questions": [
+          {
+            "id": "Q-1",
+            "topic": "rollout",
+            "why_it_blocks": "deployment order is unclear"
+          }
+        ],
+        "summary": "one clarification and one answer",
+        "verdict": "needs_changes"
+      },
+      "reviewer_name": "dummy",
+      "usage_notes": "fixed"
+    }
+  ]
+}

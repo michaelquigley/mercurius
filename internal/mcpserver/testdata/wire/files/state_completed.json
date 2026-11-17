@@ -1,0 +1,7 @@
+{
+  "completed_at": "<time>",
+  "runner_pid": 12345,
+  "started_at": "<time>",
+  "state": "completed",
+  "updated_at": "<time>"
+}

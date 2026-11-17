@@ -1,0 +1,35 @@
+{
+  "log_path": "<project>/reviews/<session>/round-03/_round.md",
+  "manifest": [
+    {
+      "hash": "sha256:<hash>",
+      "name": "design.md",
+      "size": 9,
+      "snapshot_path": "<project>/reviews/<session>/round-03/design.md",
+      "source_path": "<project>/design.md"
+    }
+  ],
+  "next_action": "pause and tell the user this round returned no blocking findings, with triage.advisory_notes separate if present; ask whether to record notes, start another review round, or close the session",
+  "reviewers": [
+    {
+      "raw": {
+        "advisory_notes": [],
+        "concerns": [],
+        "questions": [],
+        "summary": "ready",
+        "verdict": "ready_to_build"
+      },
+      "reviewer_name": "dummy",
+      "usage_notes": "blocking"
+    }
+  ],
+  "round_number": 3,
+  "triage": {
+    "advisory_notes": null,
+    "findings": null,
+    "guidance": "No concerns or questions were returned. Summarize that there are no blocking findings, present triage.advisory_notes separately if present, then ask whether to record notes, start another review round, or close the session.",
+    "next_finding": null,
+    "remaining_findings": 0,
+    "total_findings": 0
+  }
+}

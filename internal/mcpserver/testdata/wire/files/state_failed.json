@@ -1,0 +1,16 @@
+{
+  "completed_at": "<time>",
+  "error": {
+    "at": "<time>",
+    "code": "reviewer_failed",
+    "details": {
+      "cause": "reviewer unavailable",
+      "reviewer": "dummy"
+    },
+    "message": "reviewer failed"
+  },
+  "runner_pid": 12345,
+  "started_at": "<time>",
+  "state": "failed",
+  "updated_at": "<time>"
+}

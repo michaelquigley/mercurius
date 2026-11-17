@@ -1,0 +1,7 @@
+{
+  "commentary_recorded": true,
+  "decisions_recorded": 2,
+  "log_path": "<project>/reviews/<session>/round-01/_notes.md",
+  "next_action": "pause and ask the user whether to start another review round, open a new session, or stop",
+  "round_number": 1
+}

@@ -1,0 +1,13 @@
+{
+  "max_findings": 6,
+  "opened_at": "<time>",
+  "review_context_present": true,
+  "review_focus_present": false,
+  "reviewer": {
+    "impl": "dummy",
+    "name": "dummy",
+    "source": "user config",
+    "timeout": "20m0s"
+  },
+  "session_id": "<session>"
+}

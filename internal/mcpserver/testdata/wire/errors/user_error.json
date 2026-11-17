@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "user_error",
+    "details": {
+      "cause": "artifact list is empty"
+    },
+    "message": "invalid artifacts"
+  }
+}

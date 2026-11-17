@@ -1,0 +1,5 @@
+{
+  "closed_at": "<time>",
+  "session_id": "<session>",
+  "synopsis_path": "<project>/reviews/<session>/_synopsis.md"
+}

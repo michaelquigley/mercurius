@@ -1,0 +1,15 @@
+{
+  "commentary": "reviewed both findings",
+  "decisions": [
+    {
+      "disposition": "fixed",
+      "ref": "C-1"
+    },
+    {
+      "disposition": "deferred",
+      "note": "cover in rollout",
+      "ref": "Q-1"
+    }
+  ],
+  "recorded_at": "<time>"
+}

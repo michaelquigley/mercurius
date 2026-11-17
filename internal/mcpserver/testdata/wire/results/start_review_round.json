@@ -1,0 +1,15 @@
+{
+  "monitor_command": "mercurius monitor --config <project>/mercurius.yaml --session <session> --wait",
+  "next_action": "tell the user this review is running; they can monitor it with the monitor_command and re-engage you when the round completes",
+  "reviewer": {
+    "impl": "dummy",
+    "name": "dummy",
+    "source": "user config",
+    "timeout": "20m0s"
+  },
+  "round_number": 1,
+  "session_id": "<session>",
+  "started_at": "<time>",
+  "state": "running",
+  "status_path": "<project>/reviews/<session>/round-01/_state.json"
+}

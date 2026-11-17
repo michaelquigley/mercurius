@@ -1,0 +1,47 @@
+{
+  "properties": {
+    "commentary": {
+      "description": "free-form human commentary for the round.",
+      "type": "string"
+    },
+    "decisions": {
+      "description": "one entry per reviewer finding triaged this round; include the full array on the first call rather than a later one.",
+      "items": {
+        "properties": {
+          "disposition": {
+            "description": "how the finding was handled: 'fixed' (addressed in the artifacts), 'rejected' (declined, e.g. out of scope), or 'deferred' (acknowledged, to be handled later).",
+            "enum": [
+              "fixed",
+              "rejected",
+              "deferred"
+            ],
+            "type": "string"
+          },
+          "note": {
+            "description": "optional human note explaining the decision.",
+            "type": "string"
+          },
+          "ref": {
+            "description": "the reviewer finding id this decision is about (a concern, question, or advisory id from the round).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "disposition"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "round_number": {
+      "description": "the round number whose notes are being recorded.",
+      "type": "integer"
+    },
+    "session_id": {
+      "description": "the session id returned by open_session.",
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

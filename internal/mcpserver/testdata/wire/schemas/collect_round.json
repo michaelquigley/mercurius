@@ -1,0 +1,12 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "round_number": {
+      "type": "integer"
+    },
+    "session_id": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

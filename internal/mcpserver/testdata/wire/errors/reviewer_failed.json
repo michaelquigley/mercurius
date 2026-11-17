@@ -1,0 +1,12 @@
+{
+  "error": {
+    "code": "reviewer_failed",
+    "details": {
+      "cause": "reviewer unavailable",
+      "reviewer": "dummy",
+      "round_number": 2,
+      "state_path": "<project>/reviews/<session>/round-02/_state.json"
+    },
+    "message": "reviewer failed"
+  }
+}

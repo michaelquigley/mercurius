@@ -1,19 +1,21 @@
 ---
 title: bind project data through dd
-state: researching
+state: building
 created: 2026-11-11
 tags: [enhancement]
 log:
   - stamp: 2026-11-11
     note: surfaced while bootstrapping the terminus rubric — docs/journal/2026-11-11.md
+  - stamp: 2026-11-17
+    note: work order drawn — docs/future/bind-project-data-through-dd-work-order.md
 milestone: v0.2.x
 ---
 
-move the project structs that still carry json tags onto `github.com/michaelquigley/df/dd`. three surfaces: the on-disk session files (`internal/store` and the runner lock's note), the MCP tool payloads and error envelope (`internal/mcpserver`), and the review-output parse (`internal/schema`). keep every file key and tool field name exactly as it is. leave the claude envelope and pi event-stream types alone; those are other tools' formats.
+move the project structs that still carry json tags onto `github.com/michaelquigley/df/dd`. three surfaces: the on-disk session files (`internal/store` and the runner lock's note), the MCP tool payloads and error envelope (`internal/mcpserver`), and the review-output parse (`internal/schema`). keep every file key and tool field name as it is; the shape around them takes dd's defaults and may break. leave the claude envelope and pi event-stream types alone; those are other tools' formats.
 
 terminus already does all of this and is the worked example: `internal/mcpserver/binding.go` registers tools through the SDK's raw handler and binds with `dd`, and `internal/report/codec.go` carries the converter that passes a `json.RawMessage` through `dd` as nested json. the six tool input schemas have to be written by hand once the SDK's typed `AddTool` is gone; `record_round_notes` already has one.
 
-it can land one surface at a time. when all three are done, ask michael to promote `golang-conventions/df-binding` to blocking in the mercurius rubric in `terminus-canon`.
+the plan, the decisions behind it, and two additions (hand-written input schemas that say what is required, and a config loader that parses once and refuses unknown keys) are in `docs/future/bind-project-data-through-dd-work-order.md`; work from it. it lands one surface at a time. when all are done, ask michael to promote `golang-conventions/df-binding` to blocking in the mercurius rubric in `terminus-canon`.
 
 ## why
 

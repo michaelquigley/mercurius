@@ -1,6 +1,7 @@
 researching:
-  - bind-project-data-through-dd.md
   - artifact-paths-and-naming.md
   - quorums.md
   - implementation-divergence-review.md
 horizon:
+building:
+  - bind-project-data-through-dd.md
