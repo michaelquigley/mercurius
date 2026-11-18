@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+CHANGE: **Tool results and session files change shape.** A field with nothing to report is now left out where it used to be `null`, an empty list is `[]`, and timestamps in tool results carry fractional seconds. Field names are unchanged.
+
+CHANGE: **Tool arguments are checked strictly.** `session_id` is required wherever a tool needs one, and leaving it out answers `user_error` where it used to answer `not_found`. `round_number` must be a whole number of at least 1; leave it out of `collect_round` to get the latest round. Unknown arguments are refused.
+
+CHANGE: **An unknown key in `mercurius.yaml` or the user-level config is an error.** The error names the key and the file, so a mistyped `review_focus` or `do_not_flag` no longer loads silently and runs a round without it.
+
+FIX: A finding with an empty `id` is now refused. Two findings with empty ids used to pass as a valid review, and decisions recorded against them could not be told apart.
+
+FIX: A reviewer name containing YAML punctuation, such as a colon, no longer corrupts the frontmatter of a round log.
+
 CHANGE: Updated `github.com/michaelquigley/df` from `v0.3.12` to `v1.0.6`.
 
 ## v0.2.0

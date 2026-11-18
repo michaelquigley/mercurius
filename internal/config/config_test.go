@@ -97,7 +97,7 @@ func TestResolveProjectOverrideOnly(t *testing.T) {
 	}
 }
 
-// an override replaces the user-level block whole. Merging field by field would
+// an override replaces the user-level block whole. merging field by field would
 // let the installation's model land on the override's different impl.
 func TestResolveOverrideReplacesUserBlockWhole(t *testing.T) {
 	dir := t.TempDir()
@@ -130,7 +130,7 @@ reviewer:
 	}
 }
 
-// a plain reviewer block in the project file is refused. The message names the
+// a plain reviewer block in the project file is refused. the message names the
 // user-level path and says to remove the block, and does not mention the
 // override key: an agent that wrote the block out of habit should remove it,
 // not rename it.
@@ -420,7 +420,7 @@ func writeProject(t *testing.T, dir string, body string) string {
 	return path
 }
 
-// writeUser writes a user-level config in the test's own directory. No test
+// writeUser writes a user-level config in the test's own directory. no test
 // reads the developer's real user-level file.
 func writeUser(t *testing.T, dir string, body string) string {
 	t.Helper()

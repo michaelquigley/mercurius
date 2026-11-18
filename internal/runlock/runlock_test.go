@@ -35,7 +35,7 @@ func TestTakeIsExclusiveAndReleases(t *testing.T) {
 	second.Release()
 }
 
-// the note is rewritten in place. A note written by rename would leave the lock
+// the note is rewritten in place. a note written by rename would leave the lock
 // on the old inode, and the next taker would get it while the holder lives.
 func TestWriteNoteKeepsTheLock(t *testing.T) {
 	dir := t.TempDir()

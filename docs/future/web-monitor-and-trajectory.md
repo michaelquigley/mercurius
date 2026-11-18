@@ -1,8 +1,8 @@
 # Web monitor and trajectory analytics
 
-The current `mercurius monitor` CLI tail-prints session status, lifecycle events, and the current next-action. It works, but the shape is wrong for what's actually happening in a review session: a sequence of rounds with structured findings, accumulating decisions, severity composition that decays over time, and side files (snapshots, prompt logs, decisions log) the operator wants to navigate.
+The current `mercurius monitor` CLI prints a session's state and each round's state, and can wait for a running round to finish. It works, but the shape is wrong for what's actually happening in a review session: a sequence of rounds with structured findings, accumulating decisions, severity composition that decays over time, and side files (snapshots, prompt logs, decisions log) the operator wants to navigate.
 
-The trajectory framing from `mercurius-feedback.md` (proposal #7, "richer convergence signal") is the same problem viewed from a different angle. The valuable signal is not "is this round done?" but "how is the severity character of findings shifting across rounds?" That's hard to encode in a JSON `convergence` field and unreadable in a CLI tail. It's easy to read in a chart.
+An early round of feedback on mercurius proposed a "richer convergence signal", and the trajectory framing is the same problem viewed from a different angle. The valuable signal is not "is this round done?" but "how is the severity character of findings shifting across rounds?" That's hard to encode in a JSON `convergence` field and unreadable in a CLI tail. It's easy to read in a chart.
 
 This document sketches the direction; a future design session will produce the spec.
 
@@ -45,7 +45,7 @@ The web app watches `.mercurius/` directories under a configured root, parses on
 
 ## Trajectory analytics
 
-The "richer convergence signal" proposal from the feedback doc becomes concrete in this UI:
+That "richer convergence signal" proposal becomes concrete in this UI:
 
 - **Severity composition per round.** Counts of blocker / major / minor over rounds. The decay curve is the readiness signal.
 - **Domain shift.** Each finding gets a domain tag (architectural / spec / polish / wording). Tags are LLM-inferable from finding location and title at collect time, or applied manually.
@@ -60,7 +60,6 @@ These run in the web server with no broker changes. They read the same JSON the 
 - Auth model: localhost-only is safe by default; should there be additional access controls?
 - Trajectory tagging (domain): manual, LLM-inferred at collect time, or both?
 - Stateful trajectory analytics: persist computed similarity across runs, or recompute on every load?
-- Whether the web app subsumes the JSON `convergence` field in `collect_round` or runs alongside it.
 - Tech stack: Go HTTP server with embedded assets vs separate frontend repo. Embedded keeps mercurius a single binary.
 
 ## Why this is its own arc

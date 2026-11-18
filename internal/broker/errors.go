@@ -7,8 +7,8 @@ import (
 	"github.com/michaelquigley/mercurius/internal/store"
 )
 
-// Stable error codes. Five classes cover the operational surface: caller
-// inputs, addressing, state conflicts, reviewer failures, and broker bugs. They
+// stable error codes. five classes cover the operational surface: caller
+// inputs, addressing, state conflicts, reviewer failures, and broker bugs. they
 // are defined in internal/store, beside the stored error a failed round carries.
 const (
 	CodeUserError      = store.CodeUserError

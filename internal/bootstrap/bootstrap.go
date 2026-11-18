@@ -1,6 +1,6 @@
 // Package bootstrap embeds the starter configuration templates and writes them:
 // the project's mercurius.yaml, which holds no reviewer, and the user-level
-// config, which holds the reviewer for the installation. The mercurius CLI
+// config, which holds the reviewer for the installation. the mercurius CLI
 // exposes this through `mercurius bootstrap` and `mercurius bootstrap --user`.
 package bootstrap
 
@@ -27,12 +27,12 @@ var UserTemplate []byte
 const ConfigFileName = "mercurius.yaml"
 
 // ErrExists is returned by Write when the target file already exists and
-// force=false. The caller should surface this so the user can decide whether
+// force=false. the caller should surface this so the user can decide whether
 // to inspect the existing file or re-run with --force.
 var ErrExists = errors.New("config file already exists")
 
-// Write writes the embedded template as `mercurius.yaml` inside dir. It
-// refuses to clobber an existing file unless force is true. The returned path
+// Write writes the embedded template as `mercurius.yaml` inside dir. it
+// refuses to clobber an existing file unless force is true. the returned path
 // is the absolute path of the file actually written.
 func Write(dir string, force bool) (string, error) {
 	if dir == "" {
@@ -54,8 +54,8 @@ func Write(dir string, force bool) (string, error) {
 }
 
 // WriteUser writes the embedded user-level template to path, creating its
-// directory if needed. It refuses to clobber an existing file unless force is
-// true. The returned path is the absolute path of the file written.
+// directory if needed. it refuses to clobber an existing file unless force is
+// true. the returned path is the absolute path of the file written.
 func WriteUser(path string, force bool) (string, error) {
 	if path == "" {
 		return "", errors.New("no user-level config path could be determined on this system")

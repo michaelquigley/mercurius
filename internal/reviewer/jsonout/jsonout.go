@@ -1,6 +1,6 @@
-// Package jsonout extracts a single JSON object from raw reviewer output. A
+// Package jsonout extracts a single JSON object from raw reviewer output. a
 // reviewer subprocess may emit the object directly, wrapped in a markdown fence,
-// or surrounded by stray prose; Object recovers the object in each case. It does
+// or surrounded by stray prose; Object recovers the object in each case. it does
 // not validate the object against any schema - the broker performs canonical
 // validation after the reviewer returns.
 package jsonout
@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// Object returns the first plausible JSON object found in output. It accepts a
+// Object returns the first plausible JSON object found in output. it accepts a
 // bare object, a fenced object, or an object embedded in surrounding prose, and
 // rejects output that is empty or carries no JSON object (for example a bare
 // JSON array).

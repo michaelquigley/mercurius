@@ -187,7 +187,7 @@ The log is immutable after creation. Recording commentary and decisions through 
 
 ## Session Synopsis
 
-`close_session` writes a session-level summary at `<session>/_synopsis.md`, rendered from the session directory's machine files, so it works from any server process. The file opens with YAML frontmatter (session id, opened/closed timestamps, round count, and the failed-round count when any failed), followed by a skimmable Summary section, a Round outcomes table with one row per round (its state, reviewer, verdict, finding counts, decisions, and notes), and a per-round detail block that restates the round's state, reviewer, calibration presence, verdict, findings, decisions, and commentary. A failed round gets a row and a short detail block with its stored error and the path to `_raw.txt`. A round that outlived its server is marked in its detail block, and the frontmatter counts them (`outlived_server_count`); across an arc, that count is the evidence for how often a server dies under a running round. There is no session-level reviewer; the reviewer is reported per round. If a completed round's reviewer output fails to parse, the synopsis emits a stable fallback pointing at that round's `_review.json`. The per-round files remain the authoritative record.
+`close_session` writes a session-level summary at `<session>/_synopsis.md`, rendered from the session directory's machine files, so it works from any server process. The file opens with YAML frontmatter (session id, opened/closed timestamps, the round count, and the counts of failed rounds and of rounds that outlived their server, each written even when zero), followed by a skimmable Summary section, a Round outcomes table with one row per round (its state, reviewer, verdict, finding counts, decisions, and notes), and a per-round detail block that restates the round's state, reviewer, calibration presence, verdict, findings, decisions, and commentary. A failed round gets a row and a short detail block with its stored error and the path to `_raw.txt`. A round that outlived its server is marked in its detail block, and the frontmatter counts them (`outlived_server_count`); across an arc, that count is the evidence for how often a server dies under a running round. There is no session-level reviewer; the reviewer is reported per round. If a completed round's reviewer output fails to parse, the synopsis emits a stable fallback pointing at that round's `_review.json`. The per-round files remain the authoritative record.
 
 ## Reviewer Implementations
 
@@ -200,19 +200,22 @@ Current implementations:
 
 Every reviewer is given the same broker-assembled prompt (which inlines the artifact content and the output schema) and returns the best JSON object it can. Reviewers perform output extraction only; canonical schema validation belongs to the runner, which validates the returned object after the reviewer returns. The shared `internal/reviewer/jsonout` package holds the JSON-object extraction logic used across reviewers.
 
-The three subprocess reviewers share two behaviors:
+The three subprocess reviewers share these behaviors. Each appends `--model` (codex: `-m`) when a model is configured, and then the operator's `extra_args`, after the flags listed below.
 
 - **Failures carry their output.** A failed process, or a clean exit whose output cannot be parsed, returns an error carrying the bytes the reviewer captured (stdout and stderr, and for codex the last-message file), instead of folding them into the error message. The runner writes those bytes to `_raw.txt`, so the stored error stays short.
 - **The wait is bounded.** Each reviewer's subprocess has a ten-second wait delay: once the reviewer exits or its deadline passes, Mercurius waits at most that long for its output pipes to close before closing them itself. Without it, a process the reviewer started could hold the pipes open and keep the round running indefinitely. A reviewer that wrote a valid result and exited, leaving a child behind, still completes its round. The child is not killed.
+- **A usable result survives a bad exit.** If the process exits unsuccessfully after producing output a JSON object can be extracted from, the reviewer returns that object. This covers a reviewer that wrote its answer and was then killed, by the round timeout or anything else.
 - **The reviewer's life is the runner's.** On Linux each reviewer is started with a parent-death signal and as the leader of its own process group; the round timeout kills that group. See The Runner Process.
 
 The Codex reviewer runs `codex exec` with:
 
-- ephemeral session
-- read-only sandbox
+- `-C <round directory>` as the working root, and `--skip-git-repo-check`
+- `--ephemeral` (no session kept) and `--sandbox read-only`
 - JSON schema file supplied through `--output-schema`
 - final message captured through `--output-last-message`
 - assembled prompt delivered on stdin
+
+The schema file and the last-message file live in a private temporary directory, removed before the reviewer returns. The reviewer takes the first JSON object in the last message, whether it is bare, fenced, or surrounded by prose. When it returns a result recovered after an unsuccessful exit, the usage notes carry `recovered_last_message_after_error='true'`.
 
 The Claude reviewer runs `claude -p` with:
 
@@ -221,14 +224,15 @@ The Claude reviewer runs `claude -p` with:
 - assembled prompt delivered on stdin
 - the schema-validated object read from the envelope's `structured_output` field, falling back to extracting a JSON object from the `result` text
 
-`--bare` is intentionally not passed, so claude inherits the operator's logged-in credentials; a logged-out operator surfaces as a clear reviewer error. Usage notes record the model, subtype, cost, turn count, and duration.
+`--bare` is intentionally not passed, so claude inherits the operator's logged-in credentials. An envelope that reports `is_error`, as a logged-out operator's does, surfaces its message as the reviewer error. Usage notes record the binary, model, subtype, cost, turn count, duration, and session id.
 
 The pi reviewer runs `pi -p --mode json` with:
 
 - `--no-session` (ephemeral) and `--no-context-files` (so the project's `AGENTS.md`/`CLAUDE.md` above the round directory do not colour the review)
 - `--tools read,grep,find,ls` (read-only)
-- the assembled prompt passed as an `@file` reference, with stdin closed
-- the final assistant message parsed out of the JSON event stream, then the JSON object extracted from it
+- `--no-extensions`, `--no-skills`, `--no-prompt-templates`, `--no-approve`, and `--offline`, which seal the run off from the host's own pi setup: no extension discovery, skills, or prompt templates, the working directory treated as untrusted, and no startup network operations
+- the assembled prompt passed as an `@file` reference from a temporary file, with stdin on the null device, because pi reads stdin as further input and would wait on an open one
+- the final assistant message parsed out of the JSON event stream (the last `message_end` event with role `assistant`, its `text` blocks joined and its `thinking` blocks ignored), then the JSON object extracted from it
 
 pi has no native JSON-schema enforcement, so the schema is carried only by the prompt and the broker's post-return validation is the backstop.
 

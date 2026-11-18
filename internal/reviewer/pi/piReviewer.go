@@ -38,7 +38,7 @@ func New(options Options) *Reviewer {
 	return &Reviewer{options: options}
 }
 
-// Review runs pi in print mode with the pre-assembled prompt. Unlike codex and
+// Review runs pi in print mode with the pre-assembled prompt. unlike codex and
 // claude, pi has no native json-schema enforcement, so the schema is conveyed only
 // by the prompt (which already inlines the artifact content, the output schema, and
 // a "single json object only" instruction). pi runs read-only ('--tools
@@ -46,11 +46,11 @@ func New(options Options) *Reviewer {
 // suppressed ('--no-context-files') so the review is not coloured by the AGENTS.md
 // or CLAUDE.md that sit above the round directory.
 //
-// The run is also hermetically sealed off from the host's development-flavoured
-// pi configuration. The same pi install often serves double duty as an
+// the run is also hermetically sealed off from the host's development-flavoured
+// pi configuration. the same pi install often serves double duty as an
 // interactive coding harness with a richer setup — extensions (which is how MCP
 // servers arrive; pi core has no native MCP), skills, prompt templates, and
-// project-local '.pi/' directories trusted in the agent dir's trust store. None
+// project-local '.pi/' directories trusted in the agent dir's trust store. none
 // of that belongs in a review subprocess: '--no-extensions', '--no-skills', and
 // '--no-prompt-templates' disable discovery outright, and '--no-approve' forces
 // the working directory untrusted for the run so a directory trusted for
@@ -59,7 +59,7 @@ func New(options Options) *Reviewer {
 // binary and package installs, model catalog refresh); the model API call and
 // oauth token refresh are unaffected.
 //
-// The final assistant message is
+// the final assistant message is
 // parsed out of pi's '--mode json' event stream and the json object is extracted
 // from it; the broker validates that object against the schema.
 func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (reviewer.ReviewResponse, error) {

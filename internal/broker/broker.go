@@ -25,14 +25,14 @@ import (
 
 var safeArtifactName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
-// Broker serves the six session operations over the session directory. It holds
+// Broker serves the six session operations over the session directory. it holds
 // no session state between calls: each operation resolves the configuration,
 // reads what it needs from disk, acts, and writes.
 type Broker struct {
 	options Options
 	pid     int
 	// takeLock makes the one attempt at the runner lock that the dead-round check
-	// uses. A field so a test can change a round's state in the gap between the
+	// uses. a field so a test can change a round's state in the gap between the
 	// check's first read and its hold on the lock.
 	takeLock func(logDestination string) (*runlock.Lock, error)
 }
@@ -86,7 +86,7 @@ func (b *Broker) OpenSession(ctx context.Context, _ OpenSessionRequest) (OpenSes
 }
 
 // StartReviewRound prepares a round and hands it, with the runner lock, to the
-// launcher. Everything that can fail before the runner starts is checked here,
+// launcher. everything that can fail before the runner starts is checked here,
 // and a failure leaves no round behind.
 func (b *Broker) StartReviewRound(ctx context.Context, req StartRoundRequest) (StartReviewRoundResponse, error) {
 	if err := ctx.Err(); err != nil {
@@ -241,7 +241,7 @@ func (b *Broker) prepareRound(roundDir string, sessionID string, roundNumber int
 }
 
 // runningConflict builds the refusal for a launch while the runner lock is
-// held, from the lock file's note and the named round's state. If the note
+// held, from the lock file's note and the named round's state. if the note
 // cannot be read, the refusal is returned without them.
 func (b *Broker) runningConflict(logDestination string) error {
 	note, err := runlock.ReadNote(logDestination)
@@ -342,7 +342,7 @@ func (b *Broker) CollectRound(ctx context.Context, req CollectRoundRequest) (Col
 }
 
 // RecordRoundNotes records a completed round's commentary and decisions in
-// _notes.json and its human twin _notes.md. The round log is not touched.
+// _notes.json and its human twin _notes.md. the round log is not touched.
 func (b *Broker) RecordRoundNotes(ctx context.Context, req RecordRoundNotesRequest) (RecordRoundNotesResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return RecordRoundNotesResponse{}, err
@@ -536,7 +536,7 @@ func (b *Broker) SessionStatus(ctx context.Context, sessionID string) (SessionSt
 }
 
 // roundState reads a round's state and, when it says running, runs the
-// dead-round check. A missing round is not_found.
+// dead-round check. a missing round is not_found.
 func (b *Broker) roundState(logDestination string, sessionID string, roundDir string, roundNumber int) (store.State, error) {
 	if roundNumber <= 0 || !store.RoundExists(roundDir) {
 		return store.State{}, brokerError(CodeNotFound, "round not found", nil, map[string]any{"session_id": sessionID, "round_number": roundNumber})
@@ -552,11 +552,11 @@ func (b *Broker) roundState(logDestination string, sessionID string, roundDir st
 	return state, nil
 }
 
-// checkDeadRound is the dead-round check every reader uses. A round marked
-// running while the runner lock is free has no runner. The check makes one
+// checkDeadRound is the dead-round check every reader uses. a round marked
+// running while the runner lock is free has no runner. the check makes one
 // attempt at the lock; if it gets it, it re-reads the state, records the round
 // as failed with reason runner_lost if the state still says running, and lets
-// go. The re-read matters: the runner writes its final state and then exits, so
+// go. the re-read matters: the runner writes its final state and then exits, so
 // the state read before the lock was taken can be stale.
 func (b *Broker) checkDeadRound(logDestination string, roundDir string, state store.State) (store.State, error) {
 	if state.State != store.RoundRunning {
@@ -574,7 +574,7 @@ func (b *Broker) checkDeadRound(logDestination string, roundDir string, state st
 }
 
 // markLostLocked records a running round as failed with reason runner_lost.
-// The caller must hold the runner lock. It reads the state itself, so a caller
+// the caller must hold the runner lock. it reads the state itself, so a caller
 // never decides from a read taken before the lock.
 func markLostLocked(roundDir string) (store.State, error) {
 	state, err := store.ReadState(roundDir)
@@ -597,7 +597,7 @@ func markLostLocked(roundDir string) (store.State, error) {
 	return state, nil
 }
 
-// resolve reads both configuration files. The error names the file at fault:
+// resolve reads both configuration files. the error names the file at fault:
 // the project's mercurius.yaml or the user-level config.
 func (b *Broker) resolve() (*config.Resolved, error) {
 	resolved, err := config.Resolve(b.options.ConfigPath, b.options.UserConfigPath)
@@ -618,7 +618,7 @@ func (b *Broker) resolve() (*config.Resolved, error) {
 }
 
 // noReviewerError is the refusal for a round with no reviewer configured
-// anywhere. It points at the user-level config, where the reviewer belongs.
+// anywhere. it points at the user-level config, where the reviewer belongs.
 func (b *Broker) noReviewerError() error {
 	userPath := b.options.UserConfigPath
 	if userPath == "" {
@@ -629,7 +629,7 @@ func (b *Broker) noReviewerError() error {
 		nil, map[string]any{"user_config_path": userPath})
 }
 
-// startNextAction tells the agent what to do while a round runs. A round on a
+// startNextAction tells the agent what to do while a round runs. a round on a
 // project override is said out loud: the operator chose the installation's
 // reviewer once, and a project that departs from it should not do so quietly.
 func startNextAction(reviewerCfg config.ReviewerConfig, source string) string {
@@ -648,7 +648,7 @@ func (b *Broker) monitorCommand(sessionID string) string {
 	return fmt.Sprintf("mercurius monitor --config %s --session %s --wait", path, sessionID)
 }
 
-// loadSession checks a session id and reads its session.json. The id is checked
+// loadSession checks a session id and reads its session.json. the id is checked
 // before it is joined into a path, so nothing outside the log destination is
 // ever read.
 func loadSession(logDestination string, sessionID string) (store.Session, string, error) {
@@ -732,7 +732,7 @@ func synopsisEntry(session store.Session, sessionDir string, closedAt time.Time)
 }
 
 // synopsisRound assembles one round's synopsis material from its machine files.
-// Markdown is never read back.
+// markdown is never read back.
 func synopsisRound(roundDir string, n int) (roundlog.SynopsisRound, error) {
 	state, err := readRoundState(roundDir)
 	if err != nil {
@@ -798,7 +798,7 @@ func synopsisRound(roundDir string, n int) (roundlog.SynopsisRound, error) {
 }
 
 // removeLeftoverRounds removes round directories with no _state.json: leftovers
-// from a server that died while preparing a round. The caller holds the lock.
+// from a server that died while preparing a round. the caller holds the lock.
 func removeLeftoverRounds(sessionDir string) error {
 	dirs, err := store.RoundDirs(sessionDir)
 	if err != nil {
@@ -816,7 +816,7 @@ func removeLeftoverRounds(sessionDir string) error {
 }
 
 // nextRoundNumber is one more than the highest round directory in the session.
-// The project-wide lock serializes every round start, so there is no second
+// the project-wide lock serializes every round start, so there is no second
 // allocator to race.
 func nextRoundNumber(sessionDir string) (int, error) {
 	dirs, err := store.RoundDirs(sessionDir)

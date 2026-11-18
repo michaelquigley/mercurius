@@ -11,7 +11,7 @@ import (
 )
 
 // the project template must resolve as written: no reviewer block, which would
-// be refused, and nothing else stale. A project bootstrapped from it runs on
+// be refused, and nothing else stale. a project bootstrapped from it runs on
 // the installation's reviewer.
 func TestProjectTemplateHoldsNoReviewer(t *testing.T) {
 	dir := t.TempDir()

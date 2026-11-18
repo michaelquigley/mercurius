@@ -33,7 +33,7 @@ var knownImpls = map[string]struct{}{
 }
 
 // Config is the resolved project configuration: the settings that describe the
-// project and the review arc. The reviewer is resolved separately; see Resolved.
+// project and the review arc. the reviewer is resolved separately; see Resolved.
 type Config struct {
 	Name             string
 	ConfigPath       string
@@ -98,7 +98,7 @@ func (e *FileError) Unwrap() error {
 	return e.Err
 }
 
-// projectFile is the YAML shape of the project's mercurius.yaml. The reviewer
+// projectFile is the YAML shape of the project's mercurius.yaml. the reviewer
 // is not part of it: a project chooses its own reviewer only through
 // reviewer_override, and a plain reviewer block is rejected.
 type projectFile struct {
@@ -111,7 +111,7 @@ type projectFile struct {
 	Extra            map[string]any `dd:",+extra"`
 }
 
-// userFile is the YAML shape of the user-level config. The reviewer is a fact
+// userFile is the YAML shape of the user-level config. the reviewer is a fact
 // about the installation, set once here.
 type userFile struct {
 	Reviewer *ReviewerConfig
@@ -119,7 +119,7 @@ type userFile struct {
 }
 
 // ProjectPath returns the absolute project config path for a --config value,
-// expanding '~'. It does not read the file.
+// expanding '~'. it does not read the file.
 func ProjectPath(path string) (string, error) {
 	if path == "" {
 		path = DefaultProjectPath
@@ -128,7 +128,7 @@ func ProjectPath(path string) (string, error) {
 }
 
 // ProjectName returns the project name for a project config path: the base name
-// of the directory holding it. It does not read the file.
+// of the directory holding it. it does not read the file.
 func ProjectName(projectPath string) string {
 	return filepath.Base(filepath.Dir(projectPath))
 }
@@ -145,15 +145,15 @@ func UserConfigPath() string {
 }
 
 // Resolve reads and validates the configuration a broker operation runs with.
-// It is called by every operation, so edits to either file take effect on the
-// next call. Each file is read and parsed once. The returned project bytes
+// it is called by every operation, so edits to either file take effect on the
+// next call. each file is read and parsed once. the returned project bytes
 // are the ones parsed.
 //
-// The reviewer comes from the user-level file's reviewer block, unless the
+// the reviewer comes from the user-level file's reviewer block, unless the
 // project file has a reviewer_override block, which replaces it whole, timeout
-// included; the two are never merged field by field. A missing user-level file
-// is no reviewer, not an error. A missing reviewer is not an error either, and
-// is reported as a nil Reviewer for the caller to judge. Errors are FileErrors
+// included; the two are never merged field by field. a missing user-level file
+// is no reviewer, not an error. a missing reviewer is not an error either, and
+// is reported as a nil Reviewer for the caller to judge. errors are FileErrors
 // naming the file at fault.
 func Resolve(projectPath string, userPath string) (*Resolved, error) {
 	absPath, err := ProjectPath(projectPath)
@@ -218,7 +218,7 @@ func Resolve(projectPath string, userPath string) (*Resolved, error) {
 	return resolved, nil
 }
 
-// readUserReviewer reads the reviewer block from the user-level file. An empty
+// readUserReviewer reads the reviewer block from the user-level file. an empty
 // path, a missing file, or a file with no reviewer block is no reviewer.
 func readUserReviewer(userPath string) (*ReviewerConfig, error) {
 	if userPath == "" {
@@ -272,7 +272,7 @@ func resolveReviewer(block ReviewerConfig, baseDir string) (*ReviewerConfig, err
 	return &reviewerCfg, nil
 }
 
-// Validate checks the project settings. It performs pure field validation and
+// Validate checks the project settings. it performs pure field validation and
 // has no filesystem side effects.
 func (c *Config) Validate() error {
 	if c.MaxFindings <= 0 {
@@ -304,7 +304,7 @@ func (r *ReviewerConfig) Validate() error {
 }
 
 // EnsureLogDestination creates the log_destination directory if it does not
-// already exist and verifies it is writable. Only open_session calls it; every
+// already exist and verifies it is writable. only open_session calls it; every
 // other operation reads a log destination a session already lives in.
 func EnsureLogDestination(path string) error {
 	if path == "" {
@@ -319,8 +319,8 @@ func EnsureLogDestination(path string) error {
 // checkProjectKeys reports stale keys before other unknown keys so a project
 // with an old config still gets its migration instructions.
 //
-// A plain reviewer block is rejected with a message that names the user-level
-// file and says to remove the block. It deliberately does not mention
+// a plain reviewer block is rejected with a message that names the user-level
+// file and says to remove the block. it deliberately does not mention
 // reviewer_override: an agent that wrote the block out of habit should remove
 // it, not rename it into an override nobody decided on.
 func checkProjectKeys(absPath string, userPath string, extra map[string]any) error {

@@ -83,13 +83,15 @@ func TestWriteSynopsisRendersAllSections(t *testing.T) {
 	}
 	content := readFile(t, path)
 
+	assertFrontmatter(t, frontmatterOf(t, content), map[string]string{
+		"session_id":            "s_synopsis_test",
+		"opened_at":             "2026-05-12T17:51:09Z",
+		"closed_at":             "2026-05-12T18:30:00Z",
+		"round_count":           "3",
+		"failed_round_count":    "1",
+		"outlived_server_count": "1",
+	})
 	for _, want := range []string{
-		"---\nsession_id: s_synopsis_test\n",
-		"opened_at: 2026-05-12T17:51:09Z\n",
-		"closed_at: 2026-05-12T18:30:00Z\n",
-		"round_count: 3\n",
-		"failed_round_count: 1\n",
-		"outlived_server_count: 1\n",
 		"- Outlived its server: yes",
 		"# Session synopsis\n",
 		"## Summary\n",
@@ -165,9 +167,12 @@ func TestWriteSynopsisEmptyRounds(t *testing.T) {
 	}
 	content := readFile(t, path)
 
-	if !strings.Contains(content, "round_count: 0\n") {
-		t.Errorf("expected round_count: 0; got:\n%s", content)
-	}
+	// the counts are always written, zero included.
+	assertFrontmatter(t, frontmatterOf(t, content), map[string]string{
+		"round_count":           "0",
+		"failed_round_count":    "0",
+		"outlived_server_count": "0",
+	})
 	if !strings.Contains(content, "Session closed with no rounds.") {
 		t.Errorf("expected empty-rounds summary; got:\n%s", content)
 	}

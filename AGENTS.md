@@ -8,13 +8,13 @@ See `docs/current/` for documentation that describes the current implementation.
 
 See `docs/future/` for deferred designs, speculative changes, and notes about behavior that is not implemented yet. Do not document future behavior in `docs/current/` until the code exists and tests cover the behavior.
 
-M1-M4 established the Go scaffold, reviewer interface, structured review schema, Codex subprocess reviewer, broker/session orchestration, prompt assembly, snapshotting, log writing, dummy reviewer test support, configuration loading, MCP stdio tool surface, background review rounds, CLI monitoring, review context, and advisory notes. The model was later simplified to single-shot rounds grouped under a lightweight session container; decisions log carry-forward, the convergence signal, the per-session budget, and the close_session verdict were removed in that pass. Sessions then moved onto disk: the server holds no session state between tool calls, reads `mercurius.yaml` and the user-level config per call rather than at startup, and records each round's inputs, state, and outcome as machine files in the round directory; one round runs at a time per log destination under a kernel lock. Each round runs in its own detached runner process (`mercurius run-round`), which outlives the server, holds the lock, and takes its reviewer down with it when it dies. The reviewer is set once per installation in the user-level config (`~/.config/mercurius/config.yaml`); a project overrides it only through `reviewer_override`, and a plain `reviewer` block in `mercurius.yaml` is an error.
+M1-M4 established the Go scaffold, reviewer interface, structured review schema, Codex subprocess reviewer, broker/session orchestration, prompt assembly, snapshotting, log writing, dummy reviewer test support, configuration loading, MCP stdio tool surface, background review rounds, CLI monitoring, review context, and advisory notes. The model was later simplified to single-shot rounds grouped under a lightweight session container; decisions log carry-forward, the convergence signal, the per-session budget, and the close_session verdict were removed in that pass. Sessions then moved onto disk: the server holds no session state between tool calls, reads `mercurius.yaml` and the user-level config per call rather than at startup, and records each round's inputs, state, and outcome as machine files in the round directory; one round runs at a time per log destination under a kernel lock. Each round runs in its own detached runner process (`mercurius run-round`), which outlives the server, holds the lock, and takes its reviewer down with it when it dies. The reviewer is set once per installation in the user-level config (`~/.config/mercurius/config.yaml`); a project overrides it only through `reviewer_override`, and a plain `reviewer` block in `mercurius.yaml` is an error. Project data is then bound through `dd` throughout: machine files are read strictly, tool arguments are checked against hand-written input schemas and bound strictly, and an unknown key in either config file is an error.
 
 ## tech stack
 
 - **language**: Go 1.26+
 - **CLI**: github.com/spf13/cobra
-- **config**: github.com/michaelquigley/df/dd
+- **binding**: github.com/michaelquigley/df/dd, for all project data: config, the on-disk session and round files, the MCP tool payloads, and the review-output parse
 - **logging**: github.com/michaelquigley/df/dl
 - **MCP**: github.com/modelcontextprotocol/go-sdk/mcp
 - **schema validation**: github.com/santhosh-tekuri/jsonschema/v6
@@ -26,7 +26,7 @@ M1-M4 established the Go scaffold, reviewer interface, structured review schema,
 - `internal/broker/` - the six session operations as functions over the session directory; holds no state between calls
 - `internal/bootstrap/` - the embedded starter templates for the project and user-level config files
 - `internal/config/` - resolution of the project `mercurius.yaml` and the user-level config, path resolution, and validation
-- `internal/mcpserver/` - MCP server construction, tool registration, and error mapping
+- `internal/mcpserver/` - MCP server construction, the `dd` binding adapter and the hand-written tool input schemas, tool registration, and error mapping
 - `internal/prompt/` - standard review prompt assembly
 - `internal/reviewer/` - Reviewer interface, shared request/response types, and the subprocess helper the reviewers share
 - `internal/reviewer/claude/` - Claude Code subprocess reviewer implementation
@@ -67,7 +67,7 @@ M1-M4 established the Go scaffold, reviewer interface, structured review schema,
 
 6. use mermaid diagrams in markdown documents instead of ASCII art.
 
-7. `dd` struct tags are only needed for `+required`, `+extra`, or name overrides. `dd` converts CamelCase fields to `snake_case` YAML keys automatically.
+7. a struct carries a `dd` tag only where `dd`'s default would be wrong: `+required` on a tool argument that must be present, `+extra` on a config struct's catch-all, `+omitempty` where a zero value would state something false or read as a setting, `+nullable` on a field that is only ever bound and may arrive as null, `+opaque` on a raw value carried through untouched, or a name override. nothing that is written out carries `+nullable`. `dd` converts CamelCase fields to `snake_case` keys automatically, and project-owned structs carry no `json` tags.
 
 ## Roadmap
 

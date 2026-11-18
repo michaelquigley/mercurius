@@ -11,8 +11,8 @@ import (
 )
 
 // SynopsisEntry is the shape WriteSynopsis renders into a session-level
-// _synopsis.md. The broker assembles one from the session directory at
-// close_session time. There is no session-level reviewer: the reviewer and
+// _synopsis.md. the broker assembles one from the session directory at
+// close_session time. there is no session-level reviewer: the reviewer and
 // calibration are per round.
 type SynopsisEntry struct {
 	SessionID string
@@ -39,8 +39,8 @@ type SynopsisError struct {
 }
 
 // SynopsisRound is the per-round material rendered in the outcomes table and
-// the detail section. A failed round carries Failure and gets a short detail
-// block. When Unparseable is true on a completed round the writer falls back to
+// the detail section. a failed round carries Failure and gets a short detail
+// block. when Unparseable is true on a completed round the writer falls back to
 // a stable placeholder pointing at the round's _review.json; concerns,
 // questions, advisory notes, decisions, and commentary are ignored in that case.
 type SynopsisRound struct {
@@ -71,13 +71,15 @@ const (
 	synopsisStateFailed    = "failed"
 )
 
-// WriteSynopsis writes a session-level synopsis markdown file. It is meant to
+// WriteSynopsis writes a session-level synopsis markdown file. it is meant to
 // be the single durable artifact a reader (human or future agent) opens to
 // understand the arc of a closed session, failed rounds included.
 func WriteSynopsis(path string, entry SynopsisEntry) error {
 	var b strings.Builder
 
-	writeSynopsisFrontmatter(&b, entry)
+	if err := writeSynopsisFrontmatter(&b, entry); err != nil {
+		return err
+	}
 	b.WriteString("# Session synopsis\n\n")
 	writeSynopsisSummary(&b, entry)
 	writeSynopsisRoundOutcomes(&b, entry)
@@ -86,21 +88,29 @@ func WriteSynopsis(path string, entry SynopsisEntry) error {
 	return os.WriteFile(path, []byte(b.String()), 0o600)
 }
 
-func writeSynopsisFrontmatter(b *strings.Builder, entry SynopsisEntry) {
-	b.WriteString("---\n")
-	b.WriteString(fmt.Sprintf("session_id: %s\n", entry.SessionID))
-	b.WriteString(fmt.Sprintf("opened_at: %s\n", entry.OpenedAt.UTC().Format(time.RFC3339)))
+// synopsisFrontmatter is the yaml block that opens a synopsis. the counts are
+// always written, zero included.
+type synopsisFrontmatter struct {
+	SessionID           string
+	OpenedAt            string
+	ClosedAt            string `dd:",+omitempty"`
+	RoundCount          int
+	FailedRoundCount    int
+	OutlivedServerCount int
+}
+
+func writeSynopsisFrontmatter(b *strings.Builder, entry SynopsisEntry) error {
+	frontmatter := synopsisFrontmatter{
+		SessionID:           entry.SessionID,
+		OpenedAt:            entry.OpenedAt.UTC().Format(time.RFC3339),
+		RoundCount:          len(entry.Rounds),
+		FailedRoundCount:    countFailed(entry.Rounds),
+		OutlivedServerCount: countOutlived(entry.Rounds),
+	}
 	if !entry.ClosedAt.IsZero() {
-		b.WriteString(fmt.Sprintf("closed_at: %s\n", entry.ClosedAt.UTC().Format(time.RFC3339)))
+		frontmatter.ClosedAt = entry.ClosedAt.UTC().Format(time.RFC3339)
 	}
-	b.WriteString(fmt.Sprintf("round_count: %d\n", len(entry.Rounds)))
-	if failed := countFailed(entry.Rounds); failed > 0 {
-		b.WriteString(fmt.Sprintf("failed_round_count: %d\n", failed))
-	}
-	if outlived := countOutlived(entry.Rounds); outlived > 0 {
-		b.WriteString(fmt.Sprintf("outlived_server_count: %d\n", outlived))
-	}
-	b.WriteString("---\n\n")
+	return writeFrontmatter(b, frontmatter)
 }
 
 func writeSynopsisSummary(b *strings.Builder, entry SynopsisEntry) {
@@ -372,7 +382,7 @@ func aggregateDispositions(rounds []SynopsisRound) dispositionCounts {
 }
 
 // summarizeDispositions returns "X fixed / Y deferred / Z rejected", skipping
-// zero-count categories. Returns "0" when all counts are zero (the caller
+// zero-count categories. returns "0" when all counts are zero (the caller
 // usually checks total() first).
 func summarizeDispositions(c dispositionCounts) string {
 	parts := make([]string, 0, 3)

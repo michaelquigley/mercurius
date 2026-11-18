@@ -1,4 +1,4 @@
-// Package runner executes one review round from its round directory. The round
+// Package runner executes one review round from its round directory. the round
 // directory is the runner's entire input: the server writes the inputs
 // (_run.json, _prompt.md, the snapshots) and the round's first state, and Run
 // produces the outcome (_review.json and _round.md, or _raw.txt) and the final
@@ -35,19 +35,19 @@ type ReviewerFactory func(cfg store.RunReviewer) (reviewer.Reviewer, error)
 
 // Launcher is the seam the broker starts a round through. Launch takes
 // ownership of the held lock: from a successful return the round's runner is
-// responsible for releasing it. On error the lock is still the caller's.
+// responsible for releasing it. on error the lock is still the caller's.
 type Launcher interface {
 	Launch(roundDir string, lock *runlock.Lock) error
 }
 
-// InProcess runs rounds in goroutines inside the calling process. The reviewer
+// InProcess runs rounds in goroutines inside the calling process. the reviewer
 // factory lets tests supply reviewers as Go values.
 type InProcess struct {
 	build ReviewerFactory
 	wg    sync.WaitGroup
 }
 
-// NewInProcess returns an in-process launcher. A nil factory uses
+// NewInProcess returns an in-process launcher. a nil factory uses
 // BuildReviewer.
 func NewInProcess(build ReviewerFactory) *InProcess {
 	if build == nil {
@@ -77,10 +77,10 @@ func (l *InProcess) Wait() {
 }
 
 // Run executes the round in roundDir and writes its outcome and final state.
-// It returns an error only when the final state itself could not be written.
-// The lock is released when Run returns.
+// it returns an error only when the final state itself could not be written.
+// the lock is released when Run returns.
 //
-// The caller must lock the calling goroutine to its OS thread for the whole of
+// the caller must lock the calling goroutine to its OS thread for the whole of
 // Run. Run dispatches the reviewer synchronously on this goroutine, and the
 // reviewer's parent-death signal follows the thread that started it: if the Go
 // runtime retired that thread, the kernel would kill a healthy reviewer.
@@ -236,7 +236,7 @@ func (r *round) execute(build ReviewerFactory) error {
 	return r.finish()
 }
 
-// touch writes the running state with what the runner has learned so far. A
+// touch writes the running state with what the runner has learned so far. a
 // failed write is logged and not fatal: the final write is what matters.
 func (r *round) touch() {
 	r.state.UpdatedAt = time.Now().UTC()
@@ -246,9 +246,9 @@ func (r *round) touch() {
 }
 
 // finish records whether the round outlived its server and writes the final
-// state. The comparison is against the server pid recorded in _run.json, not
+// state. the comparison is against the server pid recorded in _run.json, not
 // against a parent pid read at startup: a server that died before the runner's
-// first line would make both readings name the adopting process. Under the
+// first line would make both readings name the adopting process. under the
 // in-process launcher the runner is the server, and the mark is false.
 func (r *round) finish() error {
 	if r.run.ServerPID > 0 && os.Getpid() != r.run.ServerPID {
@@ -257,12 +257,12 @@ func (r *round) finish() error {
 	if err := store.WriteState(r.dir, r.state); err != nil {
 		return err
 	}
-	dl.Infof("round '%s' %s; outlived its server '%t'", r.dir, r.state.State, r.state.OutlivedServer)
+	dl.Infof("round '%s' '%s'; outlived its server '%t'", r.dir, r.state.State, r.state.OutlivedServer)
 	return nil
 }
 
 // keepRaw writes reviewer output to _raw.txt and points the error details at
-// it. Output is never stored inline in the error.
+// it. output is never stored inline in the error.
 func (r *round) keepRaw(raw []byte, details map[string]any) {
 	if len(raw) == 0 {
 		return

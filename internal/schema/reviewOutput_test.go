@@ -425,6 +425,97 @@ func TestValidateUniqueIDsRejectsDuplicates(t *testing.T) {
 	}
 }
 
+// an empty id is refused by the schema in every finding array, so a review
+// whose findings cannot be told apart never becomes a round result.
+func TestParseReviewOutputRejectsEmptyID(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{
+			name: "concern",
+			raw: json.RawMessage(`{
+				"verdict": "needs_changes",
+				"summary": "x",
+				"concerns": [
+					{"id": "", "severity": "major", "location": "x", "claim": "a", "rationale": "b", "suggestion": null}
+				],
+				"questions": [],
+				"advisory_notes": []
+			}`),
+		},
+		{
+			name: "question",
+			raw: json.RawMessage(`{
+				"verdict": "needs_changes",
+				"summary": "x",
+				"concerns": [],
+				"questions": [
+					{"id": "", "topic": "scope", "why_it_blocks": "z"}
+				],
+				"advisory_notes": []
+			}`),
+		},
+		{
+			name: "advisory note",
+			raw: json.RawMessage(`{
+				"verdict": "ready_to_build",
+				"summary": "x",
+				"concerns": [],
+				"questions": [],
+				"advisory_notes": [
+					{"id": "", "location": "y", "note": "polish", "rationale": "tone", "suggestion": null}
+				]
+			}`),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := ParseReviewOutput(test.raw); err == nil {
+				t.Fatal("expected an empty id to be refused")
+			}
+			if err := ValidateReviewOutput(test.raw); err == nil {
+				t.Fatal("expected the schema itself to refuse an empty id")
+			}
+		})
+	}
+}
+
+// the uniqueness check has no exemption for an empty id. it is called directly
+// here because the schema stops an empty id before ParseReviewOutput reaches it.
+func TestValidateUniqueIDsRejectsDuplicateEmptyIDs(t *testing.T) {
+	tests := []struct {
+		name   string
+		output ReviewOutput
+		want   string
+	}{
+		{
+			name:   "within concerns",
+			output: ReviewOutput{Concerns: []Concern{{ID: ""}, {ID: ""}}},
+			want:   "within concerns",
+		},
+		{
+			name: "across questions and advisory_notes",
+			output: ReviewOutput{
+				Questions:     []Question{{ID: ""}},
+				AdvisoryNotes: []AdvisoryNote{{ID: ""}},
+			},
+			want: "across questions and advisory_notes",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateUniqueIDs(test.output)
+			if err == nil {
+				t.Fatal("expected duplicate empty ids to be refused")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected %q in error, got %v", test.want, err)
+			}
+		})
+	}
+}
+
 func TestValidateUniqueIDsAcceptsAllUnique(t *testing.T) {
 	output := ReviewOutput{
 		Concerns:      []Concern{{ID: "C-1"}, {ID: "C-2"}},

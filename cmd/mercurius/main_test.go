@@ -50,7 +50,7 @@ func TestPrintMonitorView(t *testing.T) {
 	}
 }
 
-// the monitor only reads. Against read-only directories it still reports a lost
+// the monitor only reads. against read-only directories it still reports a lost
 // round, which would fail a monitor that needed to write.
 func TestMonitorReportsLostRoundOnReadOnlyDirectories(t *testing.T) {
 	project, logDest, sessionID := monitorFixture(t, true)
@@ -67,7 +67,7 @@ func TestMonitorReportsLostRoundOnReadOnlyDirectories(t *testing.T) {
 }
 
 // the read-only run alone would pass a monitor that tried to write and ignored
-// the error. Against a writable log destination, every entry and every file's
+// the error. against a writable log destination, every entry and every file's
 // contents must be the same afterward, and no lock file may appear.
 func TestMonitorLeavesLogDestinationUnchanged(t *testing.T) {
 	project, logDest, sessionID := monitorFixture(t, false)
@@ -387,7 +387,7 @@ func TestBootstrapUserWritesUserConfig(t *testing.T) {
 }
 
 // testUserConfigPath is a user-level config path under the test's temporary
-// directory. No test reads the developer's own user-level config.
+// directory. no test reads the developer's own user-level config.
 func testUserConfigPath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(t.TempDir(), "config", "mercurius", "config.yaml")

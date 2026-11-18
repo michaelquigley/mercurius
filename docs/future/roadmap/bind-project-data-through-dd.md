@@ -1,6 +1,6 @@
 ---
 title: bind project data through dd
-state: building
+state: evaluating
 created: 2026-11-11
 tags: [enhancement]
 log:
@@ -8,6 +8,8 @@ log:
     note: surfaced while bootstrapping the terminus rubric — docs/journal/2026-11-11.md
   - stamp: 2026-11-17
     note: work order drawn — docs/future/bind-project-data-through-dd-work-order.md
+  - stamp: 2026-11-17
+    note: built in six stages; work order retired — docs/journal/2026-11-17.md
 milestone: v0.2.x
 ---
 
@@ -15,7 +17,7 @@ move the project structs that still carry json tags onto `github.com/michaelquig
 
 terminus already does all of this and is the worked example: `internal/mcpserver/binding.go` registers tools through the SDK's raw handler and binds with `dd`, and `internal/report/codec.go` carries the converter that passes a `json.RawMessage` through `dd` as nested json. the six tool input schemas have to be written by hand once the SDK's typed `AddTool` is gone; `record_round_notes` already has one.
 
-the plan, the decisions behind it, and two additions (hand-written input schemas that say what is required, and a config loader that parses once and refuses unknown keys) are in `docs/future/bind-project-data-through-dd-work-order.md`; work from it. it lands one surface at a time. when all are done, ask michael to promote `golang-conventions/df-binding` to blocking in the mercurius rubric in `terminus-canon`.
+built in six stages, with two additions: hand-written input schemas that say what is required, and a config loader that parses once and refuses unknown keys. `docs/current/` describes the result. `golang-conventions/df-binding` is now blocking in the mercurius rubric in `terminus-canon`.
 
 ## why
 

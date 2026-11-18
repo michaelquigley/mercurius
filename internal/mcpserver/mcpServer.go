@@ -146,7 +146,7 @@ type SessionStatusInput struct {
 	SessionID string `dd:",+required"`
 }
 
-// SessionStatusOutput is a read-only session view. The reviewer, finding limit,
+// SessionStatusOutput is a read-only session view. the reviewer, finding limit,
 // and any failure are reported per round.
 type SessionStatusOutput struct {
 	SessionID  string
@@ -199,7 +199,7 @@ type ErrorOutput struct {
 type Options struct {
 	// ConfigPath is the project mercurius.yaml, resolved on every tool call.
 	ConfigPath string
-	// UserConfigPath is the user-level config, which holds the reviewer. It is
+	// UserConfigPath is the user-level config, which holds the reviewer. it is
 	// read on every tool call, alongside the project file.
 	UserConfigPath string
 	// Launcher starts rounds. nil means the production launcher: each round in
@@ -207,9 +207,9 @@ type Options struct {
 	Launcher runner.Launcher
 }
 
-// New creates an MCP server and its backing broker. It reads no configuration:
+// New creates an MCP server and its backing broker. it reads no configuration:
 // every tool call resolves it, so a missing or broken mercurius.yaml is a tool
-// error with a reason rather than a server that cannot start. The server's name
+// error with a reason rather than a server that cannot start. the server's name
 // is the base name of the directory holding the project config path.
 func New(options Options) (*mcp.Server, *broker.Broker, error) {
 	configPath, err := config.ProjectPath(options.ConfigPath)
@@ -236,7 +236,7 @@ func New(options Options) (*mcp.Server, *broker.Broker, error) {
 	return server, b, nil
 }
 
-// RegisterTools installs the Mercurius MCP tool surface. The broker resolves
+// RegisterTools installs the Mercurius MCP tool surface. the broker resolves
 // the configuration on every call, so edits to mercurius.yaml take effect on the
 // next call without a server restart.
 func RegisterTools(server *mcp.Server, b *broker.Broker) error {
@@ -480,7 +480,7 @@ func triageOutput(results []broker.ReviewerResult) RoundTriageOutput {
 
 // selectNextFinding picks the highest-severity concern first
 // (blocker > major > minor), ties broken by lexicographic id order.
-// Questions follow concerns. Severity is only meaningful on concerns;
+// questions follow concerns. severity is only meaningful on concerns;
 // questions sort among themselves by id alone.
 func selectNextFinding(findings []TriageFindingOutput) TriageFindingOutput {
 	best := -1

@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/michaelquigley/df/dd"
 )
 
 // ArtifactManifestEntry records one artifact snapshot in a round log.
@@ -43,24 +45,53 @@ type Entry struct {
 	Reviewers   []ReviewerOutput
 }
 
-// WriteInitial writes the immutable round log. There is no mutable region;
+// roundLogFrontmatter is the yaml block that opens a round log. timestamps
+// are held as whole-second strings, since this is a document for a reader.
+type roundLogFrontmatter struct {
+	SessionID   string
+	RoundNumber int
+	OpenedAt    string
+	Verdict     string
+	PromptPath  string `dd:",+omitempty"`
+	Reviewers   []string
+}
+
+// writeFrontmatter writes v as a yaml frontmatter block. it goes through dd so
+// a value with yaml punctuation in it, such as a free-form reviewer name,
+// cannot break the block.
+func writeFrontmatter(b *strings.Builder, v any) error {
+	raw, err := dd.UnbindYAML(v)
+	if err != nil {
+		return fmt.Errorf("render frontmatter: %w", err)
+	}
+	b.WriteString("---\n")
+	b.Write(raw)
+	if len(raw) > 0 && raw[len(raw)-1] != '\n' {
+		b.WriteString("\n")
+	}
+	b.WriteString("---\n\n")
+	return nil
+}
+
+// WriteInitial writes the immutable round log. there is no mutable region;
 // commentary and decisions land in a sibling file via WriteNotes.
 func WriteInitial(path string, entry Entry) error {
 	var b strings.Builder
 
-	b.WriteString("---\n")
-	b.WriteString(fmt.Sprintf("session_id: %s\n", entry.SessionID))
-	b.WriteString(fmt.Sprintf("round_number: %d\n", entry.RoundNumber))
-	b.WriteString(fmt.Sprintf("opened_at: %s\n", entry.OpenedAt.UTC().Format(time.RFC3339)))
-	b.WriteString(fmt.Sprintf("verdict: %s\n", entry.Verdict))
-	if entry.PromptPath != "" {
-		b.WriteString(fmt.Sprintf("prompt_path: %s\n", entry.PromptPath))
-	}
-	b.WriteString("reviewers:\n")
+	reviewers := make([]string, 0, len(entry.Reviewers))
 	for _, reviewer := range entry.Reviewers {
-		b.WriteString(fmt.Sprintf("  - %s\n", reviewer.Name))
+		reviewers = append(reviewers, reviewer.Name)
 	}
-	b.WriteString("---\n\n")
+	if err := writeFrontmatter(&b, roundLogFrontmatter{
+		SessionID:   entry.SessionID,
+		RoundNumber: entry.RoundNumber,
+		OpenedAt:    entry.OpenedAt.UTC().Format(time.RFC3339),
+		Verdict:     entry.Verdict,
+		PromptPath:  entry.PromptPath,
+		Reviewers:   reviewers,
+	}); err != nil {
+		return err
+	}
 
 	b.WriteString(fmt.Sprintf("# Round %02d\n\n", entry.RoundNumber))
 	b.WriteString("## Artifact manifest\n\n")
@@ -89,7 +120,7 @@ func WriteInitial(path string, entry Entry) error {
 }
 
 // WriteNotes writes a sibling notes file containing commentary and decisions
-// for a completed round. The original round log is untouched.
+// for a completed round. the original round log is untouched.
 func WriteNotes(path string, commentary string, decisions []Decision) error {
 	var b strings.Builder
 

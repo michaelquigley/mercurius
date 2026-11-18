@@ -227,7 +227,7 @@ func TestFailedRoundReturnsToolErrorAndStatusShowsIt(t *testing.T) {
 	}
 }
 
-// the server reads no configuration at startup. With no mercurius.yaml, a tool
+// the server reads no configuration at startup. with no mercurius.yaml, a tool
 // call answers user_error naming the path; once the file is written, the same
 // client's next call succeeds with no reconnect.
 func TestServerStartsWithoutConfig(t *testing.T) {
@@ -602,7 +602,7 @@ func TestStartReviewRoundFailsCleanlyOnBrokenConfig(t *testing.T) {
 
 // TestRecordRoundNotesSchemaCarriesDispositionEnum asserts the registered
 // record_round_notes input schema is explicit: the decisions array is fully
-// typed and disposition carries the value enum. Reflection inference left
+// typed and disposition carries the value enum. reflection inference left
 // disposition an unconstrained string, which is what hid the valid values from
 // clients.
 func TestRecordRoundNotesSchemaCarriesDispositionEnum(t *testing.T) {
@@ -661,9 +661,9 @@ func TestRecordRoundNotesSchemaCarriesDispositionEnum(t *testing.T) {
 }
 
 // TestRecordRoundNotesPersistsDecisionsOnFirstCall is the regression guard for
-// the dropped-decisions defect. The in-process path always recorded a
+// the dropped-decisions defect. the in-process path always recorded a
 // well-formed decisions array; the field failure was a client malforming the
-// first call against a schema that did not expose the disposition enum. With the
+// first call against a schema that did not expose the disposition enum. with the
 // explicit schema the first call lands, and an invalid disposition is rejected at
 // the boundary rather than silently recording zero decisions.
 func TestRecordRoundNotesPersistsDecisionsOnFirstCall(t *testing.T) {
@@ -779,7 +779,7 @@ func TestCollectRoundTriageAdvisoryNotes(t *testing.T) {
 	}
 }
 
-// baseTestConfig is a project mercurius.yaml. The reviewer lives in a
+// baseTestConfig is a project mercurius.yaml. the reviewer lives in a
 // user-level file beside it, written by newTestClientWith; no test reads the
 // developer's real user-level config.
 const baseTestConfig = "log_destination: reviews\n"
@@ -809,7 +809,7 @@ func testUserPath(configPath string) string {
 }
 
 // newTestClientWith writes a project mercurius.yaml and serves it through a
-// broker whose rounds run in process with r as the reviewer. It returns the
+// broker whose rounds run in process with r as the reviewer. it returns the
 // config path so a test can edit the file between calls.
 func newTestClientWith(t *testing.T, r reviewer.Reviewer, configBody string) (context.Context, *mcp.ClientSession, string) {
 	t.Helper()
@@ -1151,7 +1151,7 @@ func reviewOutputWithAdvisoryOnly() json.RawMessage {
 }
 
 // inProcessLauncher runs rounds in this test process with the production
-// reviewer factory. The production process launcher would start this test
+// reviewer factory. the production process launcher would start this test
 // binary as the runner.
 func inProcessLauncher(t *testing.T) *runner.InProcess {
 	t.Helper()

@@ -6,14 +6,14 @@ import (
 	"github.com/michaelquigley/mercurius/internal/runner"
 )
 
-// Options configures a broker. The broker holds no session state: every
+// Options configures a broker. the broker holds no session state: every
 // operation resolves the configuration from these paths and reads and writes
 // the session directory, so any broker on the same log destination can serve
 // any session.
 type Options struct {
 	// ConfigPath is the project mercurius.yaml.
 	ConfigPath string
-	// UserConfigPath is the user-level config, which holds the reviewer. It is
+	// UserConfigPath is the user-level config, which holds the reviewer. it is
 	// read on every call, alongside the project file.
 	UserConfigPath string
 	// Launcher starts a prepared round.
@@ -26,7 +26,7 @@ type Artifact struct {
 	Path string
 }
 
-// OpenSessionRequest opens a new review session. It carries nothing: what
+// OpenSessionRequest opens a new review session. it carries nothing: what
 // open_session reports about the configuration is read at the moment of the call.
 type OpenSessionRequest struct{}
 
@@ -131,7 +131,7 @@ type CloseSessionResponse struct {
 	SynopsisPath string
 }
 
-// SessionStatusResponse is a read-only session view. There is no session-level
+// SessionStatusResponse is a read-only session view. there is no session-level
 // reviewer, limit, or error: those belong to rounds.
 type SessionStatusResponse struct {
 	SessionID  string
@@ -142,7 +142,7 @@ type SessionStatusResponse struct {
 	Rounds     []RoundStatus
 }
 
-// RoundStatus is a read-only round summary. Every round that was started is
+// RoundStatus is a read-only round summary. every round that was started is
 // listed, failed ones included.
 type RoundStatus struct {
 	RoundNumber   int

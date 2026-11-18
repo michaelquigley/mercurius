@@ -1,7 +1,7 @@
 // Package store holds the on-disk shapes of sessions and rounds and the helpers
-// that read and write them. It is the only session state Mercurius has: every
+// that read and write them. it is the only session state Mercurius has: every
 // broker operation reads what it needs from here and writes what it changes back,
-// so any server process can serve any session. The package holds no process
+// so any server process can serve any session. the package holds no process
 // logic; locking lives in internal/runlock and round execution in
 // internal/runner.
 package store
@@ -67,8 +67,8 @@ const (
 	ReasonRunnerLost = "runner_lost"
 )
 
-// MaxCauseBytes bounds a stored error's details.cause. Reviewer output never
-// belongs in an error; it goes to _raw.txt. The cap is a backstop so a long
+// MaxCauseBytes bounds a stored error's details.cause. reviewer output never
+// belongs in an error; it goes to _raw.txt. the cap is a backstop so a long
 // cause cannot bloat _state.json.
 const MaxCauseBytes = 8 * 1024
 
@@ -123,8 +123,8 @@ type ManifestEntry struct {
 	Hash         string
 }
 
-// State is _state.json: where a round is in its life. It is written last in any
-// step, so a round that says completed has its outcome on disk. Only a holder of
+// State is _state.json: where a round is in its life. it is written last in any
+// step, so a round that says completed has its outcome on disk. only a holder of
 // the runner lock writes it. RunnerPID and ReviewerPID are for the operator to
 // read; Mercurius never signals a process by a pid it read from disk.
 type State struct {
@@ -175,7 +175,7 @@ type Decision struct {
 	Note        string
 }
 
-// ValidSessionID reports whether id has the form of a session id. Ids arrive
+// ValidSessionID reports whether id has the form of a session id. ids arrive
 // from tool calls and the monitor flag and are joined into paths, so anything
 // else must be rejected before it reaches the filesystem.
 func ValidSessionID(id string) bool {
@@ -208,10 +208,13 @@ func WriteJSON(path string, v any) error {
 	return WriteFileAtomic(path, raw)
 }
 
-// WriteFileAtomic writes raw through a temporary file renamed over path.
+// WriteFileAtomic writes raw through a temporary file renamed over path. the
+// temporary file's name begins with '_', the prefix reserved for broker files,
+// so a write cut off before the rename leaves nothing in a round directory that
+// an artifact name could collide with.
 func WriteFileAtomic(path string, raw []byte) error {
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*.tmp")
+	tmp, err := os.CreateTemp(dir, "_"+filepath.Base(path)+"-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -232,7 +235,7 @@ func WriteFileAtomic(path string, raw []byte) error {
 	return os.Rename(tmpName, path)
 }
 
-// ReadJSON strictly binds the machine file at path into v. A missing file
+// ReadJSON strictly binds the machine file at path into v. a missing file
 // returns an error matching os.ErrNotExist; invalid content returns a ParseError.
 func ReadJSON(path string, v any) error {
 	raw, err := os.ReadFile(path)
@@ -259,7 +262,7 @@ func (e *ParseError) Unwrap() error {
 	return e.Err
 }
 
-// ReadSession reads a session's session.json. A directory with no session.json
+// ReadSession reads a session's session.json. a directory with no session.json
 // returns ErrNotSession; a missing directory returns os.ErrNotExist.
 func ReadSession(sessionDir string) (Session, error) {
 	var session Session
@@ -285,7 +288,7 @@ func ReadState(roundDir string) (State, error) {
 	return state, err
 }
 
-// WriteState writes a round's _state.json. The caller must hold the runner lock.
+// WriteState writes a round's _state.json. the caller must hold the runner lock.
 func WriteState(roundDir string, state State) error {
 	return WriteJSON(filepath.Join(roundDir, StateFileName), state)
 }
@@ -304,7 +307,7 @@ func ReadReview(roundDir string) (Review, error) {
 	return review, err
 }
 
-// ReadNotes reads a round's _notes.json. A round with no notes returns an error
+// ReadNotes reads a round's _notes.json. a round with no notes returns an error
 // matching os.ErrNotExist.
 func ReadNotes(roundDir string) (Notes, error) {
 	var notes Notes
@@ -338,7 +341,7 @@ func RoundDirs(sessionDir string) ([]int, error) {
 	return numbers, nil
 }
 
-// Rounds lists the rounds that exist in a session, ascending. A round exists
+// Rounds lists the rounds that exist in a session, ascending. a round exists
 // once its _state.json exists; a round directory without one is a leftover from
 // a server that died while preparing it and is not a round.
 func Rounds(sessionDir string) ([]int, error) {

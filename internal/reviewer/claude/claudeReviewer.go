@@ -36,13 +36,13 @@ func New(options Options) *Reviewer {
 	return &Reviewer{options: options}
 }
 
-// Review runs claude in print mode with the pre-assembled prompt and schema. The
+// Review runs claude in print mode with the pre-assembled prompt and schema. the
 // prompt already inlines the artifact content and the output schema, so claude is
 // driven as a prompt-in / json-out call: read-only ('--permission-mode plan'),
 // ephemeral ('--no-session-persistence'), with the schema enforced natively via
-// '--json-schema'. The validated object is returned in the envelope's
+// '--json-schema'. the validated object is returned in the envelope's
 // 'structured_output' field; when that is absent the object is recovered from the
-// 'result' text. The broker validates the returned object against the schema.
+// 'result' text. the broker validates the returned object against the schema.
 func (r *Reviewer) Review(ctx context.Context, req reviewer.ReviewRequest) (reviewer.ReviewResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return reviewer.ReviewResponse{}, err

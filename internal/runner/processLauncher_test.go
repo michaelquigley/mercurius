@@ -22,7 +22,7 @@ import (
 	"github.com/michaelquigley/mercurius/internal/store"
 )
 
-// these tests run rounds in real processes. The test binary re-executes itself
+// these tests run rounds in real processes. the test binary re-executes itself
 // as the runner, as a stand-in server, and as a sleeping helper; the reviewer
 // is a shell script standing in for the claude CLI, named through binary_path.
 
@@ -112,7 +112,7 @@ func TestRoundOutlivesItsServer(t *testing.T) {
 	if state, err := store.ReadState(roundDir); err != nil || state.State != store.RoundRunning {
 		t.Fatalf("the server must be gone while the round still runs: state=%+v err=%v", state, err)
 	}
-	// with the server gone, the detached runner is the lock's only holder. A
+	// with the server gone, the detached runner is the lock's only holder. a
 	// free lock here would let a second launch start beside a running round.
 	// the check waits until the reviewer has started, so the runner is inside
 	// Run with the review under way: checked any earlier, the lock is held by the
@@ -138,7 +138,7 @@ func TestRoundOutlivesItsServer(t *testing.T) {
 	waitGone(t, state.RunnerPID, 5*time.Second)
 }
 
-// the server lets go of its copy of the lock after the handoff. The same
+// the server lets go of its copy of the lock after the handoff. the same
 // process starts a round, waits for it, and starts another; if the server kept
 // its copy, the lock would stay held and the second start would be refused.
 func TestLockIsLetGo(t *testing.T) {
@@ -160,7 +160,7 @@ func TestLockIsLetGo(t *testing.T) {
 }
 
 // the runner marks its inherited lock descriptor close-on-exec before it
-// starts the reviewer. The reviewer lists its own open descriptors; none of
+// starts the reviewer. the reviewer lists its own open descriptors; none of
 // them may be runner.lock.
 func TestReviewerDoesNotHoldTheLock(t *testing.T) {
 	fdList := filepath.Join(t.TempDir(), "fds.txt")
@@ -209,7 +209,7 @@ func TestReviewerDiesWithTheRunner(t *testing.T) {
 	}
 }
 
-// mercurius never signals a process by a pid it read from disk. A dead round
+// mercurius never signals a process by a pid it read from disk. a dead round
 // names a live helper, leading its own process group, as its reviewer and the
 // test process as its runner; every tool runs against it; both stay alive.
 func TestRecordedPidsAreNeverSignalled(t *testing.T) {
@@ -414,7 +414,7 @@ func waitFor(t *testing.T, roundDir string, timeout time.Duration, done func(sto
 	}
 }
 
-// processAlive reports whether pid names a live process. A zombie is not alive.
+// processAlive reports whether pid names a live process. a zombie is not alive.
 func processAlive(pid int) bool {
 	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
@@ -427,7 +427,7 @@ func processAlive(pid int) bool {
 	return raw[end+2] != 'Z'
 }
 
-// waitGone fails unless pid stops naming a live process within the timeout. It
+// waitGone fails unless pid stops naming a live process within the timeout. it
 // also fails if the pid lingers as a zombie: an unreaped child is not gone.
 func waitGone(t *testing.T, pid int, timeout time.Duration) {
 	t.Helper()

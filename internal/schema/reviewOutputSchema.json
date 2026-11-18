@@ -42,8 +42,9 @@
         ],
         "properties": {
           "id": {
-            "description": "stable identifier for this concern within the round",
-            "type": "string"
+            "description": "stable identifier for this concern within the round; must not be empty",
+            "type": "string",
+            "minLength": 1
           },
           "severity": {
             "description": "impact level for this concern",
@@ -90,8 +91,9 @@
         ],
         "properties": {
           "id": {
-            "description": "stable identifier for this question within the round",
-            "type": "string"
+            "description": "stable identifier for this question within the round; must not be empty",
+            "type": "string",
+            "minLength": 1
           },
           "topic": {
             "description": "the clarification topic",
@@ -119,8 +121,9 @@
         ],
         "properties": {
           "id": {
-            "description": "stable identifier for this advisory note within the round",
-            "type": "string"
+            "description": "stable identifier for this advisory note within the round; must not be empty",
+            "type": "string",
+            "minLength": 1
           },
           "location": {
             "description": "document and section reference, or N/A when no concrete location applies",

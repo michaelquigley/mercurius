@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newRunRoundCommand is the hidden runner a server starts for each round. It
+// newRunRoundCommand is the hidden runner a server starts for each round. it
 // inherits the runner lock on descriptor 3 and logs to stderr, which the
 // launcher points at the round's _runner.log.
 func newRunRoundCommand() *cobra.Command {

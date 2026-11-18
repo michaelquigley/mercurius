@@ -121,7 +121,7 @@ func monitorSession(cmd *cobra.Command, logDestination string, sessionID string,
 	}
 }
 
-// readMonitorView reads a session for display. It never writes: a round marked
+// readMonitorView reads a session for display. it never writes: a round marked
 // running whose lock is free is reported as lost and left as it is.
 func readMonitorView(logDestination string, sessionID string) (monitorView, error) {
 	if !store.ValidSessionID(sessionID) {
@@ -187,10 +187,10 @@ func readMonitorRound(logDestination string, roundDir string, number int, latest
 	return round, nil
 }
 
-// runnerGone makes one read-only attempt at the runner lock. If it gets the
+// runnerGone makes one read-only attempt at the runner lock. if it gets the
 // lock, it re-reads the round's state while holding it, since the runner may
 // have finished between the first read and the attempt, and reports the round
-// lost when the state still says running. It writes nothing and creates
+// lost when the state still says running. it writes nothing and creates
 // nothing; a missing lock file means the lock is free.
 func runnerGone(logDestination string, roundDir string, state store.State) (store.State, bool, error) {
 	lock, err := runlock.TakeOnceReadOnly(logDestination)

@@ -19,7 +19,7 @@ type Artifact struct {
 }
 
 // SettledDecision is a guard rendered into the review prompt: a decision already
-// made that the reviewer must not re-raise. Only DoNotFlag is rendered; the
+// made that the reviewer must not re-raise. only DoNotFlag is rendered; the
 // operator-side id never reaches the reviewer.
 type SettledDecision struct {
 	ID        string
@@ -120,9 +120,9 @@ func Build(req Request) (string, json.RawMessage) {
 	return b.String(), schema.ReviewOutputSchemaWithMaxFindings(req.MaxFindings)
 }
 
-// settledDecisionsBlock renders the settled-decisions section. It is kept as its
+// settledDecisionsBlock renders the settled-decisions section. it is kept as its
 // own section, distinct from the calibration block, so that suppressing it for a
-// single round (the deferred fresh-reader round) stays a cheap change. Entries
+// single round (the deferred fresh-reader round) stays a cheap change. entries
 // whose do_not_flag is empty after trimming are skipped, and the whole block is
 // omitted when no entry has load-bearing text; the operator-side id is never
 // rendered.

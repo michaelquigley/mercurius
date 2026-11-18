@@ -15,4 +15,8 @@ Documentation is split by whether it describes the implementation that exists to
 ## Future
 
 - [Review round modes](future/review-round-modes.md)
-- [Future calibration ideas](future/calibration-ideas.md)
+- [Fidelity gate](future/fidelity-gate.md)
+- [Web monitor and trajectory analytics](future/web-monitor-and-trajectory.md)
+- [Sessions on disk follow-ups](future/sessions-on-disk-followups.md)
+- [Settled-decisions follow-ups](future/settled-decisions-followups.md)
+- [Roadmap](future/roadmap/)

@@ -49,10 +49,10 @@ func NewProcessLauncher() (*ProcessLauncher, error) {
 // Launch starts the runner in its own session and process group, so a harness
 // taking down the server's group does not take the round with it. stdin is the
 // null device, stdout and stderr go to the round's _runner.log, and the lock is
-// passed as the one inherited descriptor. After the start the server closes its
+// passed as the one inherited descriptor. after the start the server closes its
 // own copy of the lock: if it kept it, the lock would stay held for as long as
-// the server lived. A goroutine waits on the runner, so a finished runner is
-// reaped while its server is alive. On error nothing was started and the lock
+// the server lived. a goroutine waits on the runner, so a finished runner is
+// reaped while its server is alive. on error nothing was started and the lock
 // is still the caller's.
 func (l *ProcessLauncher) Launch(roundDir string, lock *runlock.Lock) error {
 	if lock.File() == nil {
@@ -84,10 +84,10 @@ func (l *ProcessLauncher) Launch(roundDir string, lock *runlock.Lock) error {
 	return nil
 }
 
-// RunInherited is the body of a runner process. Before anything else it marks
+// RunInherited is the body of a runner process. before anything else it marks
 // the inherited lock descriptor close-on-exec: a descriptor passed through
 // ExtraFiles arrives without that flag, and left clear the reviewer would
-// inherit the lock. It then rebuilds the lock from the descriptor, locks the
+// inherit the lock. it then rebuilds the lock from the descriptor, locks the
 // goroutine to its OS thread for the reviewer's parent-death signal, and runs
 // the round.
 func RunInherited(roundDir string, fd uintptr, build ReviewerFactory) error {

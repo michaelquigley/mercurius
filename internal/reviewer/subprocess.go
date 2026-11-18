@@ -8,15 +8,15 @@ import (
 )
 
 // WaitDelay bounds how long a subprocess reviewer's Wait may block once the
-// child has exited or its context is done. Without it, Wait returns only when
+// child has exited or its context is done. without it, Wait returns only when
 // the child's output pipes reach end of file, which a process the reviewer
-// started can hold off indefinitely, so a round timeout would not be a bound. A
+// started can hold off indefinitely, so a round timeout would not be a bound. a
 // package variable so tests can shorten it.
 var WaitDelay = 10 * time.Second
 
 // PrepareCommand applies the subprocess settings every subprocess reviewer
-// shares. The codex, claude, and pi reviewers call it on their exec.Cmd before
-// starting it. On Linux it also ties the reviewer's life to the thread that
+// shares. the codex, claude, and pi reviewers call it on their exec.Cmd before
+// starting it. on Linux it also ties the reviewer's life to the thread that
 // starts it and makes the reviewer lead its own process group, so a context
 // cancel kills the group; see prepareLifetime.
 func PrepareCommand(cmd *exec.Cmd) {
@@ -25,7 +25,7 @@ func PrepareCommand(cmd *exec.Cmd) {
 }
 
 // RunCommand prepares cmd, starts it, reports its pid through started when set,
-// and waits for it. The caller must run it on the goroutine whose OS thread is
+// and waits for it. the caller must run it on the goroutine whose OS thread is
 // locked for the reviewer's whole life: the parent-death signal follows the
 // thread that forked the child, not the process.
 func RunCommand(cmd *exec.Cmd, started func(pid int)) error {
@@ -40,7 +40,7 @@ func RunCommand(cmd *exec.Cmd, started func(pid int)) error {
 }
 
 // OutputError is a reviewer failure that carries the output the reviewer
-// captured. Reviewers return it from every failure where they hold output,
+// captured. reviewers return it from every failure where they hold output,
 // instead of folding that output into the error message, so the runner can keep
 // the output in _raw.txt and the stored error stays small.
 type OutputError struct {
@@ -60,7 +60,7 @@ func (e *OutputError) Unwrap() error {
 }
 
 // NewOutputError wraps err with the labelled, non-empty output sections given
-// as name/bytes pairs. With no non-empty section it returns err unchanged.
+// as name/bytes pairs. with no non-empty section it returns err unchanged.
 func NewOutputError(err error, sections ...OutputSection) error {
 	output := JoinOutput(sections...)
 	if len(output) == 0 {

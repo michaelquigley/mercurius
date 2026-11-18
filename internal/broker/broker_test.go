@@ -33,7 +33,7 @@ const baseUser = `reviewer:
 
 // TestSessionLifecycleAcrossBrokers runs a whole arc with a new Broker value for
 // every step, on the same directory, so nothing can pass by staying in memory.
-// It also deletes the markdown the broker writes before the steps that would
+// it also deletes the markdown the broker writes before the steps that would
 // need it if anything read markdown back.
 func TestSessionLifecycleAcrossBrokers(t *testing.T) {
 	ctx := context.Background()
@@ -219,7 +219,7 @@ func TestSessionLifecycleAcrossBrokers(t *testing.T) {
 }
 
 // calibration, the reviewer, and max_findings are resolved per round and
-// recorded on it; _config.yaml is the exact bytes the round ran with. The
+// recorded on it; _config.yaml is the exact bytes the round ran with. the
 // user-level file is edited between the two rounds of one session, and the
 // second round's _run.json holds the new reviewer.
 func TestConfigurationIsResolvedPerRound(t *testing.T) {
@@ -370,7 +370,7 @@ func TestBrokenUserConfigNamesTheUserFile(t *testing.T) {
 
 // a project override is said everywhere the reviewer is named: open_session,
 // the launch response and its next_action, _run.json, session_status, and the
-// synopsis. When the block comes out, the next round is back on the
+// synopsis. when the block comes out, the next round is back on the
 // installation's reviewer.
 func TestProjectOverrideIsReportedEverywhere(t *testing.T) {
 	ctx := context.Background()
@@ -776,7 +776,7 @@ func TestLaunchConflictNamesAnotherServer(t *testing.T) {
 	}
 }
 
-// a round whose state says running while the lock is free has no runner. Each
+// a round whose state says running while the lock is free has no runner. each
 // reader that meets it records it failed with reason runner_lost.
 func TestDeadRoundMarkedRunnerLost(t *testing.T) {
 	ops := []struct {
@@ -873,8 +873,8 @@ func TestDeadRoundMarkedRunnerLost(t *testing.T) {
 }
 
 // the dead-round check must decide from a read taken while it holds the lock.
-// Here the runner finishes, writing completed, between the check's first read
-// and its hold on the lock. A check that decided from its first read would
+// here the runner finishes, writing completed, between the check's first read
+// and its hold on the lock. a check that decided from its first read would
 // overwrite the completed round with runner_lost.
 func TestDeadRoundCheckRereadsUnderLock(t *testing.T) {
 	h := newHarness(t, newScriptedReviewer(), baseConfig)
@@ -950,7 +950,7 @@ func TestRecordNotesOnFailedRoundIsConflict(t *testing.T) {
 }
 
 // a round directory with no _state.json is a leftover from a server that died
-// while preparing it. The next start removes it and reuses the number.
+// while preparing it. the next start removes it and reuses the number.
 func TestLeftoverRoundDirRemovedAndNumberReused(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, newScriptedReviewer(), baseConfig)
@@ -982,7 +982,7 @@ func TestLeftoverRoundDirRemovedAndNumberReused(t *testing.T) {
 	}
 }
 
-// session ids are checked before they are joined into a path. A directory
+// session ids are checked before they are joined into a path. a directory
 // outside the log destination holds a valid session.json, so an operation that
 // read it would succeed instead of answering not_found.
 func TestSessionIDsAreCheckedBeforeUse(t *testing.T) {
@@ -1079,7 +1079,7 @@ func TestCorruptMachineFilesAreInternalErrors(t *testing.T) {
 	}
 }
 
-// the round timeout bounds a reviewer. A reviewer that blocks past it and fails
+// the round timeout bounds a reviewer. a reviewer that blocks past it and fails
 // fails the round with reason timeout; one that blocks past it and then returns a
 // valid review completes the round, because a finished review is not thrown
 // away for its process's failure to exit.
@@ -1322,7 +1322,7 @@ func (h *harness) writeConfig(body string) {
 	}
 }
 
-// writeUserConfig writes the harness's user-level file. No test reads the
+// writeUserConfig writes the harness's user-level file. no test reads the
 // developer's real user-level config.
 func (h *harness) writeUserConfig(body string) {
 	h.t.Helper()

@@ -1,14 +1,14 @@
 //go:build unix
 
 // Package runlock is the project-wide runner lock: a kernel flock(2) on
-// '<log_destination>/runner.lock'. A held lock means a round is running; a free
+// '<log_destination>/runner.lock'. a held lock means a round is running; a free
 // lock beside a round still marked running means that round's runner is gone.
-// The kernel releases the lock when the last descriptor sharing it is closed,
+// the kernel releases the lock when the last descriptor sharing it is closed,
 // however the holder exits, so nothing here probes pids or writes heartbeats.
 //
-// The lock file is never renamed or replaced: the lock belongs to the file's
+// the lock file is never renamed or replaced: the lock belongs to the file's
 // inode, so a note written by rename would leave the lock behind on the old one.
-// The note is rewritten in place through the held descriptor.
+// the note is rewritten in place through the held descriptor.
 package runlock
 
 import (
@@ -33,7 +33,7 @@ var (
 	RetryInterval = 50 * time.Millisecond
 )
 
-// Note is the content of runner.lock: a description of the current holder. The
+// Note is the content of runner.lock: a description of the current holder. the
 // lock itself is the kernel's; the note is only what the holder said about
 // itself when it took the lock.
 type Note struct {
@@ -49,7 +49,7 @@ type Lock struct {
 }
 
 // Take acquires the lock for a log destination, creating the lock file if
-// needed. It makes a non-blocking attempt and retries it up to Retries times,
+// needed. it makes a non-blocking attempt and retries it up to Retries times,
 // RetryInterval apart, before returning ErrHeld.
 func Take(logDestination string) (*Lock, error) {
 	for attempt := 0; ; attempt++ {
@@ -72,8 +72,8 @@ func TakeOnce(logDestination string) (*Lock, error) {
 }
 
 // TakeOnceReadOnly makes one non-blocking attempt at the lock without creating
-// or writing anything. A missing lock file means the lock is free, and returns
-// a nil lock with no error. The monitor uses this so it never writes.
+// or writing anything. a missing lock file means the lock is free, and returns
+// a nil lock with no error. the monitor uses this so it never writes.
 func TakeOnceReadOnly(logDestination string) (*Lock, error) {
 	file, err := os.Open(store.LockPath(logDestination))
 	if errors.Is(err, os.ErrNotExist) {
@@ -96,7 +96,7 @@ func flockOrClose(file *os.File) (*Lock, error) {
 	return &Lock{file: file}, nil
 }
 
-// FromFile rebuilds a held lock from a descriptor inherited across exec. The
+// FromFile rebuilds a held lock from a descriptor inherited across exec. the
 // descriptor shares the open file description that holds the lock, so taking
 // it again succeeds at once; if the description does not hold the lock and
 // another one does, this answers ErrHeld instead of pretending.
@@ -107,7 +107,7 @@ func FromFile(file *os.File) (*Lock, error) {
 	return flockOrClose(file)
 }
 
-// Release lets go of the lock by closing this descriptor. Safe on a nil lock
+// Release lets go of the lock by closing this descriptor. safe on a nil lock
 // and safe to call more than once.
 func (l *Lock) Release() {
 	if l == nil || l.file == nil {
@@ -144,8 +144,8 @@ func (l *Lock) WriteNote(note Note) error {
 	return nil
 }
 
-// ReadNote reads the note in a log destination's lock file. It does not take
-// the lock. A missing or empty lock file returns an error matching
+// ReadNote reads the note in a log destination's lock file. it does not take
+// the lock. a missing or empty lock file returns an error matching
 // os.ErrNotExist.
 func ReadNote(logDestination string) (Note, error) {
 	raw, err := os.ReadFile(store.LockPath(logDestination))

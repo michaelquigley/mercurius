@@ -96,7 +96,7 @@ func ValidateReviewOutput(raw json.RawMessage) error {
 }
 
 // ReviewVerdict validates the JSON schema and returns the verdict for staging
-// the round log. The strict decode and cross-field checks still have to pass
+// the round log. the strict decode and cross-field checks still have to pass
 // before the log is published.
 func ReviewVerdict(raw json.RawMessage) (string, error) {
 	value, err := validateReviewOutputSchema(raw)
@@ -152,7 +152,7 @@ func BindAndValidateReviewOutput(value map[string]any) (ReviewOutput, error) {
 }
 
 // BindReviewOutput strictly binds an already-decoded review that the caller
-// has validated. It does not repeat schema or cross-field checks.
+// has validated. it does not repeat schema or cross-field checks.
 func BindReviewOutput(value map[string]any) (ReviewOutput, error) {
 	var output ReviewOutput
 	if err := dd.Bind(&output, value, dd.Strict()); err != nil {
@@ -180,15 +180,13 @@ func ValidateFindingLimit(output ReviewOutput, maxFindings int) error {
 
 // ValidateUniqueIDs rejects reviewer output that reuses an id within or across
 // the concerns, questions, and advisory_notes arrays. JSON Schema cannot express
-// cross-array uniqueness, so the broker enforces it here. Duplicate ids would
+// cross-array uniqueness, so the broker enforces it here. duplicate ids would
 // otherwise make ref-kind classification ambiguous and let reviewer drift slip
-// past validation silently.
+// past validation silently. an empty id is treated like any other: the schema
+// refuses one at round time, and two of them here are a reuse, not an exemption.
 func ValidateUniqueIDs(output ReviewOutput) error {
 	seen := make(map[string]string, len(output.Concerns)+len(output.Questions)+len(output.AdvisoryNotes))
 	check := func(kind string, id string) error {
-		if id == "" {
-			return nil
-		}
 		if previous, ok := seen[id]; ok {
 			if previous == kind {
 				return fmt.Errorf("review output reuses id '%s' within %s", id, kind)

@@ -1,37 +1,8 @@
 # Codex Reviewer
 
-The Codex reviewer implements `reviewer.Reviewer` by invoking the local Codex CLI once per round. It does not assemble prompts, read artifacts, or validate schema output. The broker supplies the fully assembled prompt and schema, and the broker performs canonical schema validation after the reviewer returns.
+This package implements `reviewer.Reviewer` for the Codex CLI.
 
-## Invocation
-
-For each `Review` call, the reviewer runs:
-
-```bash
-codex exec -C <session_dir> --ephemeral --sandbox read-only --output-schema <tmp>/schema.json --output-last-message <tmp>/last-message.json
-```
-
-If `Options.Model` is set, `-m <model>` is appended. `Options.ExtraArgs` are appended after Mercurius-managed flags and are intended for non-conflicting Codex CLI options.
-
-`Options.BinaryPath` defaults to `codex`. `Options.WorkingDir` is required and should be the Mercurius session log directory. That directory becomes the Codex working root via `-C`.
-
-Because that working root is the round's snapshot directory inside the project tree, Codex discovers and loads the project's `AGENTS.md` by walking up from it; the review carries whatever instructions that file holds. This matches the claude reviewer (which loads `CLAUDE.md`) and differs from the pi reviewer, which suppresses context files with `--no-context-files`. See `docs/current/architecture.md` for the cross-reviewer comparison.
-
-## Temp Files
-
-Each review creates a private temporary directory containing:
-
-- `schema.json` - the exact `ReviewRequest.Schema` bytes passed via `--output-schema`.
-- `last-message.json` - the file Codex writes via `--output-last-message`.
-
-The assembled `ReviewRequest.Prompt` is sent on stdin. The temp directory is removed before `Review` returns, on both success and failure.
-
-## Output Handling
-
-The reviewer reads `last-message.json`, strips conventional wrappers when necessary, and returns the first plausible JSON object as `ReviewResponse.Raw`. It accepts direct JSON, fenced JSON, or JSON surrounded by stray prose. It does not validate the object against the Mercurius review schema.
-
-If Codex exits unsuccessfully after writing a usable `last-message.json`, the reviewer returns that recovered output and marks `UsageNotes` with `recovered_last_message_after_error='true'`. This handles client-side timeout or cancellation races where Codex has produced the substantive response but is killed before its process exits cleanly.
-
-If Codex exits unsuccessfully and no JSON object can be recovered, the reviewer returns an error that includes captured stdout and stderr. If Codex succeeds but no JSON object can be extracted, the reviewer returns a normal reviewer error.
+How it is invoked, which flags it passes, and how its output is handled are documented in [Architecture and storage](../../../docs/current/architecture.md), under Reviewer Implementations. That page is the reference; this file does not restate it.
 
 ## Integration Test
 
