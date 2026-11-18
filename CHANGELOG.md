@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.1
+
 CHANGE: **Tool results and session files change shape.** A field with nothing to report is now left out where it used to be `null`, an empty list is `[]`, and timestamps in tool results carry fractional seconds. Field names are unchanged.
 
 CHANGE: **Tool arguments are checked strictly.** `session_id` is required wherever a tool needs one, and leaving it out answers `user_error` where it used to answer `not_found`. `round_number` must be a whole number of at least 1; leave it out of `collect_round` to get the latest round. Unknown arguments are refused.
